@@ -353,3 +353,30 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+def update_executive(exec_id, company_id, name, email, timezone, seat_preference,
+                     hotel_loyalty, frequent_flyer_number, dietary_restrictions,
+                     passport_number, preferred_airline, tsa_precheck, meal_preference):
+    """Update an existing executive's profile."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        UPDATE executives SET
+            company_id = ?,
+            name = ?,
+            email = ?,
+            timezone = ?,
+            seat_preference = ?,
+            hotel_loyalty = ?,
+            frequent_flyer_number = ?,
+            dietary_restrictions = ?,
+            passport_number = ?,
+            preferred_airline = ?,
+            tsa_precheck = ?,
+            meal_preference = ?
+        WHERE id = ?
+    """, (company_id, name, email, timezone, seat_preference, hotel_loyalty,
+          frequent_flyer_number, dietary_restrictions, passport_number,
+          preferred_airline, tsa_precheck, meal_preference, exec_id))
+    conn.commit()
+    conn.close()

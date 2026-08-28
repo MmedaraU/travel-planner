@@ -1,0 +1,89 @@
+# ==========================
+#  PYTHON CACHE & BUILD
+# ==========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dll
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ==========================
+#  VIRTUAL ENVIRONMENT
+# ==========================
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ==========================
+#  DATABASE (Sensitive Data)
+# ==========================
+*.db
+*.sqlite
+*.sqlite3
+travel_planner.db
+backup_*.db
+
+# ==========================
+#  USER-GENERATED OUTPUTS
+# ==========================
+# Itinerary Word docs
+generated_itineraries/
+# Expense reports
+generated_expense_reports/
+# Uploaded receipt images (PNG, JPG, PDF)
+receipts/
+# Calendar files (if temporarily exported locally)
+*.ics
+
+# ==========================
+#  ENVIRONMENT & CONFIG
+# ==========================
+.env
+.env.local
+config.local.py
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ==========================
+#  WINDOWS SYSTEM FILES
+# ==========================
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ==========================
+#  MACOS SYSTEM FILES
+# ==========================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ==========================
+#  LOGS & TEMP FILES
+# ==========================
+*.log
+*.tmp
+*.temp
+
+# ==========================
+#  JUPYTER (if used later)
+# ==========================
+.ipynb_checkpoints/
+*.ipynb
+
+# ==========================
+#  VS CODE (Optional override)
+# ==========================
+# If you want to track .vscode/settings.json, remove this line.
+# But for a single-PA tool, I recommend ignoring it to avoid conflicts.
+.vscode/

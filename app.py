@@ -138,6 +138,11 @@ if profile:
     st.sidebar.write(f"**Airline:** {profile.get('preferred_airline', 'N/A')}")
     st.sidebar.write(f"**Passport:** {profile.get('passport_number', 'N/A')}")
     st.sidebar.write(f"**Meal:** {profile.get('meal_preference', 'N/A')}")
+    
+    # --- EDIT EXECUTIVE BUTTON ---
+    if st.sidebar.button("✏️ Edit Executive"):
+        st.session_state['editing_exec'] = True
+        st.rerun()
 
 # --- Sidebar: Export Profile ---
 st.sidebar.divider()
@@ -212,6 +217,68 @@ if st.button("🚀 Create or Update Trip"):
         st.success(f"Trip ready! Budget set to {st.session_state['currency_symbol']}{budget:,.2f}")
     else:
         st.warning("Please fill in destination and dates.")
+
+# --- EDIT EXECUTIVE (Pop-up / Expandable) ---
+if st.session_state.get('editing_exec', False):
+    with st.expander("✏️ Edit Executive Profile", expanded=True):
+        st.info(f"Editing: {profile['name']}")
+        
+        companies = db.get_all_companies()
+        company_options = {name: id for id, name in companies}
+        current_company_id = profile.get('company_id')
+        
+        with st.form("edit_exec_form"):
+            # Find the current company name
+            current_company_name = "Select"
+            for name, cid in company_options.items():
+                if cid == current_company_id:
+                    current_company_name = name
+                    break
+            
+            new_company_label = st.selectbox("Company*", list(company_options.keys()), index=list(company_options.keys()).index(current_company_name) if current_company_name in company_options else 0)
+            new_company_id = company_options[new_company_label]
+            
+            new_name = st.text_input("Full Name*", value=profile.get('name', ''))
+            new_email = st.text_input("Email", value=profile.get('email', ''))
+            new_tz = st.text_input("Timezone", value=profile.get('timezone', 'America/New_York'))
+            new_seat = st.selectbox("Seat Preference", ["No Preference", "Aisle", "Window", "Middle"], index=["No Preference", "Aisle", "Window", "Middle"].index(profile.get('seat_preference', 'No Preference')))
+            new_hotel = st.text_input("Hotel Loyalty", value=profile.get('hotel_loyalty', ''))
+            new_ff = st.text_input("Frequent Flyer Number", value=profile.get('frequent_flyer_number', ''))
+            new_diet = st.text_input("Dietary Restrictions", value=profile.get('dietary_restrictions', ''))
+            new_passport = st.text_input("Passport Number", value=profile.get('passport_number', ''))
+            new_airline = st.text_input("Preferred Airline", value=profile.get('preferred_airline', ''))
+            new_tsa = st.text_input("TSA PreCheck", value=profile.get('tsa_precheck', ''))
+            new_meal = st.selectbox("Meal Preference", ["No Preference", "Vegetarian", "Vegan", "Kosher", "Halal", "Gluten-Free"], index=["No Preference", "Vegetarian", "Vegan", "Kosher", "Halal", "Gluten-Free"].index(profile.get('meal_preference', 'No Preference')))
+            
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                submitted = st.form_submit_button("💾 Save Changes")
+            with col_cancel:
+                cancel = st.form_submit_button("❌ Cancel")
+            
+            if submitted:
+                db.update_executive(
+                    exec_id,
+                    new_company_id,
+                    new_name,
+                    new_email,
+                    new_tz,
+                    new_seat if new_seat != "No Preference" else "",
+                    new_hotel,
+                    new_ff,
+                    new_diet,
+                    new_passport,
+                    new_airline,
+                    new_tsa,
+                    new_meal if new_meal != "No Preference" else ""
+                )
+                st.success(f"✅ Executive '{new_name}' updated successfully!")
+                st.session_state['editing_exec'] = False
+                st.rerun()
+            
+            if cancel:
+                st.session_state['editing_exec'] = False
+                st.rerun()
 
 # --- QUICK LINKS PANEL ---
 if 'current_trip_id' in st.session_state and destination and start_date:
