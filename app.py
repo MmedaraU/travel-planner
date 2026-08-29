@@ -6,6 +6,7 @@ from datetime import datetime
 import csv
 import io
 import pytz
+import os
 
 
 # --- Safe Helper ---
@@ -601,6 +602,7 @@ if "current_trip_id" in st.session_state:
         else:
             st.success("✅ No scheduling conflicts detected.")
 
+        # --- DISPLAY ITEMS WITH RECEIPT UPLOAD ---
         st.subheader("📋 Itinerary Items")
         for item in items:
             start_display = datetime.fromisoformat(item["datetime_start"]).strftime(
@@ -617,12 +619,62 @@ if "current_trip_id" in st.session_state:
                 else "-"
             )
             status_icon = "✅" if item.get("is_confirmed") else "📌"
-            st.write(
-                f"{status_icon} **{start_display} – {end_display}**  |  {item['item_type']}: {item['description']}  |  Cost: {cost_display}"
-            )
 
+            # Use columns for better layout
+            col_desc, col_receipt_status, col_upload, col_delete = st.columns(
+                [4, 2, 2, 1]
+            )
+            with col_desc:
+                st.write(
+                    f"{status_icon} **{start_display} – {end_display}**  |  {item['item_type']}: {item['description']}  |  Cost: {cost_display}"
+                )
+            with col_receipt_status:
+                # Show receipt status
+                if item.get("receipt_path") and os.path.exists(item["receipt_path"]):
+                    st.success("📎 Attached")
+                else:
+                    st.info("No receipt")
+            with col_upload:
+                # Upload receipt
+                uploaded_file = st.file_uploader(
+                    "Attach",
+                    type=["png", "jpg", "jpeg", "pdf"],
+                    key=f"receipt_{item['id']}",
+                    label_visibility="collapsed",
+                )
+                if uploaded_file is not None:
+                    # Create receipts folder if it doesn't exist
+                    os.makedirs("receipts", exist_ok=True)
+                    trip_folder = f"receipts/trip_{trip_id}"
+                    os.makedirs(trip_folder, exist_ok=True)
+
+                    # Sanitize filename
+                    original_name = uploaded_file.name
+                    safe_name = f"item_{item['id']}_{original_name.replace(' ', '_')}"
+                    file_path = os.path.join(trip_folder, safe_name)
+
+                    # Save the file
+                    with open(file_path, "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+
+                    # Update database
+                    db.update_receipt_path(item["id"], file_path)
+                    st.success("✅ Receipt attached!")
+                    st.rerun()
+            with col_delete:
+                # Delete receipt button
+                if item.get("receipt_path") and os.path.exists(item["receipt_path"]):
+                    if st.button("🗑️", key=f"del_receipt_{item['id']}"):
+                        try:
+                            os.remove(item["receipt_path"])
+                        except:
+                            pass
+                        db.update_receipt_path(item["id"], None)
+                        st.rerun()
+
+        # --- EXPORT BUTTONS (3 columns) ---
         st.divider()
-        col_gen, col_cal = st.columns(2)
+        col_gen, col_cal, col_expense = st.columns(3)
 
         with col_gen:
             if st.button("📄 Generate Word Itinerary"):
@@ -656,6 +708,40 @@ if "current_trip_id" in st.session_state:
                     mime="text/calendar",
                     key="ics_download",
                 )
+
+        with col_expense:
+            if st.button("🧾 Export Expense Report"):
+                if items:
+                    # Get trip details
+                    trip_data = db.get_trip(trip_id)
+                    start_date_display = datetime.fromisoformat(
+                        trip_data["start_date"]
+                    ).strftime("%B %d, %Y")
+                    end_date_display = datetime.fromisoformat(
+                        trip_data["end_date"]
+                    ).strftime("%B %d, %Y")
+
+                    executive_data = db.get_executive_profile(exec_id)
+                    doc_stream, filename = doc_generator.generate_expense_report_doc(
+                        executive_data,
+                        items,
+                        trip_id,
+                        trip_budget,
+                        destination,
+                        start_date_display,
+                        end_date_display,
+                        st.session_state["currency_symbol"],
+                    )
+                    st.download_button(
+                        label="⬇️ Download Expense Report",
+                        data=doc_stream,
+                        file_name=f"{executive_data['name']}_{destination}_ExpenseReport.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
+                        key="expense_report_download",
+                    )
+                    st.success(f"Expense report saved locally: {filename}")
+                else:
+                    st.warning("No itinerary items to export.")
     else:
         st.info("No itinerary items yet. Add flights, hotels, or meetings above.")
 

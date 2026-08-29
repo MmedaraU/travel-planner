@@ -63,6 +63,16 @@ def migrate_db():
         FOREIGN KEY (exec_id) REFERENCES executives(id) ON DELETE CASCADE
     )""")
 
+    # Add receipt_path column to itinerary_items
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(itinerary_items)")
+    existing_items = [row[1] for row in c.fetchall()]
+
+    if "receipt_path" not in existing_items:
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN receipt_path TEXT")
+
     conn.commit()
     conn.close()
 
@@ -460,5 +470,16 @@ def delete_all_memberships(exec_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM executive_memberships WHERE exec_id = ?", (exec_id,))
+    conn.commit()
+    conn.close()
+
+
+def update_receipt_path(item_id, file_path):
+    """Update the receipt file path for a specific itinerary item."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE itinerary_items SET receipt_path = ? WHERE id = ?", (file_path, item_id)
+    )
     conn.commit()
     conn.close()

@@ -152,7 +152,7 @@ def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
 
     doc.add_paragraph()
 
-    # --- Memberships Section (NEW) ---
+    # --- Memberships Section ---
     memberships = db.get_memberships(exec_id)
 
     if memberships:
@@ -280,3 +280,157 @@ def generate_spending_report_doc(
     doc.save(file_stream)
     file_stream.seek(0)
     return file_stream
+
+
+# =========================================================
+# NEW: Expense Report with Receipt Attachments
+# =========================================================
+
+
+def generate_expense_report_doc(
+    executive,
+    items,
+    trip_id,
+    trip_budget,
+    destination,
+    start_date,
+    end_date,
+    currency_symbol="$",
+):
+    """
+    Generate a detailed expense report with receipts embedded.
+    Items are grouped by day.
+    """
+    from datetime import datetime
+    import os
+    from docx.shared import Inches
+
+    doc = Document()
+
+    # --- Header ---
+    title = doc.add_heading("Executive Expense Report", 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    sub = doc.add_paragraph(
+        f"{executive['name']}  |  {executive.get('company_name', '')}"
+    )
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph(f"Trip: {destination}  |  {start_date} to {end_date}")
+    doc.add_paragraph()
+
+    # --- Group items by day ---
+    sorted_items = sorted(
+        items, key=lambda x: datetime.fromisoformat(x["datetime_start"])
+    )
+    days = {}
+    for item in sorted_items:
+        date_key = datetime.fromisoformat(item["datetime_start"]).strftime("%Y-%m-%d")
+        if date_key not in days:
+            days[date_key] = []
+        days[date_key].append(item)
+
+    # --- Daily breakdown ---
+    grand_total = 0
+    confirmed_total = 0
+    estimated_total = 0
+
+    for date_key, day_items in days.items():
+        doc.add_heading(
+            f"📅 {datetime.strptime(date_key, '%Y-%m-%d').strftime('%A, %B %d, %Y')}",
+            level=1,
+        )
+
+        # Create a table per day: Time, Description, Type, Cost, Receipt
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Light Grid Accent 1"
+        hdr = table.rows[0].cells
+        hdr[0].text = "Time"
+        hdr[1].text = "Description"
+        hdr[2].text = "Type"
+        hdr[3].text = f"Cost ({currency_symbol})"
+        hdr[4].text = "Receipt"
+
+        day_total = 0
+        for item in day_items:
+            time_str = datetime.fromisoformat(item["datetime_start"]).strftime("%H:%M")
+            cost = item.get("cost", 0)
+            day_total += cost
+            grand_total += cost
+            if item.get("is_confirmed"):
+                confirmed_total += cost
+            else:
+                estimated_total += cost
+
+            row_cells = table.add_row().cells
+            row_cells[0].text = time_str
+            row_cells[1].text = (
+                f"{item['description']} ({item.get('confirmation_code', '')})"
+            )
+            row_cells[2].text = item["item_type"]
+            row_cells[3].text = f"{currency_symbol}{cost:.2f}"
+
+            # --- Receipt column: embed image or show placeholder ---
+            receipt_path = item.get("receipt_path")
+            if receipt_path and os.path.exists(receipt_path):
+                # Add a small thumbnail (max 1.2 inches wide)
+                try:
+                    # Embed image directly into the cell
+                    p = row_cells[4].paragraphs[0]
+                    r = p.add_run()
+                    r.add_picture(receipt_path, width=Inches(1.2))
+                    # Add filename below image
+                    p = row_cells[4].add_paragraph()
+                    p.add_run(os.path.basename(receipt_path)).font.size = Pt(6)
+                except Exception:
+                    row_cells[4].text = f"📎 {os.path.basename(receipt_path)}"
+            else:
+                row_cells[4].text = "—"
+
+        # Day total row
+        total_row = table.add_row().cells
+        total_row[0].text = ""
+        total_row[1].text = ""
+        total_row[2].text = "**Day Total**"
+        total_row[3].text = f"{currency_symbol}{day_total:.2f}"
+        total_row[4].text = ""
+
+    # --- Grand Totals ---
+    doc.add_page_break()
+    doc.add_heading("💰 Summary Totals", level=1)
+
+    summary_table = doc.add_table(rows=3, cols=2)
+    summary_table.style = "Light Grid Accent 1"
+    summary_table.cell(0, 0).text = "Category"
+    summary_table.cell(0, 1).text = "Amount"
+    summary_table.cell(1, 0).text = "Total Confirmed (Booked)"
+    summary_table.cell(1, 1).text = f"{currency_symbol}{confirmed_total:.2f}"
+    summary_table.cell(2, 0).text = "Total Estimated (Quoted)"
+    summary_table.cell(2, 1).text = f"{currency_symbol}{estimated_total:.2f}"
+
+    doc.add_paragraph(f"\n**Grand Total: {currency_symbol}{grand_total:.2f}**")
+
+    if trip_budget > 0:
+        remaining = trip_budget - grand_total
+        doc.add_paragraph(
+            f"Budget: {currency_symbol}{trip_budget:.2f}  |  Remaining: {currency_symbol}{remaining:.2f}"
+        )
+
+    # Footer
+    footer = doc.add_paragraph()
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_run = footer.add_run(
+        f'Generated on {datetime.now().strftime("%B %d, %Y at %I:%M %p")}'
+    )
+    footer_run.font.size = Pt(9)
+    footer_run.font.italic = True
+
+    # Save to folder
+    os.makedirs("generated_expense_reports", exist_ok=True)
+    filename = f"generated_expense_reports/{executive['name']}_{destination}_ExpenseReport_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
+    doc.save(filename)
+
+    # Return BytesIO for download
+    file_stream = io.BytesIO()
+    doc.save(file_stream)
+    file_stream.seek(0)
+    return file_stream, filename
