@@ -10,10 +10,6 @@ import pytz
 
 # --- Safe Helper ---
 def safe_index(options, value, default="No Preference"):
-    """
-    Safely find the index of a value in a list.
-    If the value isn't found, return the index of the default.
-    """
     if value is None:
         value = default
     try:
@@ -24,31 +20,19 @@ def safe_index(options, value, default="No Preference"):
 
 # --- Timezone Dropdown Helper ---
 def get_timezone_dropdown_options():
-    """
-    Builds a list of display names like 'America/New_York (EDT)'
-    and a mapping to the actual timezone string.
-    """
     display_names = []
     tz_map = {}
-
     for tz in sorted(pytz.common_timezones):
         try:
-            # Get the current time in this timezone to fetch the abbreviation
             now = datetime.now(pytz.timezone(tz))
-            abbr = now.strftime("%Z")  # Returns 'EDT', 'GMT', 'WAT', etc.
-
-            # Fallback to UTC offset if abbreviation is empty
+            abbr = now.strftime("%Z")
             if not abbr:
                 abbr = now.strftime("%z")
-
             display = f"{tz} ({abbr})"
         except Exception:
-            # If anything fails, just show the raw timezone
             display = tz
-
         display_names.append(display)
-        tz_map[display] = tz  # Map display string back to actual timezone
-
+        tz_map[display] = tz
     return display_names, tz_map
 
 
@@ -72,7 +56,6 @@ st.sidebar.header("👤 Select Executive")
 # --- Currency Selector ---
 st.sidebar.divider()
 st.sidebar.subheader("💱 Currency Settings")
-
 currency_options = {
     "$ (USD)": {"symbol": "$", "code": "USD"},
     "€ (EUR)": {"symbol": "€", "code": "EUR"},
@@ -81,17 +64,14 @@ currency_options = {
     "¥ (JPY)": {"symbol": "¥", "code": "JPY"},
     "R$ (BRL)": {"symbol": "R$", "code": "BRL"},
 }
-
 selected_currency_label = st.sidebar.selectbox(
     "Select Currency", list(currency_options.keys()), index=0
 )
 selected_currency = currency_options[selected_currency_label]
-
 if st.session_state["currency_symbol"] != selected_currency["symbol"]:
     st.session_state["currency_symbol"] = selected_currency["symbol"]
     st.session_state["currency_code"] = selected_currency["code"]
     st.rerun()
-
 st.sidebar.divider()
 
 # --- Management Interface ---
@@ -110,18 +90,15 @@ with st.sidebar.expander("⚙️ Manage Executives & Companies"):
             st.rerun()
         elif comp_submitted:
             st.warning("Company Name is required.")
-
     st.divider()
 
-    # Add Executive
+    # --- Add Executive (with Memberships) ---
     st.subheader("👤 Add Executive")
     companies = db.get_all_companies()
     company_options = {name: id for id, name in companies}
 
-    # --- Get Timezone Dropdown Options ---
+    # Timezone dropdown
     tz_display_names, tz_map = get_timezone_dropdown_options()
-
-    # Set default to America/New_York
     default_display = None
     for name in tz_display_names:
         if "America/New_York" in name:
@@ -130,10 +107,10 @@ with st.sidebar.expander("⚙️ Manage Executives & Companies"):
     if default_display is None:
         default_display = tz_display_names[0]
 
+    # --- Executive Details Form ---
     with st.form("add_exec_form", clear_on_submit=True):
         exec_name = st.text_input("Full Name*")
         exec_email = st.text_input("Email")
-
         if companies:
             selected_company_label = st.selectbox(
                 "Company*", list(company_options.keys())
@@ -143,16 +120,13 @@ with st.sidebar.expander("⚙️ Manage Executives & Companies"):
             st.warning("Please add a company first.")
             selected_company_id = None
 
-        # --- Timezone Dropdown ---
         selected_tz_display = st.selectbox(
             "Timezone",
             options=tz_display_names,
             index=tz_display_names.index(default_display),
             help="Select the executive's primary timezone",
         )
-        exec_tz = tz_map[
-            selected_tz_display
-        ]  # Store raw timezone string (e.g., 'America/New_York')
+        exec_tz = tz_map[selected_tz_display]
 
         exec_seat = st.selectbox(
             "Seat Preference", ["No Preference", "Aisle", "Window", "Middle"]
@@ -169,25 +143,80 @@ with st.sidebar.expander("⚙️ Manage Executives & Companies"):
         )
 
         exec_submitted = st.form_submit_button("Add Executive")
-        if exec_submitted and exec_name and selected_company_id:
-            db.add_executive(
-                selected_company_id,
-                exec_name,
-                exec_email,
-                exec_tz,
-                exec_seat if exec_seat != "No Preference" else "",
-                exec_hotel,
-                exec_ff,
-                exec_diet,
-                exec_passport,
-                exec_airline,
-                exec_tsa,
-                exec_meal if exec_meal != "No Preference" else "",
+
+    # --- Membership Addition (outside the form) ---
+    st.write("**✈️ Memberships (Optional)**")
+    col_cat, col_name, col_num = st.columns(3)
+    with col_cat:
+        membership_category = st.selectbox(
+            "Category", ["Airline", "Hotel", "Car Rental"], key="add_mem_cat"
+        )
+    with col_name:
+        membership_name = st.text_input("Program Name", key="add_mem_name")
+    with col_num:
+        membership_number = st.text_input("Membership Number", key="add_mem_num")
+
+    if st.button("➕ Add Membership to List", key="add_mem_button"):
+        if membership_name and membership_number:
+            if "temp_memberships" not in st.session_state:
+                st.session_state["temp_memberships"] = []
+            st.session_state["temp_memberships"].append(
+                {
+                    "category": membership_category.lower(),
+                    "program_name": membership_name,
+                    "membership_number": membership_number,
+                }
             )
-            st.success(f"Executive '{exec_name}' added!")
+            st.success(f"Added: {membership_name} ({membership_number})")
             st.rerun()
-        elif exec_submitted:
-            st.warning("Name and Company are required.")
+        else:
+            st.warning("Please fill in both Program Name and Membership Number.")
+
+    # Display temporary list
+    if "temp_memberships" in st.session_state and st.session_state["temp_memberships"]:
+        st.write("**Memberships to add:**")
+        for idx, m in enumerate(st.session_state["temp_memberships"]):
+            st.write(
+                f"- {m['category'].title()}: {m['program_name']} ({m['membership_number']})"
+            )
+        if st.button("🗑️ Clear List", key="clear_mem_list"):
+            st.session_state["temp_memberships"] = []
+            st.rerun()
+
+    # --- Process the executive submission ---
+    if exec_submitted and exec_name and selected_company_id:
+        # Add executive first
+        new_exec_id = db.add_executive(
+            selected_company_id,
+            exec_name,
+            exec_email,
+            exec_tz,
+            exec_seat if exec_seat != "No Preference" else "",
+            exec_hotel,
+            exec_ff,
+            exec_diet,
+            exec_passport,
+            exec_airline,
+            exec_tsa,
+            exec_meal if exec_meal != "No Preference" else "",
+        )
+        # Save memberships if any
+        if (
+            "temp_memberships" in st.session_state
+            and st.session_state["temp_memberships"]
+        ):
+            for m in st.session_state["temp_memberships"]:
+                db.add_membership(
+                    new_exec_id,
+                    m["category"],
+                    m["program_name"],
+                    m["membership_number"],
+                )
+            st.session_state["temp_memberships"] = []  # Clear after saving
+        st.success(f"Executive '{exec_name}' added!")
+        st.rerun()
+    elif exec_submitted:
+        st.warning("Name and Company are required.")
 
 st.sidebar.divider()
 
@@ -202,7 +231,7 @@ selected_label = st.sidebar.selectbox("Choose Executive", list(exec_options.keys
 exec_id = exec_options[selected_label]
 profile = db.get_executive_profile(exec_id)
 
-# --- Display Profile in Sidebar ---
+# --- Display Profile in Sidebar (including memberships) ---
 if profile:
     st.sidebar.subheader("📋 Profile")
     st.sidebar.write(f"**Company:** {profile.get('company_name', 'N/A')}")
@@ -211,6 +240,18 @@ if profile:
     st.sidebar.write(f"**Airline:** {profile.get('preferred_airline', 'N/A')}")
     st.sidebar.write(f"**Passport:** {profile.get('passport_number', 'N/A')}")
     st.sidebar.write(f"**Meal:** {profile.get('meal_preference', 'N/A')}")
+
+    # --- Display memberships ---
+    memberships = db.get_memberships(exec_id)
+    if memberships:
+        st.sidebar.write("**✈️ Memberships:**")
+        for m in memberships:
+            emoji = (
+                "✈️"
+                if m["category"] == "airline"
+                else "🏨" if m["category"] == "hotel" else "🚗"
+            )
+            st.sidebar.write(f"  {emoji} {m['program_name']}: {m['membership_number']}")
 
     # --- EDIT EXECUTIVE BUTTON ---
     if st.sidebar.button("✏️ Edit Executive"):
@@ -226,6 +267,12 @@ with col_csv:
     if st.button("📊 CSV"):
         profile_data = db.get_full_executive_profile(exec_id)
         if profile_data:
+            # Add memberships as a single string
+            mems = db.get_memberships(exec_id)
+            mem_str = "; ".join(
+                [f"{m['program_name']}: {m['membership_number']}" for m in mems]
+            )
+            profile_data["Memberships"] = mem_str
             output = io.StringIO()
             writer = csv.DictWriter(output, fieldnames=profile_data.keys())
             writer.writeheader()
@@ -244,7 +291,7 @@ with col_doc:
         profile_data = db.get_full_executive_profile(exec_id)
         if profile_data:
             doc_stream = doc_generator.generate_executive_profile_doc(
-                profile_data, st.session_state["currency_symbol"]
+                profile_data, exec_id, st.session_state["currency_symbol"]
             )
             st.download_button(
                 label="⬇️ Download",
@@ -256,7 +303,6 @@ with col_doc:
 
 # --- MAIN AREA: TRIP SETUP ---
 st.header("📅 Trip Details")
-
 col1, col2, col3 = st.columns(3)
 with col1:
     destination = st.text_input("Destination (City)")
@@ -264,17 +310,13 @@ with col2:
     start_date = st.date_input("Start Date")
 with col3:
     end_date = st.date_input("End Date")
-
 purpose = st.text_input("Trip Purpose / Notes")
-
-# --- Currency-aware Budget Input ---
 budget = st.number_input(
     f"💰 Trip Budget ({st.session_state['currency_code']})",
     min_value=0.0,
     step=100.0,
     value=0.0,
 )
-
 if st.button("🚀 Create or Update Trip"):
     if destination and start_date and end_date:
         trip_id = db.create_or_get_trip(
@@ -297,10 +339,7 @@ if st.session_state.get("editing_exec", False):
         company_options = {name: id for id, name in companies}
         current_company_id = profile.get("company_id")
 
-        # --- Get Timezone Dropdown Options ---
         tz_display_names, tz_map = get_timezone_dropdown_options()
-
-        # Find the current timezone in the display list
         current_tz = profile.get("timezone", "America/New_York")
         current_tz_display = None
         for name in tz_display_names:
@@ -311,13 +350,12 @@ if st.session_state.get("editing_exec", False):
             current_tz_display = tz_display_names[0]
 
         with st.form("edit_exec_form"):
-            # --- Company Dropdown ---
+            # Company dropdown
             current_company_name = "Select"
             for name, cid in company_options.items():
                 if cid == current_company_id:
                     current_company_name = name
                     break
-
             new_company_label = st.selectbox(
                 "Company*",
                 list(company_options.keys()),
@@ -329,20 +367,20 @@ if st.session_state.get("editing_exec", False):
             )
             new_company_id = company_options[new_company_label]
 
-            # --- Text Fields (Always Visible) ---
+            # Text fields
             new_name = st.text_input("Full Name*", value=profile.get("name", ""))
             new_email = st.text_input("Email", value=profile.get("email", ""))
 
-            # --- Timezone Dropdown (Edit) ---
+            # Timezone
             new_tz_display = st.selectbox(
                 "Timezone",
                 options=tz_display_names,
                 index=tz_display_names.index(current_tz_display),
                 help="Select the executive's primary timezone",
             )
-            new_tz = tz_map[new_tz_display]  # Store raw timezone string
+            new_tz = tz_map[new_tz_display]
 
-            # --- Seat Preference (Dropdown - Fixed) ---
+            # Seat
             seat_options = ["No Preference", "Aisle", "Window", "Middle"]
             new_seat = st.selectbox(
                 "Seat Preference",
@@ -352,7 +390,7 @@ if st.session_state.get("editing_exec", False):
                 ),
             )
 
-            # --- Text Fields (Visible after seat dropdown) ---
+            # Other text fields
             new_hotel = st.text_input(
                 "Hotel Loyalty", value=profile.get("hotel_loyalty", "")
             )
@@ -372,7 +410,7 @@ if st.session_state.get("editing_exec", False):
                 "TSA PreCheck", value=profile.get("tsa_precheck", "")
             )
 
-            # --- Meal Preference (Dropdown - Fixed) ---
+            # Meal
             meal_options = [
                 "No Preference",
                 "Vegetarian",
@@ -389,14 +427,13 @@ if st.session_state.get("editing_exec", False):
                 ),
             )
 
-            # --- BUTTONS ---
+            # Save/Cancel buttons
             col_save, col_cancel = st.columns(2)
             with col_save:
                 submitted = st.form_submit_button("💾 Save Changes")
             with col_cancel:
                 cancel = st.form_submit_button("❌ Cancel")
 
-            # --- Submit Logic ---
             if submitted:
                 db.update_executive(
                     exec_id,
@@ -416,10 +453,53 @@ if st.session_state.get("editing_exec", False):
                 st.success(f"✅ Executive '{new_name}' updated successfully!")
                 st.session_state["editing_exec"] = False
                 st.rerun()
-
             if cancel:
                 st.session_state["editing_exec"] = False
                 st.rerun()
+
+        # --- Membership Management (outside the edit form) ---
+        st.divider()
+        st.subheader("✈️ Manage Memberships")
+
+        # Display existing memberships with delete buttons
+        existing_mems = db.get_memberships(exec_id)
+        if existing_mems:
+            for m in existing_mems:
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    emoji = (
+                        "✈️"
+                        if m["category"] == "airline"
+                        else "🏨" if m["category"] == "hotel" else "🚗"
+                    )
+                    st.write(f"{emoji} {m['program_name']}: {m['membership_number']}")
+                with col2:
+                    if st.button("❌", key=f"del_mem_{m['id']}"):
+                        db.delete_membership(m["id"])
+                        st.success(f"Removed {m['program_name']}")
+                        st.rerun()
+        else:
+            st.info("No memberships added yet.")
+
+        # Add new membership
+        st.write("**Add New Membership:**")
+        col_cat, col_name, col_num = st.columns(3)
+        with col_cat:
+            new_cat = st.selectbox(
+                "Category", ["Airline", "Hotel", "Car Rental"], key="edit_mem_cat"
+            )
+        with col_name:
+            new_name = st.text_input("Program Name", key="edit_mem_name")
+        with col_num:
+            new_num = st.text_input("Membership Number", key="edit_mem_num")
+
+        if st.button("➕ Add Membership", key="edit_add_mem"):
+            if new_name and new_num:
+                db.add_membership(exec_id, new_cat.lower(), new_name, new_num)
+                st.success(f"Added {new_name}")
+                st.rerun()
+            else:
+                st.warning("Please fill in both fields.")
 
 # --- ADD ITINERARY ITEMS ---
 if "current_trip_id" in st.session_state:
@@ -475,15 +555,12 @@ if "current_trip_id" in st.session_state:
     # --- DISPLAY CURRENT ITINERARY & SPENDING ---
     st.divider()
     st.subheader("📋 Current Itinerary")
-
     items = db.get_items_for_trip(trip_id)
     trip_data = db.get_trip(trip_id)
     trip_budget = trip_data.get("budget", 0) if trip_data else 0
 
     if items:
-        # --- SPENDING SUMMARY (Currency-aware) ---
         spending = db.get_trip_spending(trip_id)
-
         st.subheader("💰 Spending Summary")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -510,19 +587,12 @@ if "current_trip_id" in st.session_state:
                 delta_color="inverse" if budget_remaining < 0 else "normal",
             )
 
-        # Budget Progress Bar
         if trip_budget > 0:
             percent_used = min((spending["total_all"] / trip_budget) * 100, 100)
-            color = (
-                "green"
-                if percent_used < 80
-                else "orange" if percent_used < 100 else "red"
-            )
             st.progress(percent_used / 100, text=f"{percent_used:.0f}% of budget used")
 
         st.divider()
 
-        # --- CONFLICTS ---
         conflicts = utils.detect_conflicts(items)
         if conflicts:
             st.warning("⚠️ Conflicts Detected:")
@@ -531,7 +601,6 @@ if "current_trip_id" in st.session_state:
         else:
             st.success("✅ No scheduling conflicts detected.")
 
-        # --- DISPLAY ITEMS (Currency-aware) ---
         st.subheader("📋 Itinerary Items")
         for item in items:
             start_display = datetime.fromisoformat(item["datetime_start"]).strftime(
@@ -552,7 +621,6 @@ if "current_trip_id" in st.session_state:
                 f"{status_icon} **{start_display} – {end_display}**  |  {item['item_type']}: {item['description']}  |  Cost: {cost_display}"
             )
 
-        # --- EXPORT BUTTONS ---
         st.divider()
         col_gen, col_cal = st.columns(2)
 
@@ -595,7 +663,6 @@ if "current_trip_id" in st.session_state:
 st.divider()
 with st.expander("📊 Spending Dashboard (All Trips)"):
     st.subheader("Filter & View Aggregate Spending")
-
     col_dash1, col_dash2 = st.columns(2)
     with col_dash1:
         exec_filter_options = ["All"] + [
@@ -605,24 +672,18 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
         exec_id_filter = None
         if exec_filter != "All":
             exec_id_filter = int(exec_filter.split("(ID: ")[1].rstrip(")"))
-
     with col_dash2:
         date_range = st.date_input("Date Range (optional)", value=[])
-
     start_filter = date_range[0].isoformat() if len(date_range) > 0 else None
     end_filter = date_range[1].isoformat() if len(date_range) > 1 else None
-
     summary_data = db.get_spending_summary(
         exec_id=exec_id_filter, start_date=start_filter, end_date=end_filter
     )
-
     if summary_data:
-        # Aggregate metrics
         total_budget = sum(t["budget"] for t in summary_data)
         total_spent = sum(t["total_spent"] for t in summary_data)
         total_confirmed = sum(t["confirmed_spent"] for t in summary_data)
         total_estimated = sum(t["estimated_spent"] for t in summary_data)
-
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         col_m1.metric("Total Trips", len(summary_data))
         col_m2.metric(
@@ -636,10 +697,7 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
             f"{st.session_state['currency_symbol']}{total_confirmed:,.2f}",
         )
 
-        # --- Display Table without pandas ---
         st.subheader("Trip-Level Breakdown")
-
-        # Build table headers and rows
         headers = [
             "Executive",
             "Company",
@@ -664,15 +722,12 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                     trip["status"],
                 ]
             )
-
-        # Render as a Markdown table (works nicely in Streamlit)
         markdown_table = "| " + " | ".join(headers) + " |\n"
         markdown_table += "| " + " | ".join(["---"] * len(headers)) + " |\n"
         for row in rows:
             markdown_table += "| " + " | ".join(str(cell) for cell in row) + " |\n"
         st.markdown(markdown_table)
 
-        # --- Export CSV without pandas ---
         col_exp1, col_exp2 = st.columns(2)
         with col_exp1:
             output = io.StringIO()

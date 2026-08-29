@@ -8,13 +8,20 @@ def migrate_db():
     """Add new columns if they don't exist (handles schema upgrades)."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
+
     # --- Columns for 'trips' table ---
     trip_columns = [("budget", "REAL DEFAULT 0")]
-    
+    item_columns = [("is_confirmed", "INTEGER DEFAULT 0")]
+    exec_columns = [
+        ("passport_number", "TEXT"),
+        ("preferred_airline", "TEXT"),
+        ("tsa_precheck", "TEXT"),
+        ("meal_preference", "TEXT")
+    ]
+
     # --- Columns for 'itinerary_items' table ---
     item_columns = [("is_confirmed", "INTEGER DEFAULT 0")]
-    
+
     # --- Columns for 'executives' table (new preferences) ---
     exec_columns = [
         ("passport_number", "TEXT"),
@@ -22,30 +29,40 @@ def migrate_db():
         ("tsa_precheck", "TEXT"),
         ("meal_preference", "TEXT")
     ]
-    
+
     # Get existing columns for each table
     c.execute("PRAGMA table_info(trips)")
     existing_trips = [row[1] for row in c.fetchall()]
-    
+
     c.execute("PRAGMA table_info(itinerary_items)")
     existing_items = [row[1] for row in c.fetchall()]
-    
+
     c.execute("PRAGMA table_info(executives)")
     existing_execs = [row[1] for row in c.fetchall()]
-    
+
     # Add missing columns
     for col_name, col_type in trip_columns:
         if col_name not in existing_trips:
             c.execute(f"ALTER TABLE trips ADD COLUMN {col_name} {col_type}")
-    
+
     for col_name, col_type in item_columns:
         if col_name not in existing_items:
             c.execute(f"ALTER TABLE itinerary_items ADD COLUMN {col_name} {col_type}")
-    
+
     for col_name, col_type in exec_columns:
         if col_name not in existing_execs:
             c.execute(f"ALTER TABLE executives ADD COLUMN {col_name} {col_type}")
-    
+
+        # --- NEW: Create executive_memberships table ---
+    c.execute("""CREATE TABLE IF NOT EXISTS executive_memberships (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        exec_id INTEGER NOT NULL,
+        category TEXT NOT NULL,  -- 'airline', 'hotel', 'car'
+        program_name TEXT NOT NULL,
+        membership_number TEXT NOT NULL,
+        FOREIGN KEY (exec_id) REFERENCES executives(id) ON DELETE CASCADE
+    )""")
+
     conn.commit()
     conn.close()
 
@@ -143,9 +160,7 @@ def get_company(company_id):
 
 # --- EXECUTIVE MANAGEMENT ---
 
-def add_executive(company_id, name, email, timezone, seat_preference, hotel_loyalty,
-                  frequent_flyer_number, dietary_restrictions, passport_number=None,
-                  preferred_airline=None, tsa_precheck=None, meal_preference=None):
+def add_executive(company_id, name, email, timezone, seat_preference, hotel_loyalty, frequent_flyer_number, dietary_restrictions, passport_number=None, preferred_airline=None, tsa_precheck=None, meal_preference=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
@@ -378,5 +393,72 @@ def update_executive(exec_id, company_id, name, email, timezone, seat_preference
     """, (company_id, name, email, timezone, seat_preference, hotel_loyalty,
           frequent_flyer_number, dietary_restrictions, passport_number,
           preferred_airline, tsa_precheck, meal_preference, exec_id))
+    conn.commit()
+    conn.close()
+
+# --- EXECUTIVE MEMBERSHIPS ---
+
+
+def add_membership(exec_id, category, program_name, membership_number):
+    """Add a new membership (airline, hotel, etc.) for an executive."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO executive_memberships (exec_id, category, program_name, membership_number)
+        VALUES (?, ?, ?, ?)
+    """,
+        (exec_id, category, program_name, membership_number),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_memberships(exec_id, category=None):
+    """Get all memberships for an executive, optionally filtered by category."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+
+    if category:
+        c.execute(
+            """
+            SELECT * FROM executive_memberships
+            WHERE exec_id = ? AND category = ?
+            ORDER BY program_name
+        """,
+            (exec_id, category),
+        )
+    else:
+        c.execute(
+            """
+            SELECT * FROM executive_memberships
+            WHERE exec_id = ?
+            ORDER BY category, program_name
+        """,
+            (exec_id,),
+        )
+
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def delete_membership(membership_id):
+    """Delete a specific membership by ID."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM executive_memberships WHERE id = ?", (membership_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_all_memberships(exec_id):
+    """Delete all memberships for an executive (used when deleting the executive)."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM executive_memberships WHERE exec_id = ?", (exec_id,))
     conn.commit()
     conn.close()
