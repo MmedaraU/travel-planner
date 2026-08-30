@@ -7,32 +7,110 @@ import os
 import database as db
 
 
+# ===================================================================
+#  HELPER: FORMAT DATE TO DD-MM-YYYY
+# ===================================================================
+def format_date_doc(date_str, output_format="%d-%m-%Y"):
+    """Convert ISO date string to DD-MM-YYYY for documents."""
+    if not date_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(date_str)
+        return dt.strftime(output_format)
+    except:
+        return date_str
+
+
+def format_datetime_doc(dt_str, output_format="%d-%m-%Y %H:%M"):
+    """Convert ISO datetime string to DD-MM-YYYY HH:MM."""
+    if not dt_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(dt_str)
+        return dt.strftime(output_format)
+    except:
+        return dt_str
+
+
+# ===================================================================
+#  1.  ITINERARY DOCUMENT (with multi‑city stops + departure details)
+# ===================================================================
 def generate_itinerary_doc(
     executive,
     items,
-    destination,
+    stops,
+    departure_city,
+    departure_region,
+    departure_country,
     trip_id,
     trip_budget,
     currency_symbol="$",
     currency_code="USD",
 ):
     """
-    Generate a .docx itinerary with spending summary.
-    Saves to folder AND returns BytesIO for download.
+    Generate a Word itinerary with:
+    - Departure (home base) with structured city, region, country
+    - Multi‑city stops (each with city, region, country)
+    - Date format DD-MM-YYYY
+    - Spending summary table
+    - Conflict warnings
     """
     doc = Document()
 
-    # Title
+    # --- Title ---
     title = doc.add_heading(f'Itinerary for {executive["name"]}', 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    sub = doc.add_paragraph(
-        f'Destination: {destination}   |   Timezone: {executive["timezone"]}'
-    )
-    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # --- Build Departure Display ---
+    dep_parts = [p for p in [departure_city, departure_region, departure_country] if p]
+    departure_display = ", ".join(dep_parts) if dep_parts else ""
+
+    # --- Route (Departure → Stops) ---
+    if stops:
+        stop_names = []
+        for stop in stops:
+            name = stop["city"]
+            location_parts = []
+            if stop.get("region"):
+                location_parts.append(stop["region"])
+            if stop.get("country"):
+                location_parts.append(stop["country"])
+            if location_parts:
+                name += f" ({', '.join(location_parts)})"
+            stop_names.append(name)
+
+        if departure_display:
+            route = f"📍 {departure_display} → " + " → ".join(stop_names)
+        else:
+            route = " → ".join(stop_names)
+        sub = doc.add_paragraph(f"Trip Route: {route}")
+        sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Show dates for each stop with full location
+        stop_dates = []
+        for stop in stops:
+            loc = stop["city"]
+            location_parts = []
+            if stop.get("region"):
+                location_parts.append(stop["region"])
+            if stop.get("country"):
+                location_parts.append(stop["country"])
+            if location_parts:
+                loc += f" ({', '.join(location_parts)})"
+            start = format_date_doc(stop["start_date"])
+            end = format_date_doc(stop["end_date"])
+            stop_dates.append(f"{loc}: {start} - {end}")
+        if stop_dates:
+            doc.add_paragraph(" | ".join(stop_dates)).alignment = (
+                WD_ALIGN_PARAGRAPH.CENTER
+            )
+    else:
+        sub = doc.add_paragraph(f'Destination: {executive.get("destination", "N/A")}')
+        sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
     doc.add_paragraph()
 
-    # Executive preferences summary
+    # --- Executive Profile Summary ---
     doc.add_heading("Executive Profile", level=1)
     doc.add_paragraph(f"Seat: {executive.get('seat_preference', 'Not set')}")
     doc.add_paragraph(f"Hotel Loyalty: {executive.get('hotel_loyalty', 'Not set')}")
@@ -40,11 +118,11 @@ def generate_itinerary_doc(
     doc.add_paragraph(f"Meal Preference: {executive.get('meal_preference', 'Not set')}")
     doc.add_paragraph()
 
-    # Daily Agenda
+    # --- Daily Agenda (with DD-MM-YYYY) ---
     doc.add_heading("Daily Agenda", level=1)
     for item in items:
-        start_str = datetime.fromisoformat(item["datetime_start"]).strftime("%H:%M")
-        end_str = (
+        start_display = format_datetime_doc(item["datetime_start"])
+        end_time = (
             datetime.fromisoformat(item["datetime_end"]).strftime("%H:%M")
             if item["datetime_end"]
             else "TBD"
@@ -53,14 +131,14 @@ def generate_itinerary_doc(
         status_icon = "✅" if item.get("is_confirmed") else "📌"
 
         p = doc.add_paragraph(style="List Bullet")
-        p.add_run(f"{start_str} – {end_str}  |  ").bold = True
+        p.add_run(f"{start_display} – {end_time}  |  ").bold = True
         p.add_run(f"{status_icon} {item['description']} ({item['item_type']})")
         if cost_str:
             p.add_run(f"  |  Cost: {cost_str}")
         if item.get("confirmation_code"):
             p.add_run(f"  |  Conf: {item['confirmation_code']}")
 
-    # Conflicts
+    # --- Conflict Warnings ---
     from utils import detect_conflicts
 
     conflicts = detect_conflicts(items)
@@ -69,7 +147,7 @@ def generate_itinerary_doc(
         for c in conflicts:
             doc.add_paragraph(c, style="List Bullet")
 
-    # --- Spending Summary (Currency-aware) ---
+    # --- Spending Summary ---
     doc.add_page_break()
     doc.add_heading("💰 Trip Spending Summary", level=1)
 
@@ -93,32 +171,31 @@ def generate_itinerary_doc(
             f"Budget: {currency_symbol}{trip_budget:.2f}  |  Remaining: {currency_symbol}{remaining:.2f}"
         )
 
-    # Footer
+    # --- Footer ---
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
-        f'Generated on {datetime.now().strftime("%B %d, %Y at %I:%M %p")}  |  Currency: {currency_code}'
+        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}  |  Currency: {currency_code}'
     )
     footer_run.font.size = Pt(9)
     footer_run.font.italic = True
 
-    # Save to folder
+    # --- Save and return ---
     os.makedirs("generated_itineraries", exist_ok=True)
-    filename = f"generated_itineraries/{executive['name']}_{destination}_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
+    filename = f"generated_itineraries/{executive['name']}_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
     doc.save(filename)
 
-    # Return BytesIO for download
     file_stream = io.BytesIO()
     doc.save(file_stream)
     file_stream.seek(0)
     return file_stream, filename
 
 
+# ===================================================================
+#  2.  EXECUTIVE PROFILE DOCUMENT (with memberships)
+# ===================================================================
 def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
-    """
-    Generate a .docx executive profile with memberships.
-    Returns BytesIO stream.
-    """
+    """Generate a Word profile with all executive details + memberships."""
     doc = Document()
 
     # Title
@@ -129,7 +206,7 @@ def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
     doc.add_paragraph()
 
-    # Table with all preferences
+    # Preference table
     table = doc.add_table(rows=10, cols=2)
     table.style = "Light Grid Accent 1"
 
@@ -152,13 +229,11 @@ def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
 
     doc.add_paragraph()
 
-    # --- Memberships Section ---
+    # --- Memberships ---
     memberships = db.get_memberships(exec_id)
-
     if memberships:
         doc.add_heading("✈️ Memberships", level=1)
 
-        # Group by category
         airline_mems = [m for m in memberships if m["category"] == "airline"]
         hotel_mems = [m for m in memberships if m["category"] == "hotel"]
         car_mems = [m for m in memberships if m["category"] == "car"]
@@ -187,7 +262,7 @@ def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
                     style="List Bullet 2",
                 )
 
-    # Company & Finance Details
+    # Company & Finance
     doc.add_heading("Company & Finance Details", level=1)
     doc.add_paragraph(f"Cost Center: {profile_data.get('Cost Center', 'Not set')}")
     doc.add_paragraph(f"Policy Notes: {profile_data.get('Policy Notes', 'None')}")
@@ -196,7 +271,7 @@ def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
-        f'Generated on {datetime.now().strftime("%B %d, %Y at %I:%M %p")}'
+        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}'
     )
     footer_run.font.size = Pt(9)
     footer_run.font.italic = True
@@ -207,12 +282,13 @@ def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
     return file_stream
 
 
+# ===================================================================
+#  3.  SPENDING REPORT (aggregate)
+# ===================================================================
 def generate_spending_report_doc(
     filter_name, summary_data, start_date, end_date, currency_symbol="$"
 ):
-    """Generate a standalone spending report Word document."""
-    from datetime import datetime
-
+    """Generate an aggregate spending report (CSV‑like summary)."""
     doc = Document()
 
     title = doc.add_heading("Executive Travel Spending Report", 0)
@@ -241,8 +317,8 @@ def generate_spending_report_doc(
     )
     doc.add_paragraph()
 
-    # Trip-level breakdown table
-    doc.add_heading("Trip-Level Breakdown", level=1)
+    # Trip‑level breakdown
+    doc.add_heading("Trip‑Level Breakdown", level=1)
     table = doc.add_table(rows=1, cols=7)
     table.style = "Light Grid Accent 1"
     hdr = table.rows[0].cells
@@ -271,7 +347,7 @@ def generate_spending_report_doc(
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
-        f'Generated on {datetime.now().strftime("%B %d, %Y at %I:%M %p")}'
+        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}'
     )
     footer_run.font.size = Pt(9)
     footer_run.font.italic = True
@@ -282,30 +358,34 @@ def generate_spending_report_doc(
     return file_stream
 
 
-# =========================================================
-# NEW: Expense Report with Receipt Attachments
-# =========================================================
-
-
+# ===================================================================
+#  4.  EXPENSE REPORT (daily breakdown with receipt thumbnails)
+# ===================================================================
 def generate_expense_report_doc(
     executive,
     items,
+    stops,
+    departure_city,
+    departure_region,
+    departure_country,
     trip_id,
     trip_budget,
-    destination,
-    start_date,
-    end_date,
+    trip_name,
     currency_symbol="$",
 ):
     """
-    Generate a detailed expense report with receipts embedded.
-    Items are grouped by day.
+    Generate a detailed expense report with:
+    - Departure (home base) with structured city, region, country
+    - Multi‑city stops (each with city, region, country)
+    - Daily grouped items with DD-MM-YYYY
+    - Receipt images embedded (thumbnails)
+    - Daily subtotals and final summary
     """
-    from datetime import datetime
-    import os
-    from docx.shared import Inches
-
     doc = Document()
+
+    # --- Build Departure Display ---
+    dep_parts = [p for p in [departure_city, departure_region, departure_country] if p]
+    departure_display = ", ".join(dep_parts) if dep_parts else ""
 
     # --- Header ---
     title = doc.add_heading("Executive Expense Report", 0)
@@ -315,7 +395,46 @@ def generate_expense_report_doc(
         f"{executive['name']}  |  {executive.get('company_name', '')}"
     )
     sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    doc.add_paragraph(f"Trip: {destination}  |  {start_date} to {end_date}")
+
+    if stops:
+        stop_names = []
+        for stop in stops:
+            name = stop["city"]
+            location_parts = []
+            if stop.get("region"):
+                location_parts.append(stop["region"])
+            if stop.get("country"):
+                location_parts.append(stop["country"])
+            if location_parts:
+                name += f" ({', '.join(location_parts)})"
+            stop_names.append(name)
+
+        if departure_display:
+            route = f"📍 {departure_display} → " + " → ".join(stop_names)
+        else:
+            route = " → ".join(stop_names)
+        doc.add_paragraph(f"Trip: {trip_name}  |  Route: {route}").alignment = (
+            WD_ALIGN_PARAGRAPH.CENTER
+        )
+
+        # Stop dates with full location
+        stop_info = []
+        for stop in stops:
+            loc = stop["city"]
+            location_parts = []
+            if stop.get("region"):
+                location_parts.append(stop["region"])
+            if stop.get("country"):
+                location_parts.append(stop["country"])
+            if location_parts:
+                loc += f" ({', '.join(location_parts)})"
+            start = format_date_doc(stop["start_date"])
+            end = format_date_doc(stop["end_date"])
+            stop_info.append(f"{loc}: {start} - {end}")
+        doc.add_paragraph(" | ".join(stop_info)).alignment = WD_ALIGN_PARAGRAPH.CENTER
+    else:
+        doc.add_paragraph(f"Trip: {trip_name}")
+
     doc.add_paragraph()
 
     # --- Group items by day ---
@@ -329,18 +448,19 @@ def generate_expense_report_doc(
             days[date_key] = []
         days[date_key].append(item)
 
-    # --- Daily breakdown ---
     grand_total = 0
     confirmed_total = 0
     estimated_total = 0
 
+    # --- Process each day ---
     for date_key, day_items in days.items():
+        dt_obj = datetime.strptime(date_key, "%Y-%m-%d")
         doc.add_heading(
-            f"📅 {datetime.strptime(date_key, '%Y-%m-%d').strftime('%A, %B %d, %Y')}",
+            f"📅 {dt_obj.strftime('%A, %d-%m-%Y')}",
             level=1,
         )
 
-        # Create a table per day: Time, Description, Type, Cost, Receipt
+        # Table: Time, Description, Type, Cost, Receipt
         table = doc.add_table(rows=1, cols=5)
         table.style = "Light Grid Accent 1"
         hdr = table.rows[0].cells
@@ -352,7 +472,8 @@ def generate_expense_report_doc(
 
         day_total = 0
         for item in day_items:
-            time_str = datetime.fromisoformat(item["datetime_start"]).strftime("%H:%M")
+            dt = datetime.fromisoformat(item["datetime_start"])
+            time_str = dt.strftime("%H:%M")
             cost = item.get("cost", 0)
             day_total += cost
             grand_total += cost
@@ -369,16 +490,13 @@ def generate_expense_report_doc(
             row_cells[2].text = item["item_type"]
             row_cells[3].text = f"{currency_symbol}{cost:.2f}"
 
-            # --- Receipt column: embed image or show placeholder ---
+            # Receipt column
             receipt_path = item.get("receipt_path")
             if receipt_path and os.path.exists(receipt_path):
-                # Add a small thumbnail (max 1.2 inches wide)
                 try:
-                    # Embed image directly into the cell
                     p = row_cells[4].paragraphs[0]
                     r = p.add_run()
                     r.add_picture(receipt_path, width=Inches(1.2))
-                    # Add filename below image
                     p = row_cells[4].add_paragraph()
                     p.add_run(os.path.basename(receipt_path)).font.size = Pt(6)
                 except Exception:
@@ -394,7 +512,7 @@ def generate_expense_report_doc(
         total_row[3].text = f"{currency_symbol}{day_total:.2f}"
         total_row[4].text = ""
 
-    # --- Grand Totals ---
+    # --- Summary Totals ---
     doc.add_page_break()
     doc.add_heading("💰 Summary Totals", level=1)
 
@@ -415,21 +533,20 @@ def generate_expense_report_doc(
             f"Budget: {currency_symbol}{trip_budget:.2f}  |  Remaining: {currency_symbol}{remaining:.2f}"
         )
 
-    # Footer
+    # --- Footer ---
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
-        f'Generated on {datetime.now().strftime("%B %d, %Y at %I:%M %p")}'
+        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}'
     )
     footer_run.font.size = Pt(9)
     footer_run.font.italic = True
 
-    # Save to folder
+    # --- Save and return ---
     os.makedirs("generated_expense_reports", exist_ok=True)
-    filename = f"generated_expense_reports/{executive['name']}_{destination}_ExpenseReport_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
+    filename = f"generated_expense_reports/{executive['name']}_{trip_name}_ExpenseReport_{datetime.now().strftime('%Y%m%d_%H%M')}.docx"
     doc.save(filename)
 
-    # Return BytesIO for download
     file_stream = io.BytesIO()
     doc.save(file_stream)
     file_stream.seek(0)
