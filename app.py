@@ -8,6 +8,12 @@ import io
 import pytz
 import os
 import pycountry
+from excel_export import (
+    export_profile_to_excel,
+    export_itinerary_to_excel,
+    export_expense_to_excel,
+    export_spending_to_excel,
+)
 
 
 # --- Safe Helper ---
@@ -210,7 +216,7 @@ with st.sidebar.expander("⚙️ Manage Executives & Companies"):
             else:
                 st.warning("Name and Company are required.")
 
-# --- Sidebar: Manage Categories (NEW) ---
+# --- Sidebar: Manage Categories ---
 st.sidebar.divider()
 with st.sidebar.expander("🏷️ Manage Categories"):
     st.caption("Custom types for itinerary items (e.g., 'Car Rental').")
@@ -266,10 +272,11 @@ if profile:
     if st.sidebar.button("✏️ Edit Executive"):
         st.session_state["editing_exec"] = True
 
-# --- Export Profile Sidebar ---
+# --- Sidebar: Export Profile (CSV, Word, Excel) ---
 st.sidebar.divider()
 st.sidebar.subheader("📤 Export Profile")
-col_csv, col_doc = st.sidebar.columns(2)
+col_csv, col_doc, col_excel = st.sidebar.columns(3)
+
 with col_csv:
     if st.button("📊 CSV"):
         profile_data = db.get_full_executive_profile(exec_id)
@@ -290,6 +297,7 @@ with col_csv:
                 mime="text/csv",
                 key="csv_download",
             )
+
 with col_doc:
     if st.button("📄 Word"):
         profile_data = db.get_full_executive_profile(exec_id)
@@ -304,6 +312,22 @@ with col_doc:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
                 key="docx_download",
             )
+
+with col_excel:
+    if st.button("📊 Excel"):
+        profile_data = db.get_full_executive_profile(exec_id)
+        if profile_data:
+            excel_stream = export_profile_to_excel(
+                exec_id, st.session_state["currency_symbol"]
+            )
+            if excel_stream:
+                st.download_button(
+                    label="⬇️ Download",
+                    data=excel_stream,
+                    file_name=f"{profile_data['Name']}_Profile.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="excel_download",
+                )
 
 # =========================================================
 # MAIN AREA: TRIP SETUP
@@ -1006,9 +1030,10 @@ if "current_trip_id" in st.session_state:
                 else:
                     st.warning("Description and Start Time required.")
 
-        # --- EXPORT BUTTONS ---
+        # --- EXPORT BUTTONS (Four: Word Itinerary, Calendar, Word Expense, Excel Expense) ---
         st.divider()
-        col_gen, col_cal, col_expense = st.columns(3)
+        col_gen, col_cal, col_expense_word, col_expense_excel = st.columns(4)
+
         with col_gen:
             if st.button("📄 Generate Word Itinerary"):
                 exec_data = db.get_executive_profile(exec_id)
@@ -1032,6 +1057,7 @@ if "current_trip_id" in st.session_state:
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
                     key="itinerary_download",
                 )
+
         with col_cal:
             if st.button("📅 Export to Calendar (.ics)"):
                 ics_data = utils.generate_ics(
@@ -1044,8 +1070,9 @@ if "current_trip_id" in st.session_state:
                     mime="text/calendar",
                     key="ics_download",
                 )
-        with col_expense:
-            if st.button("🧾 Export Expense Report"):
+
+        with col_expense_word:
+            if st.button("🧾 Export Expense Report (Word)"):
                 if items:
                     stops_data = db.get_trip_stops(trip_id)
                     exec_data = db.get_executive_profile(exec_id)
@@ -1062,12 +1089,30 @@ if "current_trip_id" in st.session_state:
                         st.session_state["currency_symbol"],
                     )
                     st.download_button(
-                        "⬇️ Download Expense Report",
+                        "⬇️ Download Word Report",
                         data=doc_stream,
                         file_name=f"{exec_data['name']}_{trip_purpose}_ExpenseReport.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
-                        key="expense_report_download",
+                        key="expense_download",
                     )
+                else:
+                    st.warning("No items to export.")
+
+        with col_expense_excel:
+            if st.button("📊 Expense to Excel", key="expense_excel"):
+                if items:
+                    trip_data_full = db.get_trip(trip_id)
+                    excel_stream = export_expense_to_excel(
+                        items, trip_data_full, st.session_state["currency_symbol"]
+                    )
+                    if excel_stream:
+                        st.download_button(
+                            label="⬇️ Download .xlsx",
+                            data=excel_stream,
+                            file_name=f"{trip_purpose}_ExpenseReport.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="expense_excel_download",
+                        )
                 else:
                     st.warning("No items to export.")
     else:
@@ -1258,9 +1303,10 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                             st.rerun()
                 st.divider()
 
-        # --- CSV Export ---
+        # --- Export Buttons: CSV, Word, Excel ---
         st.subheader("📊 Export Data")
-        col_exp1, col_exp2 = st.columns(2)
+        col_exp1, col_exp2, col_exp3 = st.columns(3)
+
         with col_exp1:
             headers = [
                 "Executive",
@@ -1298,6 +1344,7 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                 mime="text/csv",
                 key="dash_csv",
             )
+
         with col_exp2:
             if st.button("📄 Export Spending Report (Word)", key="dash_report"):
                 doc_stream = doc_generator.generate_spending_report_doc(
@@ -1314,5 +1361,21 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
                     key="dash_report_download",
                 )
+
+        with col_exp3:
+            if st.button("📊 Export to Excel", key="dash_excel"):
+                excel_stream = export_spending_to_excel(
+                    summary_data,
+                    st.session_state["currency_symbol"],
+                    st.session_state["currency_code"],
+                )
+                if excel_stream:
+                    st.download_button(
+                        label="⬇️ Download .xlsx",
+                        data=excel_stream,
+                        file_name=f"spending_summary_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="dash_excel_download",
+                    )
     else:
         st.info("No trips found matching the filters.")
