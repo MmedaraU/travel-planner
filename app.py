@@ -828,12 +828,17 @@ if "current_trip_id" in st.session_state:
         else:
             st.success("✅ No scheduling conflicts detected.")
 
-        # --- LIST ITEMS (with EDIT/DELETE toggles) ---
+        # =========================================================
+        # UPDATED: LIST ITEMS with Receipt Upload/Download + Item Delete
+        # =========================================================
         st.subheader("📋 Itinerary Items")
 
         for item in items:
-            # Display row
-            col_desc, col_receipt, col_actions = st.columns([4, 1, 2])
+            # ---- Row: 5 columns ----
+            col_desc, col_receipt_status, col_upload, col_del_receipt, col_del_item = (
+                st.columns([4, 2, 2, 1, 1])
+            )
+
             start_display = format_datetime_display(item["datetime_start"])
             end_display = (
                 datetime.fromisoformat(item["datetime_end"]).strftime("%H:%M")
@@ -847,31 +852,79 @@ if "current_trip_id" in st.session_state:
             )
             status_icon = "✅" if item.get("is_confirmed") else "📌"
 
+            # Column 1: Description
             with col_desc:
                 st.write(
                     f"{status_icon} **{start_display} – {end_display}** | {item['item_type']}: {item['description']} | Cost: {cost_display}"
                 )
-            with col_receipt:
-                if item.get("receipt_path") and os.path.exists(item["receipt_path"]):
+
+            # Column 2: Receipt status + Download button
+            with col_receipt_status:
+                receipt_path = item.get("receipt_path")
+                if receipt_path and os.path.exists(receipt_path):
                     st.success("📎 Attached")
+                    # Download button
+                    with open(receipt_path, "rb") as f:
+                        file_bytes = f.read()
+                    st.download_button(
+                        label="⬇️ Download",
+                        data=file_bytes,
+                        file_name=os.path.basename(receipt_path),
+                        mime="application/octet-stream",
+                        key=f"download_{item['id']}",
+                    )
                 else:
                     st.info("No receipt")
-            with col_actions:
-                col_edit, col_del = st.columns(2)
-                with col_edit:
-                    if st.button("✏️", key=f"edit_item_{item['id']}"):
-                        st.session_state[f"editing_item_{item['id']}"] = (
-                            not st.session_state.get(
-                                f"editing_item_{item['id']}", False
-                            )
+
+            # Column 3: Upload receipt
+            with col_upload:
+                upload_key = f"receipt_{item['id']}"
+                uploaded_file = st.file_uploader(
+                    "Attach",
+                    type=["png", "jpg", "jpeg", "pdf"],
+                    key=upload_key,
+                    label_visibility="collapsed",
+                )
+                if uploaded_file is not None:
+                    processed_key = f"processed_{item['id']}"
+                    if not st.session_state.get(processed_key, False):
+                        os.makedirs("receipts", exist_ok=True)
+                        trip_folder = f"receipts/trip_{trip_id}"
+                        os.makedirs(trip_folder, exist_ok=True)
+                        original_name = uploaded_file.name
+                        safe_name = (
+                            f"item_{item['id']}_{original_name.replace(' ', '_')}"
                         )
+                        file_path = os.path.join(trip_folder, safe_name)
+                        with open(file_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        db.update_receipt_path(item["id"], file_path)
+                        st.session_state[processed_key] = True
+                        st.success("✅ Receipt attached!")
                         st.rerun()
-                with col_del:
-                    if st.button("🗑️", key=f"del_item_{item['id']}"):
-                        db.delete_itinerary_item(item["id"])
+                else:
+                    # Reset processed flag when no file is present
+                    st.session_state[f"processed_{item['id']}"] = False
+
+            # Column 4: Delete Receipt ONLY
+            with col_del_receipt:
+                if receipt_path and os.path.exists(receipt_path):
+                    if st.button("🗑️ Receipt", key=f"del_receipt_{item['id']}"):
+                        try:
+                            os.remove(receipt_path)
+                        except:
+                            pass
+                        db.update_receipt_path(item["id"], None)
+                        st.session_state[f"processed_{item['id']}"] = False
                         st.rerun()
 
-            # --- EDIT FORM (if toggled) ---
+            # Column 5: Delete Entire Item
+            with col_del_item:
+                if st.button("❌ Item", key=f"del_item_{item['id']}"):
+                    db.delete_itinerary_item(item["id"])
+                    st.rerun()
+
+            # ---- EDIT FORM (if toggled) ----
             if st.session_state.get(f"editing_item_{item['id']}", False):
                 with st.expander(f"✏️ Editing: {item['description']}", expanded=True):
                     with st.form(key=f"edit_item_form_{item['id']}"):
