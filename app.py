@@ -104,6 +104,10 @@ if "currency_symbol" not in st.session_state:
 if "currency_code" not in st.session_state:
     st.session_state["currency_code"] = "USD"
 
+# --- Initialize upload counter ---
+if "upload_counter" not in st.session_state:
+    st.session_state.upload_counter = 0
+
 st.title("✈️ Executive Travel Planner")
 
 # --- Init DB ---
@@ -816,7 +820,7 @@ if "current_trip_id" in st.session_state:
 
         if trip_budget > 0:
             percent_used = min((spending["total_all"] / trip_budget) * 100, 100)
-            st.progress(percent_used / 100, text=f"{percent_used:.0f}% used")
+            st.progress(percent_used / 100, text="{:.0f}% used".format(percent_used))
         st.divider()
 
         # Conflicts
@@ -829,15 +833,20 @@ if "current_trip_id" in st.session_state:
             st.success("✅ No scheduling conflicts detected.")
 
         # =========================================================
-        # UPDATED: LIST ITEMS with Receipt Upload/Download + Item Delete
+        # UPDATED: 6-COLUMN LAYOUT with RESETTABLE UPLOADER KEY
         # =========================================================
         st.subheader("📋 Itinerary Items")
 
         for item in items:
-            # ---- Row: 5 columns ----
-            col_desc, col_receipt_status, col_upload, col_del_receipt, col_del_item = (
-                st.columns([4, 2, 2, 1, 1])
-            )
+            # ---- Row: 6 columns ----
+            (
+                col_desc,
+                col_receipt_status,
+                col_upload,
+                col_del_receipt,
+                col_del_item,
+                col_edit,
+            ) = st.columns([4, 2, 2, 1, 1, 1])
 
             start_display = format_datetime_display(item["datetime_start"])
             end_display = (
@@ -863,7 +872,6 @@ if "current_trip_id" in st.session_state:
                 receipt_path = item.get("receipt_path")
                 if receipt_path and os.path.exists(receipt_path):
                     st.success("📎 Attached")
-                    # Download button
                     with open(receipt_path, "rb") as f:
                         file_bytes = f.read()
                     st.download_button(
@@ -876,9 +884,9 @@ if "current_trip_id" in st.session_state:
                 else:
                     st.info("No receipt")
 
-            # Column 3: Upload receipt
+            # Column 3: Upload receipt – key includes counter to reset
             with col_upload:
-                upload_key = f"receipt_{item['id']}"
+                upload_key = f"receipt_{item['id']}_{st.session_state.upload_counter}"
                 uploaded_file = st.file_uploader(
                     "Attach",
                     type=["png", "jpg", "jpeg", "pdf"],
@@ -886,8 +894,8 @@ if "current_trip_id" in st.session_state:
                     label_visibility="collapsed",
                 )
                 if uploaded_file is not None:
-                    processed_key = f"processed_{item['id']}"
-                    if not st.session_state.get(processed_key, False):
+                    # Only process if no receipt exists yet
+                    if not receipt_path or not os.path.exists(receipt_path):
                         os.makedirs("receipts", exist_ok=True)
                         trip_folder = f"receipts/trip_{trip_id}"
                         os.makedirs(trip_folder, exist_ok=True)
@@ -899,29 +907,41 @@ if "current_trip_id" in st.session_state:
                         with open(file_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
                         db.update_receipt_path(item["id"], file_path)
-                        st.session_state[processed_key] = True
+                        # Increment counter to reset uploader key
+                        st.session_state.upload_counter += 1
                         st.success("✅ Receipt attached!")
                         st.rerun()
-                else:
-                    # Reset processed flag when no file is present
-                    st.session_state[f"processed_{item['id']}"] = False
+                    else:
+                        st.info("A receipt is already attached. Remove it first.")
 
-            # Column 4: Delete Receipt ONLY
+            # Column 4: Delete Receipt
             with col_del_receipt:
                 if receipt_path and os.path.exists(receipt_path):
                     if st.button("🗑️ Receipt", key=f"del_receipt_{item['id']}"):
                         try:
                             os.remove(receipt_path)
-                        except:
-                            pass
+                            st.success(
+                                f"✅ Receipt deleted: {os.path.basename(receipt_path)}"
+                            )
+                        except Exception as e:
+                            st.error(f"Could not delete file: {e}")
                         db.update_receipt_path(item["id"], None)
-                        st.session_state[f"processed_{item['id']}"] = False
+                        # Increment counter to reset uploader key
+                        st.session_state.upload_counter += 1
                         st.rerun()
 
             # Column 5: Delete Entire Item
             with col_del_item:
                 if st.button("❌ Item", key=f"del_item_{item['id']}"):
                     db.delete_itinerary_item(item["id"])
+                    st.rerun()
+
+            # Column 6: ✏️ Edit button (toggles the edit form)
+            with col_edit:
+                if st.button("✏️", key=f"edit_btn_{item['id']}"):
+                    st.session_state[f"editing_item_{item['id']}"] = (
+                        not st.session_state.get(f"editing_item_{item['id']}", False)
+                    )
                     st.rerun()
 
             # ---- EDIT FORM (if toggled) ----
@@ -999,6 +1019,13 @@ if "current_trip_id" in st.session_state:
                             value=bool(item.get("is_confirmed", False)),
                             key=f"e_confirmed_{item['id']}",
                         )
+
+                        # --- VISIBLE HINT FOR SAVE/CANCEL BUTTONS ---
+                        st.markdown("---")
+                        st.markdown(
+                            "**⬇️ Scroll down to find the Save and Cancel buttons below.**"
+                        )
+                        st.markdown("---")
 
                         col_s, col_c = st.columns(2)
                         with col_s:
