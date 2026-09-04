@@ -15,6 +15,7 @@ from excel_export import (
     export_spending_to_excel,
 )
 from currency import get_snapshot_rate, convert, get_exchange_rates, get_currency_symbol
+import duplicate_detection  # NEW
 
 
 # --- Safe Helper ---
@@ -175,6 +176,20 @@ with st.sidebar.expander("⚙️ Manage Executives & Companies"):
 
         if st.form_submit_button("Add Executive"):
             if exec_name and sel_company_id:
+                # --- Duplicate check ---
+                if exec_email:
+                    existing = duplicate_detection.find_duplicate_executive(
+                        exec_email, exec_name, sel_company_id
+                    )
+                    if existing:
+                        st.warning(
+                            "⚠️ An executive with the same email or name+company already exists:"
+                        )
+                        for dup in existing:
+                            st.write(f"- {dup['name']} (ID: {dup['id']})")
+                        if not st.checkbox("Add anyway?", key="force_add_exec"):
+                            st.stop()  # cancels the add
+
                 db.add_executive(
                     sel_company_id,
                     exec_name,
@@ -193,6 +208,26 @@ with st.sidebar.expander("⚙️ Manage Executives & Companies"):
                 st.rerun()
             else:
                 st.warning("Name and Company are required.")
+
+    # --- Global duplicate executive scan (NEW) ---
+    st.divider()
+    if st.button("🔍 Find Duplicate Executives"):
+        all_execs = db.get_all_executives()
+        email_map = {}
+        for e_id, name, company in all_execs:
+            profile = db.get_executive_profile(e_id)
+            email = profile.get("email", "")
+            if email:
+                email_map.setdefault(email, []).append((e_id, name, company))
+        duplicates_found = False
+        for email, entries in email_map.items():
+            if len(entries) > 1:
+                duplicates_found = True
+                st.warning(f"Email {email} has {len(entries)} executives:")
+                for e_id, name, company in entries:
+                    st.write(f"  - {name} (ID: {e_id})")
+        if not duplicates_found:
+            st.success("No duplicate emails found.")
 
 # --- Sidebar: Manage Categories ---
 st.sidebar.divider()
@@ -609,6 +644,25 @@ if is_editing:
                 stop_cities = [stop["city"] for stop in st.session_state["trip_stops"]]
                 dest_summary = " → ".join(stop_cities)
 
+                # --- Duplicate trip check ---
+                existing_trips = duplicate_detection.find_duplicate_trips(
+                    exec_id,
+                    trip_purpose,
+                    overall_start,
+                    overall_end,
+                    exclude_trip_id=trip_id,
+                )
+                if existing_trips:
+                    st.warning(
+                        "⚠️ You already have a trip with the same purpose and overlapping dates:"
+                    )
+                    for dup in existing_trips:
+                        st.write(
+                            f"- {dup['destination']} ({dup['start_date'][:10]} to {dup['end_date'][:10]})"
+                        )
+                    if not st.checkbox("Proceed anyway?", key="force_trip_update"):
+                        st.stop()
+
                 db.update_trip_purpose(trip_id, trip_purpose)
                 db.update_trip_dates(trip_id, overall_start, overall_end, dest_summary)
                 db.update_trip_budget(trip_id, budget)
@@ -650,6 +704,21 @@ else:
             overall_end = last_stop["end_date"]
             stop_cities = [stop["city"] for stop in st.session_state["trip_stops"]]
             dest_summary = " → ".join(stop_cities)
+
+            # --- Duplicate trip check ---
+            existing_trips = duplicate_detection.find_duplicate_trips(
+                exec_id, trip_purpose, overall_start, overall_end
+            )
+            if existing_trips:
+                st.warning(
+                    "⚠️ You already have a trip with the same purpose and overlapping dates:"
+                )
+                for dup in existing_trips:
+                    st.write(
+                        f"- {dup['destination']} ({dup['start_date'][:10]} to {dup['end_date'][:10]})"
+                    )
+                if not st.checkbox("Proceed anyway?", key="force_trip_create"):
+                    st.stop()
 
             trip_id = db.create_or_get_trip(
                 exec_id,
@@ -1335,6 +1404,22 @@ if "current_trip_id" in st.session_state:
                 )
                 if uploaded_file is not None:
                     if not receipt_path or not os.path.exists(receipt_path):
+                        # --- Duplicate receipt check ---
+                        existing_receipts = duplicate_detection.find_duplicate_receipts(
+                            trip_id
+                        )
+                        if uploaded_file.name in existing_receipts:
+                            st.error(
+                                f"⚠️ A receipt with the name '{uploaded_file.name}' already exists in this trip."
+                            )
+                            # Auto-rename by adding timestamp
+                            base, ext = os.path.splitext(uploaded_file.name)
+                            new_name = f"{base}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+                            st.info(f"Renamed to: {new_name}")
+                            uploaded_file.name = (
+                                new_name  # use the new name when saving
+                            )
+
                         os.makedirs("receipts", exist_ok=True)
                         trip_folder = f"receipts/trip_{trip_id}"
                         os.makedirs(trip_folder, exist_ok=True)
@@ -1543,6 +1628,26 @@ if "current_trip_id" in st.session_state:
 
             if st.form_submit_button("Add to Itinerary"):
                 if desc and dt_start:
+                    # --- Duplicate item check ---
+                    existing_dupes = duplicate_detection.find_duplicate_item(
+                        trip_id,
+                        desc,
+                        dt_start.isoformat(),
+                        dt_end.isoformat() if dt_end else None,
+                        cost,
+                        item_type,
+                    )
+                    if existing_dupes:
+                        st.warning(
+                            "⚠️ This item looks like a duplicate of an existing one:"
+                        )
+                        for d in existing_dupes:
+                            st.write(
+                                f"- {d['description']} ({d['datetime_start'][:16]})"
+                            )
+                        if not st.checkbox("Add anyway?", key="force_add_item"):
+                            st.stop()
+
                     snapshot_rate = get_snapshot_rate(trip_base_currency, cost_currency)
                     db.add_itinerary_item(
                         trip_id,
@@ -1654,6 +1759,58 @@ if "current_trip_id" in st.session_state:
                         )
                 else:
                     st.warning("No items to export.")
+
+        # --- SCAN FOR DUPLICATES (NEW) ---
+        st.divider()
+        if st.button("🔍 Scan for Duplicates & Conflicts"):
+            st.session_state["show_duplicate_scan"] = True
+
+        if st.session_state.get("show_duplicate_scan", False):
+            with st.expander("🔍 Duplicate & Conflict Report", expanded=True):
+                report = duplicate_detection.scan_trip_for_duplicates(trip_id)
+                if not report:
+                    st.info("No issues found.")
+                else:
+                    if report["conflicts"]:
+                        st.error("⏰ Scheduling Conflicts")
+                        for c in report["conflicts"]:
+                            st.write(f"- {c}")
+
+                    if report["duplicate_items"]:
+                        st.warning("📋 Exact Duplicate Items")
+                        for group in report["duplicate_items"]:
+                            orig = group["original"]
+                            st.write(
+                                f"**Original:** {orig['description']} ({orig['datetime_start'][:16]})"
+                            )
+                            for dup in group["duplicates"]:
+                                st.write(
+                                    f"  - Duplicate: {dup['description']} ({dup['datetime_start'][:16]})"
+                                )
+                                if st.button(
+                                    f"🗑️ Delete duplicate #{dup['id']}",
+                                    key=f"del_dup_{dup['id']}",
+                                ):
+                                    db.delete_itinerary_item(dup["id"])
+                                    st.success("Deleted duplicate item.")
+                                    st.rerun()
+
+                    if report["similar_expenses"]:
+                        st.info("💰 Similar Expenses (check for double‑booking)")
+                        for a, b in report["similar_expenses"]:
+                            st.write(
+                                f"  - {a['description']} ({a['cost']}) vs {b['description']} ({b['cost']})"
+                            )
+
+                    if report["duplicate_receipts"]:
+                        st.info("📎 Duplicate Receipt Filenames")
+                        for fname, ids in report["duplicate_receipts"].items():
+                            st.write(f"  - {fname}: attached to items {ids}")
+
+                    if st.button("Close Scan"):
+                        st.session_state["show_duplicate_scan"] = False
+                        st.rerun()
+
     else:
         st.info("No itinerary items yet. Add one below.")
         st.divider()
@@ -1700,6 +1857,26 @@ if "current_trip_id" in st.session_state:
             confirmed = st.checkbox("✅ Confirmed / Booked", key="item_confirmed_empty")
             if st.form_submit_button("Add to Itinerary"):
                 if desc and dt_start:
+                    # --- Duplicate item check ---
+                    existing_dupes = duplicate_detection.find_duplicate_item(
+                        trip_id,
+                        desc,
+                        dt_start.isoformat(),
+                        dt_end.isoformat() if dt_end else None,
+                        cost,
+                        item_type,
+                    )
+                    if existing_dupes:
+                        st.warning(
+                            "⚠️ This item looks like a duplicate of an existing one:"
+                        )
+                        for d in existing_dupes:
+                            st.write(
+                                f"- {d['description']} ({d['datetime_start'][:16]})"
+                            )
+                        if not st.checkbox("Add anyway?", key="force_add_item_empty"):
+                            st.stop()
+
                     snapshot_rate = get_snapshot_rate(trip_base_currency, cost_currency)
                     db.add_itinerary_item(
                         trip_id,
