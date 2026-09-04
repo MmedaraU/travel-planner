@@ -22,8 +22,6 @@ def migrate_db():
         c.execute("ALTER TABLE trips ADD COLUMN departure_region TEXT")
     if "departure_country" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN departure_country TEXT")
-
-    # --- Currency columns (per-trip) ---
     if "base_currency" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN base_currency TEXT DEFAULT 'USD'")
     if "display_currency" not in existing_trips:
@@ -476,8 +474,6 @@ def create_or_get_trip(
     row = c.fetchone()
     if row:
         trip_id = row[0]
-        # If the existing draft has different currencies, update them (optional)
-        # We'll just return the existing draft; the caller can update currencies separately.
     else:
         c.execute(
             """
@@ -562,7 +558,6 @@ def update_trip_dates(trip_id, start_date, end_date, destination):
 
 
 def update_trip_base_currency(trip_id, base_currency):
-    """Update the base currency for a trip."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -573,7 +568,6 @@ def update_trip_base_currency(trip_id, base_currency):
 
 
 def update_trip_display_currency(trip_id, display_currency):
-    """Update the display currency for a trip."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -610,19 +604,16 @@ def duplicate_trip(trip_id, exec_id):
     Duplicate an existing trip and all its stops and itinerary items.
     Returns the new trip ID.
     """
-    # 1. Get the original trip
     original = get_trip(trip_id)
     if not original:
         return None
 
-    # 2. Determine new purpose
     new_purpose = original["purpose"]
     if not new_purpose.endswith(" (Copy)"):
         new_purpose += " (Copy)"
     else:
         new_purpose += " (Copy)"
 
-    # 3. Insert a new trip directly (to avoid any draft lookup)
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -650,7 +641,7 @@ def duplicate_trip(trip_id, exec_id):
     conn.commit()
     conn.close()
 
-    # 4. Copy all stops
+    # Copy stops
     stops = get_trip_stops(trip_id)
     for stop in stops:
         add_trip_stop(
@@ -664,7 +655,7 @@ def duplicate_trip(trip_id, exec_id):
             stop.get("notes", ""),
         )
 
-    # 5. Copy all itinerary items
+    # Copy items
     items = get_items_for_trip(trip_id)
     for item in items:
         add_itinerary_item(
@@ -969,8 +960,6 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
 # =========================================================
 # EXECUTIVE DELETION FUNCTIONS
 # =========================================================
-
-
 def get_executive_trip_count(exec_id):
     """Return the number of trips associated with an executive."""
     conn = sqlite3.connect(DB_PATH)
@@ -999,7 +988,6 @@ def delete_executive(exec_id, force=False):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # Check if there are trips
     trip_count = get_executive_trip_count(exec_id)
 
     if trip_count > 0 and not force:
@@ -1010,17 +998,17 @@ def delete_executive(exec_id, force=False):
         )
 
     if force:
-        # 1. Get all trip IDs for this executive
+        # Get all trip IDs for this executive
         c.execute("SELECT id FROM trips WHERE exec_id = ?", (exec_id,))
         trip_ids = [row[0] for row in c.fetchall()]
 
-        # 2. Delete receipt folders for each trip (optional)
+        # Delete receipt folders for each trip
         for trip_id in trip_ids:
             trip_folder = f"receipts/trip_{trip_id}"
             if os.path.exists(trip_folder):
                 shutil.rmtree(trip_folder)
 
-        # 3. Delete all itinerary items for this executive's trips
+        # Delete all itinerary items, stops, and trips
         c.execute(
             """
             DELETE FROM itinerary_items 
@@ -1028,8 +1016,6 @@ def delete_executive(exec_id, force=False):
         """,
             (exec_id,),
         )
-
-        # 4. Delete all trip stops
         c.execute(
             """
             DELETE FROM trip_stops 
@@ -1037,17 +1023,278 @@ def delete_executive(exec_id, force=False):
         """,
             (exec_id,),
         )
-
-        # 5. Delete all trips
         c.execute("DELETE FROM trips WHERE exec_id = ?", (exec_id,))
 
-    # 6. Delete all memberships
+    # Delete memberships and executive
     c.execute("DELETE FROM executive_memberships WHERE exec_id = ?", (exec_id,))
-
-    # 7. Delete the executive itself
     c.execute("DELETE FROM executives WHERE id = ?", (exec_id,))
 
     conn.commit()
     conn.close()
 
     return True, f"Executive and {trip_count} trip(s) deleted successfully."
+
+
+# =========================================================
+# NEW: IMPORT / MERGE FUNCTIONS (for the Import feature)
+# =========================================================
+
+
+def _find_or_create_company(name):
+    """Find a company by name; if it doesn't exist, create it."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id FROM companies WHERE name = ?", (name,))
+    row = c.fetchone()
+    if row:
+        company_id = row[0]
+    else:
+        c.execute("INSERT INTO companies (name) VALUES (?)", (name,))
+        company_id = c.lastrowid
+        conn.commit()
+    conn.close()
+    return company_id
+
+
+def merge_database_data(data):
+    """
+    Merge data from a JSON file into the current database.
+    Expected structure:
+    {
+        "executives": [ { "name": ..., "email": ..., "company_name": ..., ... } ],
+        "trips": [
+            {
+                "executive_email": "...",
+                "purpose": "...",
+                "destination": "...",
+                "start_date": "...",
+                "end_date": "...",
+                "budget": 0,
+                "status": "draft",
+                "departure_city": "...",
+                "departure_region": "...",
+                "departure_country": "...",
+                "display_currency": "USD",
+                "base_currency": "USD",
+                "stops": [ { "city": "...", "country": "...", "region": "...", "start_date": "...", "end_date": "...", "notes": "..." } ],
+                "items": [ { "type": "...", "description": "...", "datetime_start": "...", "datetime_end": "...", "location": "...", "cost": 0, "cost_currency": "USD", "is_confirmed": 0, "confirmation_code": "...", "notes": "..." } ]
+            }
+        ]
+    }
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    added_execs = 0
+    added_trips = 0
+    added_stops = 0
+    added_items = 0
+
+    # --- 1. Import Executives ---
+    for exec_data in data.get("executives", []):
+        # Check if executive already exists by email
+        email = exec_data.get("email")
+        if not email:
+            continue  # skip if no email
+        c.execute("SELECT id FROM executives WHERE email = ?", (email,))
+        if c.fetchone():
+            continue  # skip duplicate
+
+        company_name = exec_data.get("company_name")
+        if company_name:
+            company_id = _find_or_create_company(company_name)
+        else:
+            # If no company provided, use a default or skip
+            continue
+
+        # Insert executive
+        c.execute(
+            """
+            INSERT INTO executives 
+            (company_id, name, email, timezone, seat_preference, hotel_loyalty,
+             frequent_flyer_number, dietary_restrictions, passport_number,
+             preferred_airline, tsa_precheck, meal_preference)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                company_id,
+                exec_data.get("name"),
+                email,
+                exec_data.get("timezone", "America/New_York"),
+                exec_data.get("seat_preference"),
+                exec_data.get("hotel_loyalty"),
+                exec_data.get("frequent_flyer_number"),
+                exec_data.get("dietary_restrictions"),
+                exec_data.get("passport_number"),
+                exec_data.get("preferred_airline"),
+                exec_data.get("tsa_precheck"),
+                exec_data.get("meal_preference"),
+            ),
+        )
+        added_execs += 1
+        conn.commit()
+
+    # --- 2. Import Trips ---
+    for trip_data in data.get("trips", []):
+        exec_email = trip_data.get("executive_email")
+        if not exec_email:
+            continue
+        # Find executive
+        c.execute("SELECT id FROM executives WHERE email = ?", (exec_email,))
+        row = c.fetchone()
+        if not row:
+            continue  # skip if executive doesn't exist
+        exec_id = row[0]
+
+        # Check if trip already exists (by destination, start_date and exec_id)
+        dest = trip_data.get("destination")
+        start = trip_data.get("start_date")
+        if not dest or not start:
+            continue
+        c.execute(
+            "SELECT id FROM trips WHERE exec_id = ? AND destination = ? AND start_date = ?",
+            (exec_id, dest, start),
+        )
+        if c.fetchone():
+            continue  # skip duplicate trip
+
+        # Insert trip
+        c.execute(
+            """
+            INSERT INTO trips 
+            (exec_id, destination, start_date, end_date, purpose, status,
+             budget, departure_city, departure_region, departure_country,
+             display_currency, base_currency)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                exec_id,
+                dest,
+                start,
+                trip_data.get("end_date"),
+                trip_data.get("purpose"),
+                trip_data.get("status", "draft"),
+                trip_data.get("budget", 0),
+                trip_data.get("departure_city"),
+                trip_data.get("departure_region"),
+                trip_data.get("departure_country"),
+                trip_data.get("display_currency", "USD"),
+                trip_data.get("base_currency", "USD"),
+            ),
+        )
+        trip_id = c.lastrowid
+        added_trips += 1
+        conn.commit()
+
+        # --- 3. Import Stops for this trip ---
+        for stop in trip_data.get("stops", []):
+            c.execute(
+                """
+                INSERT INTO trip_stops 
+                (trip_id, stop_order, city, country, region, start_date, end_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    trip_id,
+                    stop.get("stop_order", 0),
+                    stop.get("city"),
+                    stop.get("country"),
+                    stop.get("region"),
+                    stop.get("start_date"),
+                    stop.get("end_date"),
+                    stop.get("notes"),
+                ),
+            )
+            added_stops += 1
+            conn.commit()
+
+        # --- 4. Import Items for this trip ---
+        for item in trip_data.get("items", []):
+            c.execute(
+                """
+                INSERT INTO itinerary_items 
+                (trip_id, item_type, description, datetime_start, datetime_end,
+                 location, cost, cost_currency, is_confirmed, confirmation_code, notes,
+                 exchange_rate_snapshot)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    trip_id,
+                    item.get("type"),
+                    item.get("description"),
+                    item.get("datetime_start"),
+                    item.get("datetime_end"),
+                    item.get("location"),
+                    item.get("cost", 0),
+                    item.get("cost_currency", "USD"),
+                    1 if item.get("is_confirmed") else 0,
+                    item.get("confirmation_code"),
+                    item.get("notes"),
+                    1.0,  # snapshot rate; you could compute if needed
+                ),
+            )
+            added_items += 1
+            conn.commit()
+
+    conn.close()
+    return f"✅ Imported {added_execs} executives, {added_trips} trips, {added_stops} stops, {added_items} items."
+
+
+def import_executives_from_csv(reader):
+    """
+    Bulk-import executives from a CSV file.
+    Expected columns: name, email, company_name, timezone, seat_preference,
+                       hotel_loyalty, frequent_flyer_number, dietary_restrictions,
+                       passport_number, preferred_airline, tsa_precheck, meal_preference
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    added = 0
+    skipped = 0
+
+    for row in reader:
+        email = row.get("email")
+        if not email:
+            continue
+        # Check if executive already exists
+        c.execute("SELECT id FROM executives WHERE email = ?", (email,))
+        if c.fetchone():
+            skipped += 1
+            continue
+
+        company_name = row.get("company_name")
+        if company_name:
+            company_id = _find_or_create_company(company_name)
+        else:
+            # If no company, skip or use a default? We'll skip.
+            continue
+
+        c.execute(
+            """
+            INSERT INTO executives 
+            (company_id, name, email, timezone, seat_preference, hotel_loyalty,
+             frequent_flyer_number, dietary_restrictions, passport_number,
+             preferred_airline, tsa_precheck, meal_preference)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            (
+                company_id,
+                row.get("name"),
+                email,
+                row.get("timezone", "America/New_York"),
+                row.get("seat_preference"),
+                row.get("hotel_loyalty"),
+                row.get("frequent_flyer_number"),
+                row.get("dietary_restrictions"),
+                row.get("passport_number"),
+                row.get("preferred_airline"),
+                row.get("tsa_precheck"),
+                row.get("meal_preference"),
+            ),
+        )
+        added += 1
+        conn.commit()
+
+    conn.close()
+    return f"✅ Added {added} executives. Skipped {skipped} duplicates."

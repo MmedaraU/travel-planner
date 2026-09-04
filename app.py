@@ -219,6 +219,68 @@ with st.sidebar.expander("🏷️ Manage Categories"):
                 db.delete_category(cat_id)
                 st.rerun()
 
+# --- SIDEBAR: IMPORT / RESTORE DATABASE (NEW) ---
+with st.sidebar.expander("💾 Import / Restore Database"):
+    st.caption("Upload a file to restore or merge data.")
+
+    # --- Import mode ---
+    import_mode = st.radio(
+        "Import Mode",
+        options=["Merge (Add to existing)", "Replace (Full restore)"],
+        key="import_mode",
+        help="Merge adds new data; Replace overwrites everything.",
+    )
+
+    # --- File uploader ---
+    uploaded_file = st.file_uploader(
+        "Choose a file",
+        type=["db", "json", "csv"],
+        key="import_file",
+        help="Supported: .db (replace), .json (merge), .csv (merge executives).",
+    )
+
+    if uploaded_file is not None:
+        # Show file details
+        st.info(f"📄 {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
+
+        # --- Process button ---
+        if st.button("🚀 Start Import", type="primary"):
+            try:
+                # --- Replace mode ---
+                if import_mode == "Replace (Full restore)":
+                    if uploaded_file.name.endswith(".db"):
+                        # Overwrite the current database
+                        with open("travel_planner.db", "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        st.success("✅ Database replaced successfully! Refreshing...")
+                        st.rerun()
+                    else:
+                        st.error("Replace mode only accepts .db files.")
+
+                # --- Merge mode ---
+                else:
+                    if uploaded_file.name.endswith(".json"):
+                        import json
+
+                        data = json.load(uploaded_file)
+                        result = db.merge_database_data(
+                            data
+                        )  # Function to be added in database.py
+                        st.success(result)
+                    elif uploaded_file.name.endswith(".csv"):
+                        # Read CSV
+                        content = uploaded_file.getvalue().decode("utf-8").splitlines()
+                        reader = csv.DictReader(content)
+                        result = db.import_executives_from_csv(
+                            reader
+                        )  # Function to be added in database.py
+                        st.success(result)
+                    else:
+                        st.error("Merge mode accepts .json or .csv files.")
+
+            except Exception as e:
+                st.error(f"Import failed: {e}")
+
 # --- Load Executives ---
 executives = db.get_all_executives()
 if not executives:
@@ -286,7 +348,7 @@ with col_doc:
         profile_data = db.get_full_executive_profile(exec_id)
         if profile_data:
             doc_stream = doc_generator.generate_executive_profile_doc(
-                profile_data, exec_id, get_currency_symbol("USD")  # default symbol
+                profile_data, exec_id, get_currency_symbol("USD")
             )
             st.download_button(
                 "⬇️ Download",
@@ -300,9 +362,7 @@ with col_excel:
     if st.button("📊 Excel"):
         profile_data = db.get_full_executive_profile(exec_id)
         if profile_data:
-            excel_stream = export_profile_to_excel(
-                exec_id, get_currency_symbol("USD")
-            )
+            excel_stream = export_profile_to_excel(exec_id, get_currency_symbol("USD"))
             if excel_stream:
                 st.download_button(
                     label="⬇️ Download",
@@ -344,7 +404,7 @@ if not is_editing and "trip_stops" not in st.session_state:
 
 # --- CRITICAL FIX: When creating a new trip, the form should be editable ---
 if not is_editing:
-    is_draft = True  # <-- This enables the form for new trip creation
+    is_draft = True
 
 # --- Trip Name / Purpose ---
 trip_purpose = st.text_input(
@@ -492,14 +552,30 @@ with col_currency1:
     trip_display_currency = st.selectbox(
         "Display Currency (for this trip)",
         options=display_currency_options,
-        index=display_currency_options.index(current_display) if current_display in display_currency_options else 0,
+        index=(
+            display_currency_options.index(current_display)
+            if current_display in display_currency_options
+            else 0
+        ),
         disabled=not is_draft,
         key="trip_display_currency",
         help="The currency symbol used for display in this trip. Does not affect stored amounts.",
     )
 
 # Base Currency
-base_currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL", "CAD", "AUD", "CHF", "CNY", "INR"]
+base_currency_options = [
+    "USD",
+    "EUR",
+    "GBP",
+    "NGN",
+    "JPY",
+    "BRL",
+    "CAD",
+    "AUD",
+    "CHF",
+    "CNY",
+    "INR",
+]
 if is_editing and trip_data:
     current_base = trip_data.get("base_currency", "USD")
 else:
@@ -509,7 +585,11 @@ with col_currency2:
     trip_base_currency = st.selectbox(
         "Base Currency (for reporting & conversion)",
         options=base_currency_options,
-        index=base_currency_options.index(current_base) if current_base in base_currency_options else 0,
+        index=(
+            base_currency_options.index(current_base)
+            if current_base in base_currency_options
+            else 0
+        ),
         disabled=not is_draft,
         key="trip_base_currency",
         help="All foreign-currency expenses are converted to this currency using snapshot rates.",
@@ -535,7 +615,9 @@ if is_editing:
                     trip_id, departure_city, departure_region, departure_country
                 )
                 # Update per-trip currencies
-                db.update_trip_currencies(trip_id, trip_base_currency, trip_display_currency)
+                db.update_trip_currencies(
+                    trip_id, trip_base_currency, trip_display_currency
+                )
 
                 # Update stops – delete all and re-add
                 db.delete_all_trip_stops(trip_id)
@@ -1107,7 +1189,9 @@ if "current_trip_id" in st.session_state:
                 display_currency_code = trip_base_currency
 
             # Format display
-            display_str = f"{display_symbol_local}{display_cost:,.2f} {display_currency_code}"
+            display_str = (
+                f"{display_symbol_local}{display_cost:,.2f} {display_currency_code}"
+            )
 
             start_display = format_datetime_display(item["datetime_start"])
             end_display = (
@@ -1409,9 +1493,9 @@ if "current_trip_id" in st.session_state:
                     dep_country_db,
                     trip_id,
                     trip_budget,
-                    display_symbol,  # display symbol
-                    trip_display_currency,  # display code
-                    base_currency=trip_base_currency,  # not used for conversion unless convert_to_base=True
+                    display_symbol,
+                    trip_display_currency,
+                    base_currency=trip_base_currency,
                     convert_to_base=False,
                 )
                 st.download_button(
@@ -1450,8 +1534,8 @@ if "current_trip_id" in st.session_state:
                         trip_id,
                         trip_budget,
                         trip_purpose,
-                        display_symbol,  # not used inside; kept for compatibility
-                        base_currency=trip_base_currency,  # conversion target
+                        display_symbol,
+                        base_currency=trip_base_currency,
                     )
                     st.download_button(
                         "⬇️ Download Word Report",
@@ -1470,7 +1554,7 @@ if "current_trip_id" in st.session_state:
                     excel_stream = export_expense_to_excel(
                         items,
                         trip_data_full,
-                        display_symbol,  # display symbol
+                        display_symbol,
                         base_currency=trip_base_currency,
                     )
                     if excel_stream:
@@ -1598,12 +1682,8 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
 
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         col_m1.metric("Total Trips", len(summary_data))
-        col_m2.metric(
-            "Total Budget", f"{dashboard_symbol}{total_budget:,.2f}"
-        )
-        col_m3.metric(
-            "Total Spent", f"{dashboard_symbol}{total_spent:,.2f}"
-        )
+        col_m2.metric("Total Budget", f"{dashboard_symbol}{total_budget:,.2f}")
+        col_m3.metric("Total Spent", f"{dashboard_symbol}{total_spent:,.2f}")
         col_m4.metric(
             "Total Confirmed",
             f"{dashboard_symbol}{total_confirmed:,.2f}",
@@ -1627,21 +1707,13 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                 with col3:
                     st.write(trip["destination"])
                 with col4:
-                    st.write(
-                        f"{trip_symbol}{trip['budget']:.2f}"
-                    )
+                    st.write(f"{trip_symbol}{trip['budget']:.2f}")
                 with col5:
-                    st.write(
-                        f"{trip_symbol}{trip['total_spent']:.2f}"
-                    )
+                    st.write(f"{trip_symbol}{trip['total_spent']:.2f}")
                 with col6:
-                    st.write(
-                        f"{trip_symbol}{trip['confirmed_spent']:.2f}"
-                    )
+                    st.write(f"{trip_symbol}{trip['confirmed_spent']:.2f}")
                 with col7:
-                    st.write(
-                        f"{trip_symbol}{trip['estimated_spent']:.2f}"
-                    )
+                    st.write(f"{trip_symbol}{trip['estimated_spent']:.2f}")
                 with col8:
                     status = trip["status"]
                     if status == "draft":
@@ -1710,45 +1782,23 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
             for trip in summary_data:
                 trip_base = trip.get("base_currency", "USD")
                 sym = get_currency_symbol(trip_base)
-                rows.append([
-                    trip["executive_name"],
-                    trip["company_name"],
-                    trip["destination"],
-                    f"{sym}{trip['budget']:.2f}",
-                    f"{sym}{trip['total_spent']:.2f}",
-                    f"{sym}{trip['confirmed_spent']:.2f}",
-                    f"{sym}{trip['estimated_spent']:.2f}",
-                    trip["status"],
-                ])
-
+                rows.append(
+                    [
+                        trip["executive_name"],
+                        trip["company_name"],
+                        trip["destination"],
+                        f"{sym}{trip['budget']:.2f}",
+                        f"{sym}{trip['total_spent']:.2f}",
+                        f"{sym}{trip['confirmed_spent']:.2f}",
+                        f"{sym}{trip['estimated_spent']:.2f}",
+                        trip["status"],
+                        trip_base,
+                    ]
+                )
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow(headers + ["Base Currency"])
             for row in rows:
-                # We don't have per-row base currency easily, so we just add the trip's base from data
-                # but we need to match. Since we lost the base currency in the row, we can loop again.
-                # We'll use the summary_data directly.
-                # Let's rebuild rows with base currency.
-            # Quick fix: rebuild rows with base currency
-                rows_with_currency = []
-            for trip in summary_data:
-                trip_base = trip.get("base_currency", "USD")
-                sym = get_currency_symbol(trip_base)
-                rows_with_currency.append([
-                    trip["executive_name"],
-                    trip["company_name"],
-                    trip["destination"],
-                    f"{sym}{trip['budget']:.2f}",
-                    f"{sym}{trip['total_spent']:.2f}",
-                    f"{sym}{trip['confirmed_spent']:.2f}",
-                    f"{sym}{trip['estimated_spent']:.2f}",
-                    trip["status"],
-                    trip_base,
-                ])
-            output = io.StringIO()
-            writer = csv.writer(output)
-            writer.writerow(headers + ["Base Currency"])
-            for row in rows_with_currency:
                 writer.writerow(row)
             st.download_button(
                 "📊 Export Dashboard CSV",
