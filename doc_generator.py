@@ -51,7 +51,7 @@ def get_currency_symbol(currency):
 
 
 # ===================================================================
-#  1.  ITINERARY DOCUMENT (with optional base currency conversion)
+#  1.  ITINERARY DOCUMENT (uses per‑trip Display Currency)
 # ===================================================================
 def generate_itinerary_doc(
     executive,
@@ -70,8 +70,13 @@ def generate_itinerary_doc(
     """
     Generate a Word itinerary.
 
-    If convert_to_base is True, costs are converted to base_currency
-    using each item's snapshot exchange rate.
+    Parameters:
+        currency_symbol: Symbol of the trip's Display Currency (e.g., "$").
+        currency_code: Code of the trip's Display Currency (e.g., "USD").
+        base_currency: Optional base currency for conversion (ignored if convert_to_base=False).
+        convert_to_base: If True, converts all costs to base_currency using snapshot rates.
+                         If False, displays costs in the original currency with the trip's
+                         Display Currency symbol.
     """
     doc = Document()
 
@@ -164,7 +169,7 @@ def generate_itinerary_doc(
             if orig_currency and orig_currency != base_currency:
                 cost_str += f" ({orig_cost:.2f} {orig_currency})"
         else:
-            cost_str = f"{currency_symbol}{orig_cost:.2f}" if orig_cost else ""
+            cost_str = f"{display_symbol}{orig_cost:.2f}" if orig_cost else ""
 
         p = doc.add_paragraph(style="List Bullet")
         p.add_run(f"{start_display} – {end_time}  |  ").bold = True
@@ -447,6 +452,8 @@ def generate_expense_report_doc(
     - Receipt images embedded (thumbnails)
     - Daily subtotals and final summary
     - All costs converted to base_currency using snapshot rates
+
+    Note: currency_symbol is kept for compatibility but the symbol used is derived from base_currency.
     """
     doc = Document()
 

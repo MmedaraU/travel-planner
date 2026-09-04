@@ -22,8 +22,12 @@ def migrate_db():
         c.execute("ALTER TABLE trips ADD COLUMN departure_region TEXT")
     if "departure_country" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN departure_country TEXT")
+
+    # --- Currency columns (per-trip) ---
     if "base_currency" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN base_currency TEXT DEFAULT 'USD'")
+    if "display_currency" not in existing_trips:
+        c.execute("ALTER TABLE trips ADD COLUMN display_currency TEXT DEFAULT 'USD'")
 
     # --- Columns for 'itinerary_items' table ---
     c.execute("PRAGMA table_info(itinerary_items)")
@@ -35,8 +39,6 @@ def migrate_db():
         )
     if "receipt_path" not in existing_items:
         c.execute("ALTER TABLE itinerary_items ADD COLUMN receipt_path TEXT")
-
-    # --- NEW: Currency columns ---
     if "cost_currency" not in existing_items:
         c.execute(
             "ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'"
@@ -450,9 +452,17 @@ def delete_category(category_id):
 
 
 # =========================================================
-# TRIP MANAGEMENT
+# TRIP MANAGEMENT (with per-trip currencies)
 # =========================================================
-def create_or_get_trip(exec_id, destination_summary, start_date, end_date, purpose):
+def create_or_get_trip(
+    exec_id,
+    destination_summary,
+    start_date,
+    end_date,
+    purpose,
+    display_currency="USD",
+    base_currency="USD",
+):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -466,13 +476,24 @@ def create_or_get_trip(exec_id, destination_summary, start_date, end_date, purpo
     row = c.fetchone()
     if row:
         trip_id = row[0]
+        # If the existing draft has different currencies, update them (optional)
+        # We'll just return the existing draft; the caller can update currencies separately.
     else:
         c.execute(
             """
-            INSERT INTO trips (exec_id, destination, start_date, end_date, purpose, status)
-            VALUES (?, ?, ?, ?, ?, 'draft')
+            INSERT INTO trips (exec_id, destination, start_date, end_date, purpose, status,
+                               display_currency, base_currency)
+            VALUES (?, ?, ?, ?, ?, 'draft', ?, ?)
         """,
-            (exec_id, destination_summary, start_date, end_date, purpose),
+            (
+                exec_id,
+                destination_summary,
+                start_date,
+                end_date,
+                purpose,
+                display_currency,
+                base_currency,
+            ),
         )
         trip_id = c.lastrowid
         conn.commit()
@@ -551,6 +572,30 @@ def update_trip_base_currency(trip_id, base_currency):
     conn.close()
 
 
+def update_trip_display_currency(trip_id, display_currency):
+    """Update the display currency for a trip."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trips SET display_currency = ? WHERE id = ?",
+        (display_currency, trip_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_trip_currencies(trip_id, base_currency, display_currency):
+    """Update both base and display currencies for a trip in one call."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trips SET base_currency = ?, display_currency = ? WHERE id = ?",
+        (base_currency, display_currency, trip_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 def delete_trip(trip_id):
     """Delete a trip and all related items/stops (CASCADE handles it)."""
     conn = sqlite3.connect(DB_PATH)
@@ -584,8 +629,8 @@ def duplicate_trip(trip_id, exec_id):
         """
         INSERT INTO trips (exec_id, destination, start_date, end_date, purpose, status,
                            created_at, budget, departure_city, departure_region, departure_country,
-                           base_currency)
-        VALUES (?, ?, ?, ?, ?, 'draft', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+                           base_currency, display_currency)
+        VALUES (?, ?, ?, ?, ?, 'draft', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
     """,
         (
             exec_id,
@@ -598,6 +643,7 @@ def duplicate_trip(trip_id, exec_id):
             original.get("departure_region", ""),
             original.get("departure_country", ""),
             original.get("base_currency", "USD"),
+            original.get("display_currency", "USD"),
         ),
     )
     new_trip_id = c.lastrowid
@@ -887,6 +933,7 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
             t.budget,
             t.status,
             t.base_currency,
+            t.display_currency,
             COALESCE(SUM(i.cost), 0) as total_spent,
             COALESCE(SUM(CASE WHEN i.is_confirmed = 1 THEN i.cost ELSE 0 END), 0) as confirmed_spent,
             COALESCE(SUM(CASE WHEN i.is_confirmed = 0 THEN i.cost ELSE 0 END), 0) as estimated_spent

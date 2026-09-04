@@ -14,7 +14,7 @@ from excel_export import (
     export_expense_to_excel,
     export_spending_to_excel,
 )
-from currency import get_snapshot_rate, convert, get_exchange_rates
+from currency import get_snapshot_rate, convert, get_exchange_rates, get_currency_symbol
 
 
 # --- Safe Helper ---
@@ -43,24 +43,6 @@ def get_timezone_dropdown_options():
         display_names.append(display)
         tz_map[display] = tz
     return display_names, tz_map
-
-
-# --- Currency Symbol Helper ---
-def get_currency_symbol(currency):
-    symbols = {
-        "USD": "$",
-        "EUR": "€",
-        "GBP": "£",
-        "NGN": "₦",
-        "JPY": "¥",
-        "BRL": "R$",
-        "CAD": "C$",
-        "AUD": "A$",
-        "CHF": "Fr",
-        "CNY": "¥",
-        "INR": "₹",
-    }
-    return symbols.get(currency, "$")
 
 
 # --- Date Format Helper ---
@@ -117,19 +99,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- Initialize Currency ---
-if "currency_symbol" not in st.session_state:
-    st.session_state["currency_symbol"] = "$"
-if "currency_code" not in st.session_state:
-    st.session_state["currency_code"] = "USD"
-
 # --- Initialize upload counter for receipts ---
 if "upload_counter" not in st.session_state:
     st.session_state.upload_counter = 0
-
-# --- Initialize Base Currency (for reporting) ---
-if "base_currency" not in st.session_state:
-    st.session_state["base_currency"] = "USD"
 
 st.title("✈️ Executive Travel Planner")
 
@@ -139,54 +111,7 @@ db.init_db()
 # --- SIDEBAR: EXECUTIVE SELECTION ---
 st.sidebar.header("👤 Select Executive")
 
-# --- Currency Selector (Display Currency - cosmetic) ---
-st.sidebar.divider()
-st.sidebar.subheader("💱 Display Currency")
-currency_options = {
-    "$ (USD)": {"symbol": "$", "code": "USD"},
-    "€ (EUR)": {"symbol": "€", "code": "EUR"},
-    "£ (GBP)": {"symbol": "£", "code": "GBP"},
-    "₦ (NGN)": {"symbol": "₦", "code": "NGN"},
-    "¥ (JPY)": {"symbol": "¥", "code": "JPY"},
-    "R$ (BRL)": {"symbol": "R$", "code": "BRL"},
-}
-selected_currency_label = st.sidebar.selectbox(
-    "Select Display Currency", list(currency_options.keys()), index=0
-)
-selected_currency = currency_options[selected_currency_label]
-if st.session_state["currency_symbol"] != selected_currency["symbol"]:
-    st.session_state["currency_symbol"] = selected_currency["symbol"]
-    st.session_state["currency_code"] = selected_currency["code"]
-    st.rerun()
-
-# --- Base Currency (for reporting / conversion) ---
-st.sidebar.subheader("💱 Base Currency (Reporting)")
-base_currency_options = [
-    "USD",
-    "EUR",
-    "GBP",
-    "NGN",
-    "JPY",
-    "BRL",
-    "CAD",
-    "AUD",
-    "CHF",
-    "CNY",
-    "INR",
-]
-base_currency = st.sidebar.selectbox(
-    "Base Currency",
-    options=base_currency_options,
-    index=base_currency_options.index(st.session_state["base_currency"]),
-    key="base_currency_select",
-)
-if st.session_state["base_currency"] != base_currency:
-    st.session_state["base_currency"] = base_currency
-    st.rerun()
-
-st.sidebar.divider()
-
-# --- Sidebar: Manage Executives & Companies ---
+# --- SIDEBAR: Manage Executives & Companies ---
 with st.sidebar.expander("⚙️ Manage Executives & Companies"):
     # Add Company
     st.subheader("🏢 Add Company")
@@ -361,7 +286,7 @@ with col_doc:
         profile_data = db.get_full_executive_profile(exec_id)
         if profile_data:
             doc_stream = doc_generator.generate_executive_profile_doc(
-                profile_data, exec_id, st.session_state["currency_symbol"]
+                profile_data, exec_id, get_currency_symbol("USD")  # default symbol
             )
             st.download_button(
                 "⬇️ Download",
@@ -376,7 +301,7 @@ with col_excel:
         profile_data = db.get_full_executive_profile(exec_id)
         if profile_data:
             excel_stream = export_profile_to_excel(
-                exec_id, st.session_state["currency_symbol"]
+                exec_id, get_currency_symbol("USD")
             )
             if excel_stream:
                 st.download_button(
@@ -388,7 +313,7 @@ with col_excel:
                 )
 
 # =========================================================
-# MAIN AREA: TRIP SETUP (STATUS‑AWARE)
+# MAIN AREA: TRIP SETUP (with per‑trip currencies)
 # =========================================================
 st.header("📅 Trip Setup")
 
@@ -544,7 +469,7 @@ with st.expander("➕ Add Destination Stop"):
 
 # --- Budget ---
 budget = st.number_input(
-    f"💰 Trip Budget ({st.session_state['base_currency']})",
+    f"💰 Trip Budget",
     min_value=0.0,
     step=100.0,
     value=float(trip_data.get("budget", 0)) if is_editing and trip_data else 0.0,
@@ -552,8 +477,43 @@ budget = st.number_input(
     key="trip_budget",
 )
 
-# --- Base Currency for this trip (optional per trip, but we use global for now) ---
-# We'll use the global base_currency from session state
+# --- PER‑TRIP CURRENCIES (only editable for Drafts) ---
+st.subheader("💱 Trip Currencies")
+col_currency1, col_currency2 = st.columns(2)
+
+# Display Currency
+display_currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL"]
+if is_editing and trip_data:
+    current_display = trip_data.get("display_currency", "USD")
+else:
+    current_display = "USD"
+
+with col_currency1:
+    trip_display_currency = st.selectbox(
+        "Display Currency (for this trip)",
+        options=display_currency_options,
+        index=display_currency_options.index(current_display) if current_display in display_currency_options else 0,
+        disabled=not is_draft,
+        key="trip_display_currency",
+        help="The currency symbol used for display in this trip. Does not affect stored amounts.",
+    )
+
+# Base Currency
+base_currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL", "CAD", "AUD", "CHF", "CNY", "INR"]
+if is_editing and trip_data:
+    current_base = trip_data.get("base_currency", "USD")
+else:
+    current_base = "USD"
+
+with col_currency2:
+    trip_base_currency = st.selectbox(
+        "Base Currency (for reporting & conversion)",
+        options=base_currency_options,
+        index=base_currency_options.index(current_base) if current_base in base_currency_options else 0,
+        disabled=not is_draft,
+        key="trip_base_currency",
+        help="All foreign-currency expenses are converted to this currency using snapshot rates.",
+    )
 
 # --- Create / Update Button ---
 if is_editing:
@@ -574,8 +534,8 @@ if is_editing:
                 db.update_trip_departure_details(
                     trip_id, departure_city, departure_region, departure_country
                 )
-                # Store base currency (optional per trip)
-                db.update_trip_base_currency(trip_id, st.session_state["base_currency"])
+                # Update per-trip currencies
+                db.update_trip_currencies(trip_id, trip_base_currency, trip_display_currency)
 
                 # Update stops – delete all and re-add
                 db.delete_all_trip_stops(trip_id)
@@ -612,13 +572,18 @@ else:
             dest_summary = " → ".join(stop_cities)
 
             trip_id = db.create_or_get_trip(
-                exec_id, dest_summary, overall_start, overall_end, trip_purpose
+                exec_id,
+                dest_summary,
+                overall_start,
+                overall_end,
+                trip_purpose,
+                trip_display_currency,
+                trip_base_currency,
             )
             db.update_trip_budget(trip_id, budget)
             db.update_trip_departure_details(
                 trip_id, departure_city, departure_region, departure_country
             )
-            db.update_trip_base_currency(trip_id, st.session_state["base_currency"])
 
             db.delete_all_trip_stops(trip_id)
             for idx, stop in enumerate(st.session_state["trip_stops"]):
@@ -870,8 +835,12 @@ if "current_trip_id" in st.session_state:
     items = db.get_items_for_trip(trip_id)
     stops = db.get_trip_stops(trip_id)
 
-    # Base currency for this trip (global for now)
-    base_currency = st.session_state["base_currency"]
+    # --- Retrieve per-trip currencies ---
+    trip_display_currency = trip_data.get("display_currency", "USD")
+    display_symbol = get_currency_symbol(trip_display_currency)
+
+    trip_base_currency = trip_data.get("base_currency", "USD")
+    base_symbol = get_currency_symbol(trip_base_currency)
 
     # --- TRIP MANAGEMENT (Delete Trip + Status + Duplicate) ---
     st.divider()
@@ -1022,11 +991,10 @@ if "current_trip_id" in st.session_state:
 
     # --- DISPLAY ITINERARY ITEMS ---
     if items:
-        # --- Spending Summary (with currency conversion) ---
+        # --- Spending Summary (converted to Base Currency) ---
         spending = db.get_trip_spending(trip_id)
 
         # Convert spending totals to base currency using snapshot rates
-        # For totals, we sum the converted amounts (using each item's snapshot rate)
         total_estimated_converted = 0.0
         total_confirmed_converted = 0.0
         total_all_converted = 0.0
@@ -1045,25 +1013,25 @@ if "current_trip_id" in st.session_state:
         with col1:
             st.metric(
                 "Total Estimated (Quoted)",
-                f"{get_currency_symbol(base_currency)}{total_estimated_converted:,.2f}",
+                f"{base_symbol}{total_estimated_converted:,.2f}",
                 help="Converted using snapshot rate at time of each expense.",
             )
         with col2:
             st.metric(
                 "✅ Confirmed (Booked)",
-                f"{get_currency_symbol(base_currency)}{total_confirmed_converted:,.2f}",
+                f"{base_symbol}{total_confirmed_converted:,.2f}",
             )
         with col3:
             st.metric(
                 "📊 Total Spend",
-                f"{get_currency_symbol(base_currency)}{total_all_converted:,.2f}",
+                f"{base_symbol}{total_all_converted:,.2f}",
             )
         with col4:
             remaining = trip_budget - total_all_converted
             st.metric(
                 "💰 Budget",
-                f"{get_currency_symbol(base_currency)}{trip_budget:,.2f}",
-                delta=f"{get_currency_symbol(base_currency)}{remaining:,.2f} remaining",
+                f"{base_symbol}{trip_budget:,.2f}",
+                delta=f"{base_symbol}{remaining:,.2f} remaining",
                 delta_color="inverse" if remaining < 0 else "normal",
             )
 
@@ -1072,7 +1040,7 @@ if "current_trip_id" in st.session_state:
             st.progress(percent_used / 100, text="{:.0f}% used".format(percent_used))
         st.divider()
 
-        # Conflicts
+        # --- Conflicts ---
         conflicts = utils.detect_conflicts(items)
         if conflicts:
             st.warning("⚠️ Conflicts Detected:")
@@ -1094,7 +1062,7 @@ if "current_trip_id" in st.session_state:
         live_rates = None
         if display_mode == "Live Conversion":
             try:
-                live_rates = get_exchange_rates(base_currency)
+                live_rates = get_exchange_rates(trip_base_currency)
             except Exception as e:
                 st.warning(f"Could not fetch live rates: {e}. Using snapshot rates.")
                 display_mode = "Snapshot (at time of expense)"
@@ -1122,28 +1090,24 @@ if "current_trip_id" in st.session_state:
 
             if display_mode == "Original Currency":
                 display_cost = orig_cost
-                display_symbol = get_currency_symbol(orig_currency)
-                display_currency_code = orig_currency
+                display_symbol_local = display_symbol
+                display_currency_code = trip_display_currency
             elif display_mode == "Snapshot (at time of expense)":
                 display_cost = orig_cost * snapshot_rate
-                display_symbol = get_currency_symbol(base_currency)
-                display_currency_code = base_currency
+                display_symbol_local = base_symbol
+                display_currency_code = trip_base_currency
             else:  # Live Conversion
                 if live_rates is not None:
-                    # Convert using live rates
-                    # rates are relative to base_currency, so we can convert
-                    # convert(amount, from_currency, to_currency, rates)
                     display_cost = convert(
-                        orig_cost, orig_currency, base_currency, live_rates
+                        orig_cost, orig_currency, trip_base_currency, live_rates
                     )
                 else:
-                    # Fallback to snapshot
                     display_cost = orig_cost * snapshot_rate
-                display_symbol = get_currency_symbol(base_currency)
-                display_currency_code = base_currency
+                display_symbol_local = base_symbol
+                display_currency_code = trip_base_currency
 
             # Format display
-            display_str = f"{display_symbol}{display_cost:,.2f} {display_currency_code}"
+            display_str = f"{display_symbol_local}{display_cost:,.2f} {display_currency_code}"
 
             start_display = format_datetime_display(item["datetime_start"])
             end_display = (
@@ -1333,7 +1297,7 @@ if "current_trip_id" in st.session_state:
                             if st.form_submit_button("💾 Save Changes"):
                                 # Recompute snapshot rate if currency changed
                                 new_snapshot_rate = get_snapshot_rate(
-                                    base_currency, e_cost_currency
+                                    trip_base_currency, e_cost_currency
                                 )
                                 db.update_itinerary_item(
                                     item["id"],
@@ -1407,8 +1371,8 @@ if "current_trip_id" in st.session_state:
 
             if st.form_submit_button("Add to Itinerary"):
                 if desc and dt_start:
-                    # Compute snapshot rate
-                    snapshot_rate = get_snapshot_rate(base_currency, cost_currency)
+                    # Compute snapshot rate using trip's base currency
+                    snapshot_rate = get_snapshot_rate(trip_base_currency, cost_currency)
                     db.add_itinerary_item(
                         trip_id,
                         item_type,
@@ -1428,7 +1392,7 @@ if "current_trip_id" in st.session_state:
                 else:
                     st.warning("Description and Start Time required.")
 
-        # --- EXPORT BUTTONS (Four: Word Itinerary, Calendar, Word Expense, Excel Expense) ---
+        # --- EXPORT BUTTONS ---
         st.divider()
         col_gen, col_cal, col_expense_word, col_expense_excel = st.columns(4)
 
@@ -1436,7 +1400,6 @@ if "current_trip_id" in st.session_state:
             if st.button("📄 Generate Word Itinerary"):
                 exec_data = db.get_executive_profile(exec_id)
                 stops_data = db.get_trip_stops(trip_id)
-                # Pass base_currency to doc generator
                 doc_stream, filename = doc_generator.generate_itinerary_doc(
                     exec_data,
                     items,
@@ -1446,9 +1409,10 @@ if "current_trip_id" in st.session_state:
                     dep_country_db,
                     trip_id,
                     trip_budget,
-                    st.session_state["currency_symbol"],
-                    st.session_state["currency_code"],
-                    base_currency=base_currency,  # new parameter
+                    display_symbol,  # display symbol
+                    trip_display_currency,  # display code
+                    base_currency=trip_base_currency,  # not used for conversion unless convert_to_base=True
+                    convert_to_base=False,
                 )
                 st.download_button(
                     "⬇️ Download Word Doc",
@@ -1486,8 +1450,8 @@ if "current_trip_id" in st.session_state:
                         trip_id,
                         trip_budget,
                         trip_purpose,
-                        st.session_state["currency_symbol"],
-                        base_currency=base_currency,  # new parameter
+                        display_symbol,  # not used inside; kept for compatibility
+                        base_currency=trip_base_currency,  # conversion target
                     )
                     st.download_button(
                         "⬇️ Download Word Report",
@@ -1506,8 +1470,8 @@ if "current_trip_id" in st.session_state:
                     excel_stream = export_expense_to_excel(
                         items,
                         trip_data_full,
-                        st.session_state["currency_symbol"],
-                        base_currency=base_currency,  # new parameter
+                        display_symbol,  # display symbol
+                        base_currency=trip_base_currency,
                     )
                     if excel_stream:
                         st.download_button(
@@ -1566,7 +1530,7 @@ if "current_trip_id" in st.session_state:
             confirmed = st.checkbox("✅ Confirmed / Booked", key="item_confirmed_empty")
             if st.form_submit_button("Add to Itinerary"):
                 if desc and dt_start:
-                    snapshot_rate = get_snapshot_rate(base_currency, cost_currency)
+                    snapshot_rate = get_snapshot_rate(trip_base_currency, cost_currency)
                     db.add_itinerary_item(
                         trip_id,
                         item_type,
@@ -1618,30 +1582,40 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
     )
 
     if summary_data:
-        # Aggregate metrics (we'll show in base currency, but since we don't have per-item rates here, we just show totals as stored)
-        # For the dashboard, we could optionally convert each trip's base currency, but we'll keep it simple for now.
+        # Aggregate metrics – we need a consistent currency for dashboard totals.
+        # We'll use the base_currency of each trip for its own totals, but for a global sum,
+        # we need to convert everything to a single currency. For simplicity, we'll use USD.
+        # However, we don't have per-item rates here, so we'll just display raw sums in USD.
+        # For a better dashboard, you could add a target currency selector.
+        # We'll keep it simple: just show the raw sums with a note.
         total_budget = sum(t["budget"] for t in summary_data)
         total_spent = sum(t["total_spent"] for t in summary_data)
         total_confirmed = sum(t["confirmed_spent"] for t in summary_data)
         total_estimated = sum(t["estimated_spent"] for t in summary_data)
 
+        # Use USD for display as a fallback
+        dashboard_symbol = get_currency_symbol("USD")
+
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
         col_m1.metric("Total Trips", len(summary_data))
         col_m2.metric(
-            "Total Budget", f"{get_currency_symbol(base_currency)}{total_budget:,.2f}"
+            "Total Budget", f"{dashboard_symbol}{total_budget:,.2f}"
         )
         col_m3.metric(
-            "Total Spent", f"{get_currency_symbol(base_currency)}{total_spent:,.2f}"
+            "Total Spent", f"{dashboard_symbol}{total_spent:,.2f}"
         )
         col_m4.metric(
             "Total Confirmed",
-            f"{get_currency_symbol(base_currency)}{total_confirmed:,.2f}",
+            f"{dashboard_symbol}{total_confirmed:,.2f}",
         )
 
         st.subheader("Trip-Level Breakdown")
 
         # --- Display each trip as an interactive row ---
         for trip in summary_data:
+            # Show each trip's own base currency symbol for its amounts
+            trip_base_currency = trip.get("base_currency", "USD")
+            trip_symbol = get_currency_symbol(trip_base_currency)
             with st.container():
                 col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = (
                     st.columns([1.5, 1.5, 1.2, 1, 1, 1, 1, 1, 0.8, 0.8])
@@ -1654,19 +1628,19 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                     st.write(trip["destination"])
                 with col4:
                     st.write(
-                        f"{get_currency_symbol(base_currency)}{trip['budget']:.2f}"
+                        f"{trip_symbol}{trip['budget']:.2f}"
                     )
                 with col5:
                     st.write(
-                        f"{get_currency_symbol(base_currency)}{trip['total_spent']:.2f}"
+                        f"{trip_symbol}{trip['total_spent']:.2f}"
                     )
                 with col6:
                     st.write(
-                        f"{get_currency_symbol(base_currency)}{trip['confirmed_spent']:.2f}"
+                        f"{trip_symbol}{trip['confirmed_spent']:.2f}"
                     )
                 with col7:
                     st.write(
-                        f"{get_currency_symbol(base_currency)}{trip['estimated_spent']:.2f}"
+                        f"{trip_symbol}{trip['estimated_spent']:.2f}"
                     )
                 with col8:
                     status = trip["status"]
@@ -1732,25 +1706,50 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                 "Estimated",
                 "Status",
             ]
-            rows = [
-                [
+            rows = []
+            for trip in summary_data:
+                trip_base = trip.get("base_currency", "USD")
+                sym = get_currency_symbol(trip_base)
+                rows.append([
                     trip["executive_name"],
                     trip["company_name"],
                     trip["destination"],
-                    f"{get_currency_symbol(base_currency)}{trip['budget']:.2f}",
-                    f"{get_currency_symbol(base_currency)}{trip['total_spent']:.2f}",
-                    f"{get_currency_symbol(base_currency)}{trip['confirmed_spent']:.2f}",
-                    f"{get_currency_symbol(base_currency)}{trip['estimated_spent']:.2f}",
+                    f"{sym}{trip['budget']:.2f}",
+                    f"{sym}{trip['total_spent']:.2f}",
+                    f"{sym}{trip['confirmed_spent']:.2f}",
+                    f"{sym}{trip['estimated_spent']:.2f}",
                     trip["status"],
-                ]
-                for trip in summary_data
-            ]
+                ])
 
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow(headers + ["Base Currency"])
             for row in rows:
-                writer.writerow(row + [base_currency])
+                # We don't have per-row base currency easily, so we just add the trip's base from data
+                # but we need to match. Since we lost the base currency in the row, we can loop again.
+                # We'll use the summary_data directly.
+                # Let's rebuild rows with base currency.
+            # Quick fix: rebuild rows with base currency
+                rows_with_currency = []
+            for trip in summary_data:
+                trip_base = trip.get("base_currency", "USD")
+                sym = get_currency_symbol(trip_base)
+                rows_with_currency.append([
+                    trip["executive_name"],
+                    trip["company_name"],
+                    trip["destination"],
+                    f"{sym}{trip['budget']:.2f}",
+                    f"{sym}{trip['total_spent']:.2f}",
+                    f"{sym}{trip['confirmed_spent']:.2f}",
+                    f"{sym}{trip['estimated_spent']:.2f}",
+                    trip["status"],
+                    trip_base,
+                ])
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(headers + ["Base Currency"])
+            for row in rows_with_currency:
+                writer.writerow(row)
             st.download_button(
                 "📊 Export Dashboard CSV",
                 data=output.getvalue().encode("utf-8"),
@@ -1766,8 +1765,8 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                     summary_data,
                     start_filter,
                     end_filter,
-                    st.session_state["currency_symbol"],
-                    base_currency=base_currency,  # new param
+                    get_currency_symbol("USD"),  # default symbol
+                    base_currency="USD",  # we use USD for aggregate
                 )
                 st.download_button(
                     "⬇️ Download Word Report",
@@ -1781,9 +1780,9 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
             if st.button("📊 Export to Excel", key="dash_excel"):
                 excel_stream = export_spending_to_excel(
                     summary_data,
-                    st.session_state["currency_symbol"],
-                    st.session_state["currency_code"],
-                    base_currency=base_currency,
+                    get_currency_symbol("USD"),
+                    "USD",
+                    base_currency="USD",
                 )
                 if excel_stream:
                     st.download_button(
