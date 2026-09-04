@@ -32,8 +32,26 @@ def format_datetime_doc(dt_str, output_format="%d-%m-%Y %H:%M"):
         return dt_str
 
 
+def get_currency_symbol(currency):
+    """Return the symbol for a given currency code."""
+    symbols = {
+        "USD": "$",
+        "EUR": "€",
+        "GBP": "£",
+        "NGN": "₦",
+        "JPY": "¥",
+        "BRL": "R$",
+        "CAD": "C$",
+        "AUD": "A$",
+        "CHF": "Fr",
+        "CNY": "¥",
+        "INR": "₹",
+    }
+    return symbols.get(currency, "$")
+
+
 # ===================================================================
-#  1.  ITINERARY DOCUMENT (with multi‑city stops + departure details)
+#  1.  ITINERARY DOCUMENT (with optional base currency conversion)
 # ===================================================================
 def generate_itinerary_doc(
     executive,
@@ -46,14 +64,14 @@ def generate_itinerary_doc(
     trip_budget,
     currency_symbol="$",
     currency_code="USD",
+    base_currency=None,
+    convert_to_base=False,
 ):
     """
-    Generate a Word itinerary with:
-    - Departure (home base) with structured city, region, country
-    - Multi‑city stops (each with city, region, country)
-    - Date format DD-MM-YYYY
-    - Spending summary table
-    - Conflict warnings
+    Generate a Word itinerary.
+
+    If convert_to_base is True, costs are converted to base_currency
+    using each item's snapshot exchange rate.
     """
     doc = Document()
 
@@ -118,8 +136,15 @@ def generate_itinerary_doc(
     doc.add_paragraph(f"Meal Preference: {executive.get('meal_preference', 'Not set')}")
     doc.add_paragraph()
 
-    # --- Daily Agenda (with DD-MM-YYYY) ---
+    # --- Daily Agenda ---
     doc.add_heading("Daily Agenda", level=1)
+
+    # Determine which currency and symbol to use for display
+    if convert_to_base and base_currency:
+        display_symbol = get_currency_symbol(base_currency)
+    else:
+        display_symbol = currency_symbol
+
     for item in items:
         start_display = format_datetime_doc(item["datetime_start"])
         end_time = (
@@ -127,8 +152,19 @@ def generate_itinerary_doc(
             if item["datetime_end"]
             else "TBD"
         )
-        cost_str = f"{currency_symbol}{item['cost']:.2f}" if item.get("cost") else ""
         status_icon = "✅" if item.get("is_confirmed") else "📌"
+
+        # Compute cost
+        orig_cost = item.get("cost", 0)
+        if convert_to_base and base_currency:
+            snapshot_rate = item.get("exchange_rate_snapshot", 1.0)
+            cost_str = f"{display_symbol}{orig_cost * snapshot_rate:.2f}"
+            # Optionally include original currency info
+            orig_currency = item.get("cost_currency", "")
+            if orig_currency and orig_currency != base_currency:
+                cost_str += f" ({orig_cost:.2f} {orig_currency})"
+        else:
+            cost_str = f"{currency_symbol}{orig_cost:.2f}" if orig_cost else ""
 
         p = doc.add_paragraph(style="List Bullet")
         p.add_run(f"{start_display} – {end_time}  |  ").bold = True
@@ -147,35 +183,55 @@ def generate_itinerary_doc(
         for c in conflicts:
             doc.add_paragraph(c, style="List Bullet")
 
-    # --- Spending Summary ---
+    # --- Spending Summary (converted to base if requested) ---
     doc.add_page_break()
     doc.add_heading("💰 Trip Spending Summary", level=1)
 
-    spending = db.get_trip_spending(trip_id)
+    # Compute converted totals
+    total_estimated = 0
+    total_confirmed = 0
+    total_all = 0
+    for item in items:
+        cost = item.get("cost", 0)
+        if convert_to_base and base_currency:
+            snapshot_rate = item.get("exchange_rate_snapshot", 1.0)
+            conv_cost = cost * snapshot_rate
+        else:
+            conv_cost = cost
+        total_all += conv_cost
+        if item.get("is_confirmed"):
+            total_confirmed += conv_cost
+        else:
+            total_estimated += conv_cost
 
     table = doc.add_table(rows=3, cols=2)
     table.style = "Light Grid Accent 1"
     table.cell(0, 0).text = "Category"
     table.cell(0, 1).text = "Amount"
     table.cell(1, 0).text = "Total Estimated (Quoted)"
-    table.cell(1, 1).text = f"{currency_symbol}{spending['total_estimated']:.2f}"
+    table.cell(1, 1).text = f"{display_symbol}{total_estimated:.2f}"
     table.cell(2, 0).text = "Total Confirmed (Booked)"
-    table.cell(2, 1).text = f"{currency_symbol}{spending['total_confirmed']:.2f}"
+    table.cell(2, 1).text = f"{display_symbol}{total_confirmed:.2f}"
 
-    doc.add_paragraph(
-        f"\nTotal Trip Spend: {currency_symbol}{spending['total_all']:.2f}"
-    )
+    doc.add_paragraph(f"\nTotal Trip Spend: {display_symbol}{total_all:.2f}")
     if trip_budget > 0:
-        remaining = trip_budget - spending["total_all"]
+        remaining = trip_budget - total_all
         doc.add_paragraph(
-            f"Budget: {currency_symbol}{trip_budget:.2f}  |  Remaining: {currency_symbol}{remaining:.2f}"
+            f"Budget: {display_symbol}{trip_budget:.2f}  |  Remaining: {display_symbol}{remaining:.2f}"
+        )
+
+    # Footnote about conversion if used
+    if convert_to_base and base_currency:
+        doc.add_paragraph(
+            f"Note: Costs converted to {base_currency} using the exchange rate at the time of each expense (snapshot).",
+            style="Normal",
         )
 
     # --- Footer ---
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
-        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}  |  Currency: {currency_code}'
+        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}  |  Currency: {base_currency if convert_to_base and base_currency else currency_code}'
     )
     footer_run.font.size = Pt(9)
     footer_run.font.italic = True
@@ -192,7 +248,7 @@ def generate_itinerary_doc(
 
 
 # ===================================================================
-#  2.  EXECUTIVE PROFILE DOCUMENT (with memberships)
+#  2.  EXECUTIVE PROFILE DOCUMENT (no currency changes)
 # ===================================================================
 def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
     """Generate a Word profile with all executive details + memberships."""
@@ -286,9 +342,18 @@ def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
 #  3.  SPENDING REPORT (aggregate)
 # ===================================================================
 def generate_spending_report_doc(
-    filter_name, summary_data, start_date, end_date, currency_symbol="$"
+    filter_name,
+    summary_data,
+    start_date,
+    end_date,
+    currency_symbol="$",
+    base_currency="USD",
 ):
-    """Generate an aggregate spending report (CSV‑like summary)."""
+    """
+    Generate an aggregate spending report.
+    Note: Totals are shown in base_currency but are NOT automatically converted
+    from the raw sums. For accurate conversion per trip, use per‑trip data.
+    """
     doc = Document()
 
     title = doc.add_heading("Executive Travel Spending Report", 0)
@@ -299,22 +364,20 @@ def generate_spending_report_doc(
     doc.add_paragraph(f"Date Range: {start_date or 'All'} to {end_date or 'All'}")
     doc.add_paragraph()
 
-    # Aggregates
+    # Aggregates (these are raw sums – display in base_currency symbol)
     total_budget = sum(t["budget"] for t in summary_data)
     total_spent = sum(t["total_spent"] for t in summary_data)
     total_confirmed = sum(t["confirmed_spent"] for t in summary_data)
     total_estimated = sum(t["estimated_spent"] for t in summary_data)
 
+    symbol = get_currency_symbol(base_currency)
+
     doc.add_heading("Aggregate Summary", level=1)
     doc.add_paragraph(f"Total Trips: {len(summary_data)}")
-    doc.add_paragraph(f"Total Budget: {currency_symbol}{total_budget:,.2f}")
-    doc.add_paragraph(f"Total Spent: {currency_symbol}{total_spent:,.2f}")
-    doc.add_paragraph(
-        f"Total Confirmed (Booked): {currency_symbol}{total_confirmed:,.2f}"
-    )
-    doc.add_paragraph(
-        f"Total Estimated (Quoted): {currency_symbol}{total_estimated:,.2f}"
-    )
+    doc.add_paragraph(f"Total Budget: {symbol}{total_budget:,.2f}")
+    doc.add_paragraph(f"Total Spent: {symbol}{total_spent:,.2f}")
+    doc.add_paragraph(f"Total Confirmed (Booked): {symbol}{total_confirmed:,.2f}")
+    doc.add_paragraph(f"Total Estimated (Quoted): {symbol}{total_estimated:,.2f}")
     doc.add_paragraph()
 
     # Trip‑level breakdown
@@ -339,15 +402,16 @@ def generate_spending_report_doc(
         row_cells[0].text = trip["executive_name"]
         row_cells[1].text = trip["company_name"]
         row_cells[2].text = trip["destination"]
-        row_cells[3].text = f"{currency_symbol}{trip['budget']:.2f}"
-        row_cells[4].text = f"{currency_symbol}{trip['total_spent']:.2f}"
-        row_cells[5].text = f"{currency_symbol}{trip['confirmed_spent']:.2f}"
+        row_cells[3].text = f"{symbol}{trip['budget']:.2f}"
+        row_cells[4].text = f"{symbol}{trip['total_spent']:.2f}"
+        row_cells[5].text = f"{symbol}{trip['confirmed_spent']:.2f}"
         row_cells[6].text = trip["status"]
 
+    # Footer
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
-        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}'
+        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}  |  Base Currency: {base_currency}'
     )
     footer_run.font.size = Pt(9)
     footer_run.font.italic = True
@@ -360,6 +424,7 @@ def generate_spending_report_doc(
 
 # ===================================================================
 #  4.  EXPENSE REPORT (daily breakdown with receipt thumbnails)
+#      Always converts to base_currency using snapshot rates
 # ===================================================================
 def generate_expense_report_doc(
     executive,
@@ -372,6 +437,7 @@ def generate_expense_report_doc(
     trip_budget,
     trip_name,
     currency_symbol="$",
+    base_currency="USD",
 ):
     """
     Generate a detailed expense report with:
@@ -380,6 +446,7 @@ def generate_expense_report_doc(
     - Daily grouped items with DD-MM-YYYY
     - Receipt images embedded (thumbnails)
     - Daily subtotals and final summary
+    - All costs converted to base_currency using snapshot rates
     """
     doc = Document()
 
@@ -452,6 +519,9 @@ def generate_expense_report_doc(
     confirmed_total = 0
     estimated_total = 0
 
+    # Symbol for base currency
+    base_symbol = get_currency_symbol(base_currency)
+
     # --- Process each day ---
     for date_key, day_items in days.items():
         dt_obj = datetime.strptime(date_key, "%Y-%m-%d")
@@ -460,27 +530,29 @@ def generate_expense_report_doc(
             level=1,
         )
 
-        # Table: Time, Description, Type, Cost, Receipt
+        # Table: Time, Description, Type, Cost (in base), Receipt
         table = doc.add_table(rows=1, cols=5)
         table.style = "Light Grid Accent 1"
         hdr = table.rows[0].cells
         hdr[0].text = "Time"
         hdr[1].text = "Description"
         hdr[2].text = "Type"
-        hdr[3].text = f"Cost ({currency_symbol})"
+        hdr[3].text = f"Cost ({base_currency})"
         hdr[4].text = "Receipt"
 
         day_total = 0
         for item in day_items:
             dt = datetime.fromisoformat(item["datetime_start"])
             time_str = dt.strftime("%H:%M")
-            cost = item.get("cost", 0)
-            day_total += cost
-            grand_total += cost
+            orig_cost = item.get("cost", 0)
+            snapshot_rate = item.get("exchange_rate_snapshot", 1.0)
+            converted_cost = orig_cost * snapshot_rate
+            day_total += converted_cost
+            grand_total += converted_cost
             if item.get("is_confirmed"):
-                confirmed_total += cost
+                confirmed_total += converted_cost
             else:
-                estimated_total += cost
+                estimated_total += converted_cost
 
             row_cells = table.add_row().cells
             row_cells[0].text = time_str
@@ -488,7 +560,12 @@ def generate_expense_report_doc(
                 f"{item['description']} ({item.get('confirmation_code', '')})"
             )
             row_cells[2].text = item["item_type"]
-            row_cells[3].text = f"{currency_symbol}{cost:.2f}"
+            # Show converted cost with base symbol; optionally include original
+            display_cost = f"{base_symbol}{converted_cost:.2f}"
+            orig_currency = item.get("cost_currency", "")
+            if orig_currency and orig_currency != base_currency:
+                display_cost += f" ({orig_cost:.2f} {orig_currency})"
+            row_cells[3].text = display_cost
 
             # Receipt column
             receipt_path = item.get("receipt_path")
@@ -509,7 +586,7 @@ def generate_expense_report_doc(
         total_row[0].text = ""
         total_row[1].text = ""
         total_row[2].text = "**Day Total**"
-        total_row[3].text = f"{currency_symbol}{day_total:.2f}"
+        total_row[3].text = f"{base_symbol}{day_total:.2f}"
         total_row[4].text = ""
 
     # --- Summary Totals ---
@@ -521,23 +598,29 @@ def generate_expense_report_doc(
     summary_table.cell(0, 0).text = "Category"
     summary_table.cell(0, 1).text = "Amount"
     summary_table.cell(1, 0).text = "Total Confirmed (Booked)"
-    summary_table.cell(1, 1).text = f"{currency_symbol}{confirmed_total:.2f}"
+    summary_table.cell(1, 1).text = f"{base_symbol}{confirmed_total:.2f}"
     summary_table.cell(2, 0).text = "Total Estimated (Quoted)"
-    summary_table.cell(2, 1).text = f"{currency_symbol}{estimated_total:.2f}"
+    summary_table.cell(2, 1).text = f"{base_symbol}{estimated_total:.2f}"
 
-    doc.add_paragraph(f"\n**Grand Total: {currency_symbol}{grand_total:.2f}**")
+    doc.add_paragraph(f"\n**Grand Total: {base_symbol}{grand_total:.2f}**")
 
     if trip_budget > 0:
         remaining = trip_budget - grand_total
         doc.add_paragraph(
-            f"Budget: {currency_symbol}{trip_budget:.2f}  |  Remaining: {currency_symbol}{remaining:.2f}"
+            f"Budget: {base_symbol}{trip_budget:.2f}  |  Remaining: {base_symbol}{remaining:.2f}"
         )
+
+    # Footnote about conversion
+    doc.add_paragraph(
+        f"Note: All amounts converted to {base_currency} using the exchange rate at the time of each expense (snapshot).",
+        style="Normal",
+    )
 
     # --- Footer ---
     footer = doc.add_paragraph()
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
-        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}'
+        f'Generated on {datetime.now().strftime("%d-%m-%Y at %I:%M %p")}  |  Base Currency: {base_currency}'
     )
     footer_run.font.size = Pt(9)
     footer_run.font.italic = True

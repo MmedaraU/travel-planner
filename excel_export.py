@@ -6,6 +6,8 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 import database as db
 from datetime import datetime
+from currency import get_currency_symbol
+
 
 def export_profile_to_excel(exec_id, currency_symbol="$"):
     """Generate an Excel file with the executive's profile and memberships."""
@@ -79,8 +81,11 @@ def export_profile_to_excel(exec_id, currency_symbol="$"):
     return output
 
 
-def export_itinerary_to_excel(trip_id, currency_symbol="$"):
-    """Generate an Excel file with trip details, stops, and itinerary items."""
+def export_itinerary_to_excel(trip_id, currency_symbol="$", base_currency="USD"):
+    """
+    Generate an Excel file with trip details, stops, and itinerary items.
+    Shows both original and converted amounts (using snapshot rates).
+    """
     trip_data = db.get_trip(trip_id)
     if not trip_data:
         return None
@@ -89,6 +94,7 @@ def export_itinerary_to_excel(trip_id, currency_symbol="$"):
     items = db.get_items_for_trip(trip_id)
 
     wb = Workbook()
+    base_symbol = get_currency_symbol(base_currency)
 
     # --- Sheet 1: Trip Summary ---
     ws = wb.active
@@ -98,7 +104,8 @@ def export_itinerary_to_excel(trip_id, currency_symbol="$"):
         ("Trip Purpose", trip_data.get("purpose", "")),
         ("Destination", trip_data.get("destination", "")),
         ("Status", trip_data.get("status", "").title()),
-        ("Budget", f"{currency_symbol}{trip_data.get('budget', 0):,.2f}"),
+        ("Budget", f"{base_symbol}{trip_data.get('budget', 0):,.2f}"),
+        ("Base Currency", base_currency),
         ("Departure City", trip_data.get("departure_city", "")),
         ("Departure Region", trip_data.get("departure_region", "")),
         ("Departure Country", trip_data.get("departure_country", "")),
@@ -137,7 +144,7 @@ def export_itinerary_to_excel(trip_id, currency_symbol="$"):
         ws_stops.cell(row=idx, column=6, value=stop.get("end_date", ""))
         ws_stops.cell(row=idx, column=7, value=stop.get("notes", ""))
 
-    # --- Sheet 3: Itinerary Items ---
+    # --- Sheet 3: Itinerary Items (with currency conversion) ---
     ws_items = wb.create_sheet("Itinerary Items")
     item_headers = [
         "Type",
@@ -145,7 +152,9 @@ def export_itinerary_to_excel(trip_id, currency_symbol="$"):
         "Start Time",
         "End Time",
         "Location",
-        "Cost",
+        "Original Amount",
+        "Original Currency",
+        "Converted Amount (Base)",
         "Confirmed",
         "Confirmation Code",
         "Notes",
@@ -159,6 +168,11 @@ def export_itinerary_to_excel(trip_id, currency_symbol="$"):
         )
 
     for idx, item in enumerate(items, 2):
+        orig_cost = item.get("cost", 0)
+        orig_currency = item.get("cost_currency", "USD")
+        snapshot_rate = item.get("exchange_rate_snapshot", 1.0)
+        converted_cost = orig_cost * snapshot_rate
+
         ws_items.cell(row=idx, column=1, value=item.get("item_type", ""))
         ws_items.cell(row=idx, column=2, value=item.get("description", ""))
         ws_items.cell(row=idx, column=3, value=item.get("datetime_start", ""))
@@ -167,18 +181,20 @@ def export_itinerary_to_excel(trip_id, currency_symbol="$"):
         ws_items.cell(
             row=idx,
             column=6,
-            value=(
-                f"{currency_symbol}{item.get('cost', 0):.2f}"
-                if item.get("cost")
-                else ""
-            ),
+            value=f"{orig_cost:.2f}" if orig_cost else "",
+        )
+        ws_items.cell(row=idx, column=7, value=orig_currency)
+        ws_items.cell(
+            row=idx,
+            column=8,
+            value=f"{base_symbol}{converted_cost:.2f}" if converted_cost else "",
         )
         ws_items.cell(
-            row=idx, column=7, value="Yes" if item.get("is_confirmed") else "No"
+            row=idx, column=9, value="Yes" if item.get("is_confirmed") else "No"
         )
-        ws_items.cell(row=idx, column=8, value=item.get("confirmation_code", ""))
-        ws_items.cell(row=idx, column=9, value=item.get("notes", ""))
-        ws_items.cell(row=idx, column=10, value=item.get("receipt_path", ""))
+        ws_items.cell(row=idx, column=10, value=item.get("confirmation_code", ""))
+        ws_items.cell(row=idx, column=11, value=item.get("notes", ""))
+        ws_items.cell(row=idx, column=12, value=item.get("receipt_path", ""))
 
     # --- Auto-size all sheets ---
     for sheet in wb.worksheets:
@@ -191,7 +207,9 @@ def export_itinerary_to_excel(trip_id, currency_symbol="$"):
     return output
 
 
-def export_spending_to_excel(summary_data, currency_symbol="$", currency_code="USD"):
+def export_spending_to_excel(
+    summary_data, currency_symbol="$", currency_code="USD", base_currency="USD"
+):
     """Generate an Excel file from the spending dashboard data."""
     if not summary_data:
         return None
@@ -199,6 +217,7 @@ def export_spending_to_excel(summary_data, currency_symbol="$", currency_code="U
     wb = Workbook()
     ws = wb.active
     ws.title = "Spending Dashboard"
+    base_symbol = get_currency_symbol(base_currency)
 
     headers = [
         "Executive",
@@ -222,23 +241,21 @@ def export_spending_to_excel(summary_data, currency_symbol="$", currency_code="U
         ws.cell(row=idx, column=1, value=trip.get("executive_name", ""))
         ws.cell(row=idx, column=2, value=trip.get("company_name", ""))
         ws.cell(row=idx, column=3, value=trip.get("destination", ""))
-        ws.cell(
-            row=idx, column=4, value=f"{currency_symbol}{trip.get('budget', 0):,.2f}"
-        )
+        ws.cell(row=idx, column=4, value=f"{base_symbol}{trip.get('budget', 0):,.2f}")
         ws.cell(
             row=idx,
             column=5,
-            value=f"{currency_symbol}{trip.get('total_spent', 0):,.2f}",
+            value=f"{base_symbol}{trip.get('total_spent', 0):,.2f}",
         )
         ws.cell(
             row=idx,
             column=6,
-            value=f"{currency_symbol}{trip.get('confirmed_spent', 0):,.2f}",
+            value=f"{base_symbol}{trip.get('confirmed_spent', 0):,.2f}",
         )
         ws.cell(
             row=idx,
             column=7,
-            value=f"{currency_symbol}{trip.get('estimated_spent', 0):,.2f}",
+            value=f"{base_symbol}{trip.get('estimated_spent', 0):,.2f}",
         )
         ws.cell(row=idx, column=8, value=trip.get("status", "").title())
 
@@ -248,23 +265,29 @@ def export_spending_to_excel(summary_data, currency_symbol="$", currency_code="U
         ws.cell(
             row=total_row,
             column=4,
-            value=f"{currency_symbol}{sum(t['budget'] for t in summary_data):,.2f}",
+            value=f"{base_symbol}{sum(t['budget'] for t in summary_data):,.2f}",
         ).font = Font(bold=True)
         ws.cell(
             row=total_row,
             column=5,
-            value=f"{currency_symbol}{sum(t['total_spent'] for t in summary_data):,.2f}",
+            value=f"{base_symbol}{sum(t['total_spent'] for t in summary_data):,.2f}",
         ).font = Font(bold=True)
         ws.cell(
             row=total_row,
             column=6,
-            value=f"{currency_symbol}{sum(t['confirmed_spent'] for t in summary_data):,.2f}",
+            value=f"{base_symbol}{sum(t['confirmed_spent'] for t in summary_data):,.2f}",
         ).font = Font(bold=True)
         ws.cell(
             row=total_row,
             column=7,
-            value=f"{currency_symbol}{sum(t['estimated_spent'] for t in summary_data):,.2f}",
+            value=f"{base_symbol}{sum(t['estimated_spent'] for t in summary_data):,.2f}",
         ).font = Font(bold=True)
+
+    # Add a note about base currency
+    note_row = len(summary_data) + 4 if summary_data else 1
+    ws.cell(row=note_row, column=1, value=f"Base Currency: {base_currency}").font = (
+        Font(italic=True)
+    )
 
     for col in range(1, len(headers) + 1):
         ws.column_dimensions[get_column_letter(col)].auto_size = True
@@ -276,15 +299,16 @@ def export_spending_to_excel(summary_data, currency_symbol="$", currency_code="U
 
 
 # =========================================================
-# NEW: EXPENSE REPORT TO EXCEL
+# EXPENSE REPORT TO EXCEL (with full currency conversion)
 # =========================================================
-def export_expense_to_excel(items, trip_data, currency_symbol="$"):
+def export_expense_to_excel(items, trip_data, currency_symbol="$", base_currency="USD"):
     """
     Generate an Excel file with the expense report structure:
     - Grouped by day
-    - Time, Description, Type, Cost, Receipt
+    - Time, Description, Type, Original Cost, Converted Cost, Receipt
     - Day subtotals
     - Grand totals (Confirmed, Estimated, Total)
+    All costs are converted to base_currency using snapshot rates.
     """
     if not items:
         return None
@@ -292,6 +316,7 @@ def export_expense_to_excel(items, trip_data, currency_symbol="$"):
     wb = Workbook()
     ws = wb.active
     ws.title = "Expense Report"
+    base_symbol = get_currency_symbol(base_currency)
 
     # --- Helper to add a formatted row ---
     def add_row(row_num, values, bold=False, bg_color=None):
@@ -305,8 +330,6 @@ def export_expense_to_excel(items, trip_data, currency_symbol="$"):
                 )
 
     # --- Group items by day ---
-    from datetime import datetime
-
     sorted_items = sorted(
         items, key=lambda x: datetime.fromisoformat(x["datetime_start"])
     )
@@ -318,7 +341,16 @@ def export_expense_to_excel(items, trip_data, currency_symbol="$"):
         days[date_key].append(item)
 
     # --- Headers ---
-    headers = ["Date", "Time", "Description", "Type", "Cost", "Receipt"]
+    headers = [
+        "Date",
+        "Time",
+        "Description",
+        "Type",
+        "Original Amount",
+        "Currency",
+        "Converted Amount (Base)",
+        "Receipt",
+    ]
     add_row(1, headers, bold=True, bg_color="D3D3D3")
 
     row_num = 2
@@ -327,27 +359,29 @@ def export_expense_to_excel(items, trip_data, currency_symbol="$"):
     estimated_total = 0
 
     for date_key, day_items in days.items():
-        # --- Date Heading Row (merged later) ---
+        # --- Date Heading Row (merged) ---
         ws.cell(
             row=row_num,
             column=1,
             value=f"📅 {datetime.strptime(date_key, '%Y-%m-%d').strftime('%d-%m-%Y')}",
         ).font = Font(bold=True, size=12)
-        # Merge columns 1-6 for the date heading
-        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=6)
+        ws.merge_cells(start_row=row_num, start_column=1, end_row=row_num, end_column=8)
         row_num += 1
 
         day_total = 0
         for item in day_items:
             dt = datetime.fromisoformat(item["datetime_start"])
             time_str = dt.strftime("%H:%M")
-            cost = item.get("cost", 0)
-            day_total += cost
-            grand_total += cost
+            orig_cost = item.get("cost", 0)
+            orig_currency = item.get("cost_currency", "USD")
+            snapshot_rate = item.get("exchange_rate_snapshot", 1.0)
+            converted_cost = orig_cost * snapshot_rate
+            day_total += converted_cost
+            grand_total += converted_cost
             if item.get("is_confirmed"):
-                confirmed_total += cost
+                confirmed_total += converted_cost
             else:
-                estimated_total += cost
+                estimated_total += converted_cost
 
             receipt_filename = (
                 os.path.basename(item.get("receipt_path", ""))
@@ -362,7 +396,9 @@ def export_expense_to_excel(items, trip_data, currency_symbol="$"):
                     time_str,
                     item.get("description", ""),
                     item.get("item_type", ""),
-                    f"{currency_symbol}{cost:.2f}" if cost else "",
+                    f"{orig_cost:.2f}" if orig_cost else "",
+                    orig_currency,
+                    f"{base_symbol}{converted_cost:.2f}" if converted_cost else "",
                     receipt_filename,
                 ],
             )
@@ -371,7 +407,7 @@ def export_expense_to_excel(items, trip_data, currency_symbol="$"):
         # --- Day Total Row ---
         add_row(
             row_num,
-            ["", "", "", "DAY TOTAL", f"{currency_symbol}{day_total:.2f}", ""],
+            ["", "", "", "DAY TOTAL", "", "", f"{base_symbol}{day_total:.2f}", ""],
             bold=True,
             bg_color="E6E6E6",
         )
@@ -386,25 +422,34 @@ def export_expense_to_excel(items, trip_data, currency_symbol="$"):
 
     add_row(
         row_num,
-        ["Confirmed (Booked)", f"{currency_symbol}{confirmed_total:.2f}"],
+        ["Confirmed (Booked)", f"{base_symbol}{confirmed_total:.2f}"],
         bold=True,
     )
     row_num += 1
     add_row(
         row_num,
-        ["Estimated (Quoted)", f"{currency_symbol}{estimated_total:.2f}"],
+        ["Estimated (Quoted)", f"{base_symbol}{estimated_total:.2f}"],
         bold=True,
     )
     row_num += 1
     add_row(
         row_num,
-        ["GRAND TOTAL", f"{currency_symbol}{grand_total:.2f}"],
+        ["GRAND TOTAL", f"{base_symbol}{grand_total:.2f}"],
         bold=True,
         bg_color="FFD700",
     )
+    row_num += 1
+
+    # --- Footnote about conversion ---
+    row_num += 1
+    ws.cell(
+        row=row_num,
+        column=1,
+        value=f"Note: All amounts converted to {base_currency} using the exchange rate at the time of each expense (snapshot).",
+    ).font = Font(italic=True)
 
     # --- Auto-size columns ---
-    for col in range(1, 7):
+    for col in range(1, len(headers) + 1):
         ws.column_dimensions[get_column_letter(col)].auto_size = True
 
     output = io.BytesIO()

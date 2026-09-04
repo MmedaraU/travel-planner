@@ -22,6 +22,8 @@ def migrate_db():
         c.execute("ALTER TABLE trips ADD COLUMN departure_region TEXT")
     if "departure_country" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN departure_country TEXT")
+    if "base_currency" not in existing_trips:
+        c.execute("ALTER TABLE trips ADD COLUMN base_currency TEXT DEFAULT 'USD'")
 
     # --- Columns for 'itinerary_items' table ---
     c.execute("PRAGMA table_info(itinerary_items)")
@@ -33,6 +35,16 @@ def migrate_db():
         )
     if "receipt_path" not in existing_items:
         c.execute("ALTER TABLE itinerary_items ADD COLUMN receipt_path TEXT")
+
+    # --- NEW: Currency columns ---
+    if "cost_currency" not in existing_items:
+        c.execute(
+            "ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'"
+        )
+    if "exchange_rate_snapshot" not in existing_items:
+        c.execute(
+            "ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0"
+        )
 
     # --- Columns for 'executives' table (new preferences) ---
     c.execute("PRAGMA table_info(executives)")
@@ -72,7 +84,7 @@ def migrate_db():
         FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
     )""")
 
-    # --- NEW: Create categories table (for custom itinerary item types) ---
+    # --- Create categories table (for custom itinerary item types) ---
     c.execute("""CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL
@@ -404,7 +416,7 @@ def delete_all_memberships(exec_id):
 
 
 # =========================================================
-# CATEGORY MANAGEMENT (NEW)
+# CATEGORY MANAGEMENT
 # =========================================================
 def add_category(name):
     conn = sqlite3.connect(DB_PATH)
@@ -509,6 +521,36 @@ def update_trip_departure_details(trip_id, city, region, country):
     conn.close()
 
 
+def update_trip_purpose(trip_id, purpose):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE trips SET purpose = ? WHERE id = ?", (purpose, trip_id))
+    conn.commit()
+    conn.close()
+
+
+def update_trip_dates(trip_id, start_date, end_date, destination):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trips SET start_date = ?, end_date = ?, destination = ? WHERE id = ?",
+        (start_date, end_date, destination, trip_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_trip_base_currency(trip_id, base_currency):
+    """Update the base currency for a trip."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trips SET base_currency = ? WHERE id = ?", (base_currency, trip_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 def delete_trip(trip_id):
     """Delete a trip and all related items/stops (CASCADE handles it)."""
     conn = sqlite3.connect(DB_PATH)
@@ -516,6 +558,85 @@ def delete_trip(trip_id):
     c.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
     conn.commit()
     conn.close()
+
+
+def duplicate_trip(trip_id, exec_id):
+    """
+    Duplicate an existing trip and all its stops and itinerary items.
+    Returns the new trip ID.
+    """
+    # 1. Get the original trip
+    original = get_trip(trip_id)
+    if not original:
+        return None
+
+    # 2. Determine new purpose
+    new_purpose = original["purpose"]
+    if not new_purpose.endswith(" (Copy)"):
+        new_purpose += " (Copy)"
+    else:
+        new_purpose += " (Copy)"
+
+    # 3. Insert a new trip directly (to avoid any draft lookup)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO trips (exec_id, destination, start_date, end_date, purpose, status,
+                           created_at, budget, departure_city, departure_region, departure_country,
+                           base_currency)
+        VALUES (?, ?, ?, ?, ?, 'draft', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?)
+    """,
+        (
+            exec_id,
+            original["destination"],
+            original["start_date"],
+            original["end_date"],
+            new_purpose,
+            original.get("budget", 0),
+            original.get("departure_city", ""),
+            original.get("departure_region", ""),
+            original.get("departure_country", ""),
+            original.get("base_currency", "USD"),
+        ),
+    )
+    new_trip_id = c.lastrowid
+    conn.commit()
+    conn.close()
+
+    # 4. Copy all stops
+    stops = get_trip_stops(trip_id)
+    for stop in stops:
+        add_trip_stop(
+            new_trip_id,
+            stop["stop_order"],
+            stop["city"],
+            stop["country"],
+            stop["region"],
+            stop["start_date"],
+            stop["end_date"],
+            stop.get("notes", ""),
+        )
+
+    # 5. Copy all itinerary items
+    items = get_items_for_trip(trip_id)
+    for item in items:
+        add_itinerary_item(
+            new_trip_id,
+            item["item_type"],
+            item["description"],
+            item["datetime_start"],
+            item["datetime_end"],
+            item["location"],
+            item["cost"],
+            item["confirmation_code"],
+            item["notes"],
+            item.get("is_confirmed", 0),
+            item.get("cost_currency", "USD"),
+            item.get("exchange_rate_snapshot", 1.0),
+        )
+
+    return new_trip_id
 
 
 # =========================================================
@@ -588,7 +709,7 @@ def delete_all_trip_stops(trip_id):
 
 
 # =========================================================
-# ITINERARY ITEMS
+# ITINERARY ITEMS (UPDATED WITH CURRENCY)
 # =========================================================
 def add_itinerary_item(
     trip_id,
@@ -601,6 +722,8 @@ def add_itinerary_item(
     confirmation_code,
     notes,
     is_confirmed=0,
+    cost_currency="USD",
+    exchange_rate_snapshot=1.0,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -608,8 +731,8 @@ def add_itinerary_item(
         """
         INSERT INTO itinerary_items 
         (trip_id, item_type, description, datetime_start, datetime_end, location,
-         cost, confirmation_code, notes, is_confirmed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         cost, confirmation_code, notes, is_confirmed, cost_currency, exchange_rate_snapshot)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             trip_id,
@@ -622,6 +745,8 @@ def add_itinerary_item(
             confirmation_code,
             notes,
             is_confirmed,
+            cost_currency,
+            exchange_rate_snapshot,
         ),
     )
     conn.commit()
@@ -656,6 +781,8 @@ def update_itinerary_item(
     confirmation_code,
     notes,
     is_confirmed,
+    cost_currency="USD",
+    exchange_rate_snapshot=1.0,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -670,7 +797,9 @@ def update_itinerary_item(
             cost = ?,
             confirmation_code = ?,
             notes = ?,
-            is_confirmed = ?
+            is_confirmed = ?,
+            cost_currency = ?,
+            exchange_rate_snapshot = ?
         WHERE id = ?
     """,
         (
@@ -683,6 +812,8 @@ def update_itinerary_item(
             confirmation_code,
             notes,
             is_confirmed,
+            cost_currency,
+            exchange_rate_snapshot,
             item_id,
         ),
     )
@@ -755,6 +886,7 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
             t.end_date,
             t.budget,
             t.status,
+            t.base_currency,
             COALESCE(SUM(i.cost), 0) as total_spent,
             COALESCE(SUM(CASE WHEN i.is_confirmed = 1 THEN i.cost ELSE 0 END), 0) as confirmed_spent,
             COALESCE(SUM(CASE WHEN i.is_confirmed = 0 THEN i.cost ELSE 0 END), 0) as estimated_spent
@@ -785,3 +917,90 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+# =========================================================
+# EXECUTIVE DELETION FUNCTIONS
+# =========================================================
+
+
+def get_executive_trip_count(exec_id):
+    """Return the number of trips associated with an executive."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM trips WHERE exec_id = ?", (exec_id,))
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+
+def delete_executive(exec_id, force=False):
+    """
+    Delete an executive and optionally force-delete their trips and receipts.
+
+    Args:
+        exec_id: The ID of the executive to delete.
+        force: If True, deletes all trips and itinerary items first.
+               If False, returns an error if trips exist.
+
+    Returns:
+        (success: bool, message: str)
+    """
+    import os
+    import shutil
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    # Check if there are trips
+    trip_count = get_executive_trip_count(exec_id)
+
+    if trip_count > 0 and not force:
+        conn.close()
+        return (
+            False,
+            f"Cannot delete: Executive has {trip_count} trip(s). Delete trips first or use force delete.",
+        )
+
+    if force:
+        # 1. Get all trip IDs for this executive
+        c.execute("SELECT id FROM trips WHERE exec_id = ?", (exec_id,))
+        trip_ids = [row[0] for row in c.fetchall()]
+
+        # 2. Delete receipt folders for each trip (optional)
+        for trip_id in trip_ids:
+            trip_folder = f"receipts/trip_{trip_id}"
+            if os.path.exists(trip_folder):
+                shutil.rmtree(trip_folder)
+
+        # 3. Delete all itinerary items for this executive's trips
+        c.execute(
+            """
+            DELETE FROM itinerary_items 
+            WHERE trip_id IN (SELECT id FROM trips WHERE exec_id = ?)
+        """,
+            (exec_id,),
+        )
+
+        # 4. Delete all trip stops
+        c.execute(
+            """
+            DELETE FROM trip_stops 
+            WHERE trip_id IN (SELECT id FROM trips WHERE exec_id = ?)
+        """,
+            (exec_id,),
+        )
+
+        # 5. Delete all trips
+        c.execute("DELETE FROM trips WHERE exec_id = ?", (exec_id,))
+
+    # 6. Delete all memberships
+    c.execute("DELETE FROM executive_memberships WHERE exec_id = ?", (exec_id,))
+
+    # 7. Delete the executive itself
+    c.execute("DELETE FROM executives WHERE id = ?", (exec_id,))
+
+    conn.commit()
+    conn.close()
+
+    return True, f"Executive and {trip_count} trip(s) deleted successfully."
