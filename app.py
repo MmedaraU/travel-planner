@@ -2,7 +2,7 @@ import streamlit as st
 import database as db
 import doc_generator
 import utils
-from datetime import datetime
+from datetime import datetime, timedelta
 import csv
 import io
 import pytz
@@ -219,11 +219,34 @@ with st.sidebar.expander("🏷️ Manage Categories"):
                 db.delete_category(cat_id)
                 st.rerun()
 
-# --- SIDEBAR: IMPORT / RESTORE DATABASE (NEW) ---
+# --- SIDEBAR: Trip Templates (NEW) ---
+st.sidebar.divider()
+with st.sidebar.expander("📋 Trip Templates"):
+    st.caption("Save and reuse trip structures.")
+
+    templates = db.get_trip_templates()
+    if templates:
+        st.write("**Saved Templates:**")
+        for t in templates:
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.write(f"**{t['name']}**")
+                st.caption(f"Created: {t['created_at'][:10]}")
+            with col2:
+                if st.button("🗑️", key=f"del_template_{t['id']}"):
+                    db.delete_trip_template(t["id"])
+                    st.rerun()
+    else:
+        st.caption("No templates saved yet.")
+
+    st.caption(
+        "💡 To create a template, open a trip and click the '📋 Save as Template' button below."
+    )
+
+# --- SIDEBAR: IMPORT / RESTORE DATABASE ---
 with st.sidebar.expander("💾 Import / Restore Database"):
     st.caption("Upload a file to restore or merge data.")
 
-    # --- Import mode ---
     import_mode = st.radio(
         "Import Mode",
         options=["Merge (Add to existing)", "Replace (Full restore)"],
@@ -231,7 +254,6 @@ with st.sidebar.expander("💾 Import / Restore Database"):
         help="Merge adds new data; Replace overwrites everything.",
     )
 
-    # --- File uploader ---
     uploaded_file = st.file_uploader(
         "Choose a file",
         type=["db", "json", "csv"],
@@ -240,44 +262,32 @@ with st.sidebar.expander("💾 Import / Restore Database"):
     )
 
     if uploaded_file is not None:
-        # Show file details
         st.info(f"📄 {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
 
-        # --- Process button ---
         if st.button("🚀 Start Import", type="primary"):
             try:
-                # --- Replace mode ---
                 if import_mode == "Replace (Full restore)":
                     if uploaded_file.name.endswith(".db"):
-                        # Overwrite the current database
                         with open("travel_planner.db", "wb") as f:
                             f.write(uploaded_file.getbuffer())
                         st.success("✅ Database replaced successfully! Refreshing...")
                         st.rerun()
                     else:
                         st.error("Replace mode only accepts .db files.")
-
-                # --- Merge mode ---
                 else:
                     if uploaded_file.name.endswith(".json"):
                         import json
 
                         data = json.load(uploaded_file)
-                        result = db.merge_database_data(
-                            data
-                        )  # Function to be added in database.py
+                        result = db.merge_database_data(data)
                         st.success(result)
                     elif uploaded_file.name.endswith(".csv"):
-                        # Read CSV
                         content = uploaded_file.getvalue().decode("utf-8").splitlines()
                         reader = csv.DictReader(content)
-                        result = db.import_executives_from_csv(
-                            reader
-                        )  # Function to be added in database.py
+                        result = db.import_executives_from_csv(reader)
                         st.success(result)
                     else:
                         st.error("Merge mode accepts .json or .csv files.")
-
             except Exception as e:
                 st.error(f"Import failed: {e}")
 
@@ -390,19 +400,15 @@ if is_editing:
     if trip_data:
         trip_status = trip_data.get("status", "draft")
         is_draft = trip_status == "draft"
-        # Pre-populate the session state stops from the database if not already there
         if "trip_stops" not in st.session_state or not st.session_state["trip_stops"]:
             st.session_state["trip_stops"] = db.get_trip_stops(trip_id)
     else:
-        # If trip doesn't exist, clear the session state
         st.session_state.pop("current_trip_id", None)
         is_editing = False
 
-# --- If not editing, make sure trip_stops is initialized ---
 if not is_editing and "trip_stops" not in st.session_state:
     st.session_state["trip_stops"] = []
 
-# --- CRITICAL FIX: When creating a new trip, the form should be editable ---
 if not is_editing:
     is_draft = True
 
@@ -448,7 +454,6 @@ departure_country = st.selectbox(
 # --- Stops ---
 st.subheader("📍 Trip Stops (Destinations)")
 
-# Display existing stops
 if st.session_state["trip_stops"]:
     st.write("**Stops in this trip:**")
     for idx, stop in enumerate(st.session_state["trip_stops"]):
@@ -473,7 +478,6 @@ if st.session_state["trip_stops"]:
                 st.session_state["trip_stops"].pop(idx)
                 st.rerun()
 
-# Add stop form – disabled for non-drafts
 with st.expander("➕ Add Destination Stop"):
     col_city, col_country = st.columns(2)
     with col_city:
@@ -537,11 +541,10 @@ budget = st.number_input(
     key="trip_budget",
 )
 
-# --- PER‑TRIP CURRENCIES (only editable for Drafts) ---
+# --- PER‑TRIP CURRENCIES ---
 st.subheader("💱 Trip Currencies")
 col_currency1, col_currency2 = st.columns(2)
 
-# Display Currency
 display_currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL"]
 if is_editing and trip_data:
     current_display = trip_data.get("display_currency", "USD")
@@ -562,7 +565,6 @@ with col_currency1:
         help="The currency symbol used for display in this trip. Does not affect stored amounts.",
     )
 
-# Base Currency
 base_currency_options = [
     "USD",
     "EUR",
@@ -607,19 +609,16 @@ if is_editing:
                 stop_cities = [stop["city"] for stop in st.session_state["trip_stops"]]
                 dest_summary = " → ".join(stop_cities)
 
-                # Update the existing trip directly – no new trip created
                 db.update_trip_purpose(trip_id, trip_purpose)
                 db.update_trip_dates(trip_id, overall_start, overall_end, dest_summary)
                 db.update_trip_budget(trip_id, budget)
                 db.update_trip_departure_details(
                     trip_id, departure_city, departure_region, departure_country
                 )
-                # Update per-trip currencies
                 db.update_trip_currencies(
                     trip_id, trip_base_currency, trip_display_currency
                 )
 
-                # Update stops – delete all and re-add
                 db.delete_all_trip_stops(trip_id)
                 for idx, stop in enumerate(st.session_state["trip_stops"]):
                     db.add_trip_stop(
@@ -643,7 +642,6 @@ if is_editing:
             f"⚠️ This trip is **{trip_status.title()}** and cannot be edited directly. Use the 'Revert to Draft' button below or Duplicate it."
         )
 else:
-    # New trip creation
     if st.button("🚀 Create Trip", key="create_trip"):
         if trip_purpose and st.session_state["trip_stops"]:
             first_stop = st.session_state["trip_stops"][0]
@@ -688,6 +686,84 @@ else:
             st.rerun()
         else:
             st.warning("Enter a Trip Name and add at least one stop.")
+
+# =========================================================
+# CREATE FROM TEMPLATE (NEW SECTION)
+# =========================================================
+st.divider()
+st.subheader("📋 Create Trip from Template")
+
+templates = db.get_trip_templates()
+if templates:
+    template_options = {t["name"]: t["id"] for t in templates}
+    selected_template_name = st.selectbox(
+        "Select Template", list(template_options.keys()), key="template_selector"
+    )
+    selected_template_id = template_options[selected_template_name]
+
+    if selected_template_id:
+        template_data = db.get_trip_template(selected_template_id)
+        if template_data:
+            with st.expander("👁️ Preview Template"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Departure:**")
+                    st.write(f"City: {template_data.get('departure_city', 'N/A')}")
+                    st.write(f"Region: {template_data.get('departure_region', 'N/A')}")
+                    st.write(
+                        f"Country: {template_data.get('departure_country', 'N/A')}"
+                    )
+                    st.write(f"**Stops:**")
+                    for stop in template_data.get("stops", []):
+                        st.write(f"- {stop.get('city', '')}")
+                with col2:
+                    st.write("**Items:**")
+                    for item in template_data.get("items", []):
+                        st.write(
+                            f"- {item.get('item_type', '')}: {item.get('description', '')}"
+                        )
+
+            with st.form("apply_template_form"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_trip_name = st.text_input(
+                        "Trip Name*",
+                        value=f"{selected_template_name} - {datetime.now().strftime('%Y-%m-%d')}",
+                    )
+                    new_start = st.date_input(
+                        "Start Date*", value=datetime.now() + timedelta(days=7)
+                    )
+                with col2:
+                    new_budget = st.number_input(
+                        "Budget", min_value=0.0, step=100.0, value=1000.0
+                    )
+                    new_end = st.date_input(
+                        "End Date*", value=datetime.now() + timedelta(days=10)
+                    )
+
+                submitted = st.form_submit_button("🚀 Create Trip from Template")
+                if submitted:
+                    if new_trip_name and new_start and new_end:
+                        new_trip_id = db.apply_trip_template(
+                            selected_template_id,
+                            exec_id,
+                            new_trip_name,
+                            new_start,
+                            new_end,
+                            new_budget,
+                        )
+                        if new_trip_id:
+                            st.session_state["current_trip_id"] = new_trip_id
+                            st.success(
+                                f"✅ Trip '{new_trip_name}' created from template!"
+                            )
+                            st.rerun()
+                        else:
+                            st.error("Failed to create trip from template.")
+                    else:
+                        st.warning("Please fill in all required fields.")
+else:
+    st.caption("No templates available. Create one by saving a trip as a template.")
 
 # =========================================================
 # EDIT EXECUTIVE
@@ -867,7 +943,6 @@ if st.session_state.get("editing_exec", False):
 if st.session_state.get("show_delete_exec_confirm", False):
     st.warning("⚠️ You are about to delete this executive.")
 
-    # Check how many trips they have
     trip_count = db.get_executive_trip_count(exec_id)
     exec_name = profile.get("name", "Unknown")
 
@@ -886,7 +961,6 @@ if st.session_state.get("show_delete_exec_confirm", False):
             success, msg = db.delete_executive(exec_id, force=True)
             if success:
                 st.success(msg)
-                # Reset session state
                 st.session_state["show_delete_exec_confirm"] = False
                 if "current_trip_id" in st.session_state:
                     del st.session_state["current_trip_id"]
@@ -894,7 +968,6 @@ if st.session_state.get("show_delete_exec_confirm", False):
                     del st.session_state["editing_exec"]
                 if "trip_stops" in st.session_state:
                     del st.session_state["trip_stops"]
-                # Remove the executive from dropdown by rerunning
                 st.rerun()
             else:
                 st.error(msg)
@@ -924,16 +997,17 @@ if "current_trip_id" in st.session_state:
     trip_base_currency = trip_data.get("base_currency", "USD")
     base_symbol = get_currency_symbol(trip_base_currency)
 
-    # --- TRIP MANAGEMENT (Delete Trip + Status + Duplicate) ---
+    # --- TRIP MANAGEMENT (Delete Trip + Status + Duplicate + Template) ---
     st.divider()
-    col_title, col_status, col_delete, col_duplicate = st.columns([3, 1, 1, 1])
+    col_title, col_status, col_delete, col_duplicate, col_template = st.columns(
+        [3, 1, 1, 1, 1]
+    )
     with col_title:
         st.subheader(f"📋 Current Itinerary: {trip_data.get('purpose', '')}")
     with col_status:
         current_status = trip_data.get("status", "draft")
         st.caption(f"**Status:** {current_status.title()}")
 
-        # --- Status management buttons ---
         if current_status == "draft":
             if st.button("✅ Mark as Approved", key="approve_trip"):
                 db.update_trip_status(trip_id, "approved")
@@ -961,6 +1035,46 @@ if "current_trip_id" in st.session_state:
                 st.rerun()
             else:
                 st.error("Failed to duplicate trip.")
+    with col_template:
+        if st.button("📋 Save as Template", key="save_template_btn"):
+            if stops or items:
+                st.session_state["show_save_template"] = True
+            else:
+                st.warning("This trip has no stops or items to save as a template.")
+
+    # --- SAVE AS TEMPLATE DIALOG ---
+    if st.session_state.get("show_save_template", False):
+        st.info("Save this trip as a reusable template.")
+        col_name, col_desc = st.columns(2)
+        with col_name:
+            template_name = st.text_input(
+                "Template Name*", value=f"{trip_data.get('purpose', '')} Template"
+            )
+        with col_desc:
+            template_description = st.text_input(
+                "Description (optional)",
+                placeholder="e.g., Standard 3-day client visit",
+            )
+
+        col_save, col_cancel = st.columns(2)
+        with col_save:
+            if st.button("💾 Save Template", key="confirm_save_template"):
+                if template_name:
+                    new_id = db.save_trip_as_template(
+                        trip_id, template_name, template_description
+                    )
+                    if new_id:
+                        st.success(f"✅ Template '{template_name}' saved successfully!")
+                        st.session_state["show_save_template"] = False
+                        st.rerun()
+                    else:
+                        st.error("Failed to save template.")
+                else:
+                    st.warning("Please enter a template name.")
+        with col_cancel:
+            if st.button("❌ Cancel", key="cancel_save_template"):
+                st.session_state["show_save_template"] = False
+                st.rerun()
 
     # --- Delete Trip Confirmation ---
     if st.session_state.get("show_delete_trip_confirm", False):
@@ -1007,7 +1121,6 @@ if "current_trip_id" in st.session_state:
             route_display = f"📍 {departure_display} → " + route_display
         st.write(route_display)
 
-        # --- EDIT STOPS ---
         with st.expander("✏️ Edit Stops"):
             for stop in stops:
                 st.markdown(f"**Stop {stop['stop_order']}:** {stop['city']}")
@@ -1076,7 +1189,6 @@ if "current_trip_id" in st.session_state:
         # --- Spending Summary (converted to Base Currency) ---
         spending = db.get_trip_spending(trip_id)
 
-        # Convert spending totals to base currency using snapshot rates
         total_estimated_converted = 0.0
         total_confirmed_converted = 0.0
         total_all_converted = 0.0
@@ -1122,7 +1234,6 @@ if "current_trip_id" in st.session_state:
             st.progress(percent_used / 100, text="{:.0f}% used".format(percent_used))
         st.divider()
 
-        # --- Conflicts ---
         conflicts = utils.detect_conflicts(items)
         if conflicts:
             st.warning("⚠️ Conflicts Detected:")
@@ -1131,7 +1242,6 @@ if "current_trip_id" in st.session_state:
         else:
             st.success("✅ No scheduling conflicts detected.")
 
-        # --- Display Mode selector ---
         display_mode = st.radio(
             "Show costs in:",
             ["Original Currency", "Snapshot (at time of expense)", "Live Conversion"],
@@ -1140,7 +1250,6 @@ if "current_trip_id" in st.session_state:
             horizontal=True,
         )
 
-        # --- Fetch live rates only if needed ---
         live_rates = None
         if display_mode == "Live Conversion":
             try:
@@ -1149,13 +1258,9 @@ if "current_trip_id" in st.session_state:
                 st.warning(f"Could not fetch live rates: {e}. Using snapshot rates.")
                 display_mode = "Snapshot (at time of expense)"
 
-        # =========================================================
-        # 6-COLUMN LAYOUT with resettable uploader key
-        # =========================================================
         st.subheader("📋 Itinerary Items")
 
         for item in items:
-            # ---- Row: 6 columns ----
             (
                 col_desc,
                 col_receipt_status,
@@ -1165,7 +1270,6 @@ if "current_trip_id" in st.session_state:
                 col_edit,
             ) = st.columns([4, 2, 2, 1, 1, 1])
 
-            # --- Calculate display cost based on mode ---
             orig_currency = item.get("cost_currency", "USD")
             orig_cost = item.get("cost", 0)
             snapshot_rate = item.get("exchange_rate_snapshot", 1.0)
@@ -1178,7 +1282,7 @@ if "current_trip_id" in st.session_state:
                 display_cost = orig_cost * snapshot_rate
                 display_symbol_local = base_symbol
                 display_currency_code = trip_base_currency
-            else:  # Live Conversion
+            else:
                 if live_rates is not None:
                     display_cost = convert(
                         orig_cost, orig_currency, trip_base_currency, live_rates
@@ -1188,7 +1292,6 @@ if "current_trip_id" in st.session_state:
                 display_symbol_local = base_symbol
                 display_currency_code = trip_base_currency
 
-            # Format display
             display_str = (
                 f"{display_symbol_local}{display_cost:,.2f} {display_currency_code}"
             )
@@ -1201,13 +1304,11 @@ if "current_trip_id" in st.session_state:
             )
             status_icon = "✅" if item.get("is_confirmed") else "📌"
 
-            # Column 1: Description
             with col_desc:
                 st.write(
                     f"{status_icon} **{start_display} – {end_display}** | {item['item_type']}: {item['description']} | Cost: {display_str}"
                 )
 
-            # Column 2: Receipt status + Download button
             with col_receipt_status:
                 receipt_path = item.get("receipt_path")
                 if receipt_path and os.path.exists(receipt_path):
@@ -1224,7 +1325,6 @@ if "current_trip_id" in st.session_state:
                 else:
                     st.info("No receipt")
 
-            # Column 3: Upload receipt – key includes counter to reset
             with col_upload:
                 upload_key = f"receipt_{item['id']}_{st.session_state.upload_counter}"
                 uploaded_file = st.file_uploader(
@@ -1234,7 +1334,6 @@ if "current_trip_id" in st.session_state:
                     label_visibility="collapsed",
                 )
                 if uploaded_file is not None:
-                    # Only process if no receipt exists yet
                     if not receipt_path or not os.path.exists(receipt_path):
                         os.makedirs("receipts", exist_ok=True)
                         trip_folder = f"receipts/trip_{trip_id}"
@@ -1247,14 +1346,12 @@ if "current_trip_id" in st.session_state:
                         with open(file_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
                         db.update_receipt_path(item["id"], file_path)
-                        # Increment counter to reset uploader key
                         st.session_state.upload_counter += 1
                         st.success("✅ Receipt attached!")
                         st.rerun()
                     else:
                         st.info("A receipt is already attached. Remove it first.")
 
-            # Column 4: Delete Receipt
             with col_del_receipt:
                 if receipt_path and os.path.exists(receipt_path):
                     if st.button("🗑️ Receipt", key=f"del_receipt_{item['id']}"):
@@ -1266,17 +1363,14 @@ if "current_trip_id" in st.session_state:
                         except Exception as e:
                             st.error(f"Could not delete file: {e}")
                         db.update_receipt_path(item["id"], None)
-                        # Increment counter to reset uploader key
                         st.session_state.upload_counter += 1
                         st.rerun()
 
-            # Column 5: Delete Entire Item
             with col_del_item:
                 if st.button("❌ Item", key=f"del_item_{item['id']}"):
                     db.delete_itinerary_item(item["id"])
                     st.rerun()
 
-            # Column 6: ✏️ Edit button (toggles the edit form)
             with col_edit:
                 if st.button("✏️", key=f"edit_btn_{item['id']}"):
                     st.session_state[f"editing_item_{item['id']}"] = (
@@ -1284,11 +1378,9 @@ if "current_trip_id" in st.session_state:
                     )
                     st.rerun()
 
-            # ---- EDIT FORM (if toggled) ----
             if st.session_state.get(f"editing_item_{item['id']}", False):
                 with st.expander(f"✏️ Editing: {item['description']}", expanded=True):
                     with st.form(key=f"edit_item_form_{item['id']}"):
-                        # Get categories from DB
                         categories = db.get_all_categories()
                         cat_names = (
                             [cat[1] for cat in categories]
@@ -1342,7 +1434,6 @@ if "current_trip_id" in st.session_state:
                                 value=float(item.get("cost", 0)),
                                 key=f"e_cost_{item['id']}",
                             )
-                            # Add currency dropdown for editing
                             e_cost_currency = st.selectbox(
                                 "Currency",
                                 options=["USD", "EUR", "GBP", "NGN", "JPY", "BRL"],
@@ -1369,7 +1460,6 @@ if "current_trip_id" in st.session_state:
                             key=f"e_confirmed_{item['id']}",
                         )
 
-                        # --- VISIBLE HINT FOR SAVE/CANCEL BUTTONS ---
                         st.markdown("---")
                         st.markdown(
                             "**⬇️ Scroll down to find the Save and Cancel buttons below.**"
@@ -1379,7 +1469,6 @@ if "current_trip_id" in st.session_state:
                         col_s, col_c = st.columns(2)
                         with col_s:
                             if st.form_submit_button("💾 Save Changes"):
-                                # Recompute snapshot rate if currency changed
                                 new_snapshot_rate = get_snapshot_rate(
                                     trip_base_currency, e_cost_currency
                                 )
@@ -1442,7 +1531,6 @@ if "current_trip_id" in st.session_state:
                 )
             with col_conf:
                 conf_code = st.text_input("Confirmation Code", key="item_conf")
-            # Add currency dropdown for the new item
             cost_currency = st.selectbox(
                 "Currency",
                 options=["USD", "EUR", "GBP", "NGN", "JPY", "BRL"],
@@ -1455,7 +1543,6 @@ if "current_trip_id" in st.session_state:
 
             if st.form_submit_button("Add to Itinerary"):
                 if desc and dt_start:
-                    # Compute snapshot rate using trip's base currency
                     snapshot_rate = get_snapshot_rate(trip_base_currency, cost_currency)
                     db.add_itinerary_item(
                         trip_id,
@@ -1569,7 +1656,6 @@ if "current_trip_id" in st.session_state:
                     st.warning("No items to export.")
     else:
         st.info("No itinerary items yet. Add one below.")
-        # Show Add Item form even if no items
         st.divider()
         st.subheader("➕ Add Itinerary Item")
         with st.form("add_item_form_empty"):
@@ -1666,18 +1752,11 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
     )
 
     if summary_data:
-        # Aggregate metrics – we need a consistent currency for dashboard totals.
-        # We'll use the base_currency of each trip for its own totals, but for a global sum,
-        # we need to convert everything to a single currency. For simplicity, we'll use USD.
-        # However, we don't have per-item rates here, so we'll just display raw sums in USD.
-        # For a better dashboard, you could add a target currency selector.
-        # We'll keep it simple: just show the raw sums with a note.
         total_budget = sum(t["budget"] for t in summary_data)
         total_spent = sum(t["total_spent"] for t in summary_data)
         total_confirmed = sum(t["confirmed_spent"] for t in summary_data)
         total_estimated = sum(t["estimated_spent"] for t in summary_data)
 
-        # Use USD for display as a fallback
         dashboard_symbol = get_currency_symbol("USD")
 
         col_m1, col_m2, col_m3, col_m4 = st.columns(4)
@@ -1691,9 +1770,7 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
 
         st.subheader("Trip-Level Breakdown")
 
-        # --- Display each trip as an interactive row ---
         for trip in summary_data:
-            # Show each trip's own base currency symbol for its amounts
             trip_base_currency = trip.get("base_currency", "USD")
             trip_symbol = get_currency_symbol(trip_base_currency)
             with st.container():
@@ -1725,18 +1802,15 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                     else:
                         st.write(status)
                 with col9:
-                    # --- OPEN / EDIT BUTTON ---
                     if st.button("📂", key=f"open_trip_{trip['trip_id']}"):
                         st.session_state["current_trip_id"] = trip["trip_id"]
                         st.success(f"Loaded trip: {trip['destination']}")
                         st.rerun()
                 with col10:
-                    # --- DELETE BUTTON (with confirmation) ---
                     if st.button("🗑️", key=f"del_trip_dash_{trip['trip_id']}"):
                         st.session_state[f"confirm_del_trip_{trip['trip_id']}"] = True
                         st.rerun()
 
-                # --- Delete confirmation (appears below the row) ---
                 if st.session_state.get(f"confirm_del_trip_{trip['trip_id']}", False):
                     st.warning(f"⚠️ Permanently delete trip to {trip['destination']}?")
                     col_yes, col_no = st.columns(2)
@@ -1763,7 +1837,6 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                             st.rerun()
                 st.divider()
 
-        # --- Export Buttons: CSV, Word, Excel ---
         st.subheader("📊 Export Data")
         col_exp1, col_exp2, col_exp3 = st.columns(3)
 
@@ -1778,11 +1851,11 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                 "Estimated",
                 "Status",
             ]
-            rows = []
+            rows_with_currency = []
             for trip in summary_data:
                 trip_base = trip.get("base_currency", "USD")
                 sym = get_currency_symbol(trip_base)
-                rows.append(
+                rows_with_currency.append(
                     [
                         trip["executive_name"],
                         trip["company_name"],
@@ -1798,7 +1871,7 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow(headers + ["Base Currency"])
-            for row in rows:
+            for row in rows_with_currency:
                 writer.writerow(row)
             st.download_button(
                 "📊 Export Dashboard CSV",
@@ -1815,8 +1888,8 @@ with st.expander("📊 Spending Dashboard (All Trips)"):
                     summary_data,
                     start_filter,
                     end_filter,
-                    get_currency_symbol("USD"),  # default symbol
-                    base_currency="USD",  # we use USD for aggregate
+                    get_currency_symbol("USD"),
+                    base_currency="USD",
                 )
                 st.download_button(
                     "⬇️ Download Word Report",

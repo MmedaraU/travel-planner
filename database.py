@@ -97,6 +97,21 @@ def migrate_db():
         for cat in default_cats:
             c.execute("INSERT INTO categories (name) VALUES (?)", (cat,))
 
+    # --- NEW: Create trip_templates table ---
+    c.execute("""CREATE TABLE IF NOT EXISTS trip_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        departure_city TEXT,
+        departure_region TEXT,
+        departure_country TEXT,
+        display_currency TEXT DEFAULT 'USD',
+        base_currency TEXT DEFAULT 'USD',
+        stops_json TEXT,  -- JSON array of stops
+        items_json TEXT   -- JSON array of itinerary items
+    )""")
+
     conn.commit()
     conn.close()
 
@@ -450,7 +465,7 @@ def delete_category(category_id):
 
 
 # =========================================================
-# TRIP MANAGEMENT (with per-trip currencies)
+# TRIP MANAGEMENT
 # =========================================================
 def create_or_get_trip(
     exec_id,
@@ -579,7 +594,6 @@ def update_trip_display_currency(trip_id, display_currency):
 
 
 def update_trip_currencies(trip_id, base_currency, display_currency):
-    """Update both base and display currencies for a trip in one call."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -591,7 +605,6 @@ def update_trip_currencies(trip_id, base_currency, display_currency):
 
 
 def delete_trip(trip_id):
-    """Delete a trip and all related items/stops (CASCADE handles it)."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
@@ -600,10 +613,6 @@ def delete_trip(trip_id):
 
 
 def duplicate_trip(trip_id, exec_id):
-    """
-    Duplicate an existing trip and all its stops and itinerary items.
-    Returns the new trip ID.
-    """
     original = get_trip(trip_id)
     if not original:
         return None
@@ -641,7 +650,6 @@ def duplicate_trip(trip_id, exec_id):
     conn.commit()
     conn.close()
 
-    # Copy stops
     stops = get_trip_stops(trip_id)
     for stop in stops:
         add_trip_stop(
@@ -655,7 +663,6 @@ def duplicate_trip(trip_id, exec_id):
             stop.get("notes", ""),
         )
 
-    # Copy items
     items = get_items_for_trip(trip_id)
     for item in items:
         add_itinerary_item(
@@ -746,7 +753,7 @@ def delete_all_trip_stops(trip_id):
 
 
 # =========================================================
-# ITINERARY ITEMS (UPDATED WITH CURRENCY)
+# ITINERARY ITEMS
 # =========================================================
 def add_itinerary_item(
     trip_id,
@@ -961,7 +968,6 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
 # EXECUTIVE DELETION FUNCTIONS
 # =========================================================
 def get_executive_trip_count(exec_id):
-    """Return the number of trips associated with an executive."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM trips WHERE exec_id = ?", (exec_id,))
@@ -971,17 +977,6 @@ def get_executive_trip_count(exec_id):
 
 
 def delete_executive(exec_id, force=False):
-    """
-    Delete an executive and optionally force-delete their trips and receipts.
-
-    Args:
-        exec_id: The ID of the executive to delete.
-        force: If True, deletes all trips and itinerary items first.
-               If False, returns an error if trips exist.
-
-    Returns:
-        (success: bool, message: str)
-    """
     import os
     import shutil
 
@@ -998,17 +993,14 @@ def delete_executive(exec_id, force=False):
         )
 
     if force:
-        # Get all trip IDs for this executive
         c.execute("SELECT id FROM trips WHERE exec_id = ?", (exec_id,))
         trip_ids = [row[0] for row in c.fetchall()]
 
-        # Delete receipt folders for each trip
         for trip_id in trip_ids:
             trip_folder = f"receipts/trip_{trip_id}"
             if os.path.exists(trip_folder):
                 shutil.rmtree(trip_folder)
 
-        # Delete all itinerary items, stops, and trips
         c.execute(
             """
             DELETE FROM itinerary_items 
@@ -1025,7 +1017,6 @@ def delete_executive(exec_id, force=False):
         )
         c.execute("DELETE FROM trips WHERE exec_id = ?", (exec_id,))
 
-    # Delete memberships and executive
     c.execute("DELETE FROM executive_memberships WHERE exec_id = ?", (exec_id,))
     c.execute("DELETE FROM executives WHERE id = ?", (exec_id,))
 
@@ -1036,12 +1027,9 @@ def delete_executive(exec_id, force=False):
 
 
 # =========================================================
-# NEW: IMPORT / MERGE FUNCTIONS (for the Import feature)
+# IMPORT / MERGE FUNCTIONS
 # =========================================================
-
-
 def _find_or_create_company(name):
-    """Find a company by name; if it doesn't exist, create it."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id FROM companies WHERE name = ?", (name,))
@@ -1057,31 +1045,8 @@ def _find_or_create_company(name):
 
 
 def merge_database_data(data):
-    """
-    Merge data from a JSON file into the current database.
-    Expected structure:
-    {
-        "executives": [ { "name": ..., "email": ..., "company_name": ..., ... } ],
-        "trips": [
-            {
-                "executive_email": "...",
-                "purpose": "...",
-                "destination": "...",
-                "start_date": "...",
-                "end_date": "...",
-                "budget": 0,
-                "status": "draft",
-                "departure_city": "...",
-                "departure_region": "...",
-                "departure_country": "...",
-                "display_currency": "USD",
-                "base_currency": "USD",
-                "stops": [ { "city": "...", "country": "...", "region": "...", "start_date": "...", "end_date": "...", "notes": "..." } ],
-                "items": [ { "type": "...", "description": "...", "datetime_start": "...", "datetime_end": "...", "location": "...", "cost": 0, "cost_currency": "USD", "is_confirmed": 0, "confirmation_code": "...", "notes": "..." } ]
-            }
-        ]
-    }
-    """
+    import json
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
@@ -1090,24 +1055,20 @@ def merge_database_data(data):
     added_stops = 0
     added_items = 0
 
-    # --- 1. Import Executives ---
     for exec_data in data.get("executives", []):
-        # Check if executive already exists by email
         email = exec_data.get("email")
         if not email:
-            continue  # skip if no email
+            continue
         c.execute("SELECT id FROM executives WHERE email = ?", (email,))
         if c.fetchone():
-            continue  # skip duplicate
+            continue
 
         company_name = exec_data.get("company_name")
         if company_name:
             company_id = _find_or_create_company(company_name)
         else:
-            # If no company provided, use a default or skip
             continue
 
-        # Insert executive
         c.execute(
             """
             INSERT INTO executives 
@@ -1134,19 +1095,16 @@ def merge_database_data(data):
         added_execs += 1
         conn.commit()
 
-    # --- 2. Import Trips ---
     for trip_data in data.get("trips", []):
         exec_email = trip_data.get("executive_email")
         if not exec_email:
             continue
-        # Find executive
         c.execute("SELECT id FROM executives WHERE email = ?", (exec_email,))
         row = c.fetchone()
         if not row:
-            continue  # skip if executive doesn't exist
+            continue
         exec_id = row[0]
 
-        # Check if trip already exists (by destination, start_date and exec_id)
         dest = trip_data.get("destination")
         start = trip_data.get("start_date")
         if not dest or not start:
@@ -1156,9 +1114,8 @@ def merge_database_data(data):
             (exec_id, dest, start),
         )
         if c.fetchone():
-            continue  # skip duplicate trip
+            continue
 
-        # Insert trip
         c.execute(
             """
             INSERT INTO trips 
@@ -1186,7 +1143,6 @@ def merge_database_data(data):
         added_trips += 1
         conn.commit()
 
-        # --- 3. Import Stops for this trip ---
         for stop in trip_data.get("stops", []):
             c.execute(
                 """
@@ -1208,7 +1164,6 @@ def merge_database_data(data):
             added_stops += 1
             conn.commit()
 
-        # --- 4. Import Items for this trip ---
         for item in trip_data.get("items", []):
             c.execute(
                 """
@@ -1230,7 +1185,7 @@ def merge_database_data(data):
                     1 if item.get("is_confirmed") else 0,
                     item.get("confirmation_code"),
                     item.get("notes"),
-                    1.0,  # snapshot rate; you could compute if needed
+                    1.0,
                 ),
             )
             added_items += 1
@@ -1241,12 +1196,6 @@ def merge_database_data(data):
 
 
 def import_executives_from_csv(reader):
-    """
-    Bulk-import executives from a CSV file.
-    Expected columns: name, email, company_name, timezone, seat_preference,
-                       hotel_loyalty, frequent_flyer_number, dietary_restrictions,
-                       passport_number, preferred_airline, tsa_precheck, meal_preference
-    """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
@@ -1257,7 +1206,6 @@ def import_executives_from_csv(reader):
         email = row.get("email")
         if not email:
             continue
-        # Check if executive already exists
         c.execute("SELECT id FROM executives WHERE email = ?", (email,))
         if c.fetchone():
             skipped += 1
@@ -1267,7 +1215,6 @@ def import_executives_from_csv(reader):
         if company_name:
             company_id = _find_or_create_company(company_name)
         else:
-            # If no company, skip or use a default? We'll skip.
             continue
 
         c.execute(
@@ -1298,3 +1245,194 @@ def import_executives_from_csv(reader):
 
     conn.close()
     return f"✅ Added {added} executives. Skipped {skipped} duplicates."
+
+
+# =========================================================
+# TRIP TEMPLATES
+# =========================================================
+def save_trip_as_template(trip_id, template_name, description=None):
+    """
+    Save an existing trip's structure as a template.
+    Returns the new template ID.
+    """
+    import json
+    from datetime import datetime
+
+    trip = get_trip(trip_id)
+    if not trip:
+        return None
+
+    stops = get_trip_stops(trip_id)
+    items = get_items_for_trip(trip_id)
+
+    stops_data = []
+    for stop in stops:
+        stops_data.append(
+            {
+                "city": stop.get("city", ""),
+                "country": stop.get("country", ""),
+                "region": stop.get("region", ""),
+                "notes": stop.get("notes", ""),
+            }
+        )
+
+    items_data = []
+    for item in items:
+        items_data.append(
+            {
+                "item_type": item.get("item_type", ""),
+                "description": item.get("description", ""),
+                "location": item.get("location", ""),
+                "cost_currency": item.get("cost_currency", "USD"),
+                "is_confirmed": item.get("is_confirmed", 0),
+                "confirmation_code": item.get("confirmation_code", ""),
+                "notes": item.get("notes", ""),
+            }
+        )
+
+    stops_json = json.dumps(stops_data, indent=2)
+    items_json = json.dumps(items_data, indent=2)
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """
+        INSERT INTO trip_templates 
+        (name, description, departure_city, departure_region, departure_country,
+         display_currency, base_currency, stops_json, items_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """,
+        (
+            template_name,
+            description,
+            trip.get("departure_city", ""),
+            trip.get("departure_region", ""),
+            trip.get("departure_country", ""),
+            trip.get("display_currency", "USD"),
+            trip.get("base_currency", "USD"),
+            stops_json,
+            items_json,
+        ),
+    )
+    new_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return new_id
+
+
+def get_trip_templates():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, name, description, created_at, departure_city, departure_region,
+               departure_country, display_currency, base_currency
+        FROM trip_templates
+        ORDER BY name
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_trip_template(template_id):
+    import json
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT * FROM trip_templates
+        WHERE id = ?
+    """,
+        (template_id,),
+    )
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    template = dict(row)
+    template["stops"] = json.loads(template.get("stops_json", "[]"))
+    template["items"] = json.loads(template.get("items_json", "[]"))
+    return template
+
+
+def delete_trip_template(template_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM trip_templates WHERE id = ?", (template_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def apply_trip_template(
+    template_id, exec_id, new_purpose, start_date, end_date, budget=0
+):
+    """Apply a template to create a new draft trip. Returns the new trip ID."""
+    template = get_trip_template(template_id)
+    if not template:
+        return None
+
+    stops = template.get("stops", [])
+    stop_names = [s["city"] for s in stops if s.get("city")]
+    dest_summary = " → ".join(stop_names) if stop_names else "Template Trip"
+
+    trip_id = create_or_get_trip(
+        exec_id,
+        dest_summary,
+        start_date.isoformat(),
+        end_date.isoformat(),
+        new_purpose,
+        template.get("display_currency", "USD"),
+        template.get("base_currency", "USD"),
+    )
+
+    # Update budget and departure
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE trips SET budget = ? WHERE id = ?", (budget, trip_id))
+    conn.commit()
+    conn.close()
+
+    update_trip_departure_details(
+        trip_id,
+        template.get("departure_city", ""),
+        template.get("departure_region", ""),
+        template.get("departure_country", ""),
+    )
+
+    # Add stops
+    stop_order = 0
+    for stop in stops:
+        stop_order += 1
+        add_trip_stop(
+            trip_id,
+            stop_order,
+            stop.get("city", ""),
+            stop.get("country", ""),
+            stop.get("region", ""),
+            start_date.isoformat(),
+            end_date.isoformat(),
+            stop.get("notes", ""),
+        )
+
+    # Add items
+    for item in template.get("items", []):
+        add_itinerary_item(
+            trip_id,
+            item.get("item_type", ""),
+            item.get("description", ""),
+            start_date.isoformat() + "T08:00:00",
+            start_date.isoformat() + "T09:00:00",
+            item.get("location", ""),
+            0,
+            item.get("confirmation_code", ""),
+            item.get("notes", ""),
+            0,
+            item.get("cost_currency", "USD"),
+            1.0,
+        )
+
+    return trip_id
