@@ -6,7 +6,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 import database as db
 from datetime import datetime
-from currency import get_currency_symbol  # import from currency module
+from currency import get_currency_symbol
 
 
 def export_profile_to_excel(exec_id, currency_symbol="$"):

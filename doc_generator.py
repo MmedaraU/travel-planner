@@ -5,7 +5,6 @@ from datetime import datetime
 import io
 import os
 import database as db
-from currency import get_currency_symbol  # import from currency module
 
 
 # ===================================================================
@@ -31,6 +30,24 @@ def format_datetime_doc(dt_str, output_format="%d-%m-%Y %H:%M"):
         return dt.strftime(output_format)
     except:
         return dt_str
+
+
+def get_currency_symbol(currency):
+    """Return the symbol for a given currency code."""
+    symbols = {
+        "USD": "$",
+        "EUR": "€",
+        "GBP": "£",
+        "NGN": "₦",
+        "JPY": "¥",
+        "BRL": "R$",
+        "CAD": "C$",
+        "AUD": "A$",
+        "CHF": "Fr",
+        "CNY": "¥",
+        "INR": "₹",
+    }
+    return symbols.get(currency, "$")
 
 
 # ===================================================================

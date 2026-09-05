@@ -93,16 +93,6 @@ st.markdown(
         border-color: #87CEEB !important;
         box-shadow: 0 0 0 0.2rem rgba(135, 206, 235, 0.4) !important;
     }
-    button[data-baseweb="tab"] {
-        background-color: #f0f2f6;
-        border-radius: 20px 20px 0 0;
-        padding: 8px 20px;
-        font-weight: 500;
-    }
-    button[data-baseweb="tab"][aria-selected="true"] {
-        background-color: #87CEEB;
-        color: white;
-    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -111,26 +101,10 @@ st.markdown(
 # --- Session State ---
 if "upload_counter" not in st.session_state:
     st.session_state.upload_counter = 0
-if "reset_form" not in st.session_state:
-    st.session_state.reset_form = False
-if "tab_control" not in st.session_state:
-    st.session_state.tab_control = 0
-if "show_exec_dialog" not in st.session_state:
-    st.session_state.show_exec_dialog = False
-if "show_edit_trip_dashboard" not in st.session_state:
-    st.session_state.show_edit_trip_dashboard = False
-if "current_trip_id" not in st.session_state:
-    st.session_state.current_trip_id = None
-if "editing_trip_id" not in st.session_state:
-    st.session_state.editing_trip_id = None
 
-# Separate stops for inline and modal
-if "trip_stops_inline" not in st.session_state:
-    st.session_state.trip_stops_inline = []
-if "trip_stops_modal" not in st.session_state:
-    st.session_state.trip_stops_modal = []
+st.title("✈️ Executive Travel Planner")
 
-st.title("Executive Travel Planner")
+# --- Init DB ---
 db.init_db()
 
 # =========================================================
