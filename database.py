@@ -26,7 +26,6 @@ def migrate_db():
         c.execute("ALTER TABLE trips ADD COLUMN base_currency TEXT DEFAULT 'USD'")
     if "display_currency" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN display_currency TEXT DEFAULT 'USD'")
-    # --- NEW: display_exchange_rate ---
     if "display_exchange_rate" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN display_exchange_rate REAL DEFAULT 1.0")
 
@@ -606,20 +605,11 @@ def update_trip_currencies(trip_id, base_currency, display_currency):
     conn.commit()
     conn.close()
 
+
 def update_trip_display_exchange_rate(trip_id, rate):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("UPDATE trips SET display_exchange_rate = ? WHERE id = ?", (rate, trip_id))
-    conn.commit()
-    conn.close()
-    
-# --- NEW: update display_exchange_rate ---
-def update_trip_display_exchange_rate(trip_id, rate):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "UPDATE trips SET display_exchange_rate = ? WHERE id = ?", (rate, trip_id)
-    )
     conn.commit()
     conn.close()
 
@@ -961,6 +951,10 @@ def get_trip_spending(trip_id):
 
 
 def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_date=None):
+    """
+    Returns spending summary for trips, with all cost figures converted to the trip's base currency
+    using the exchange_rate_snapshot stored per item.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
@@ -977,9 +971,9 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
             t.status,
             t.base_currency,
             t.display_currency,
-            COALESCE(SUM(i.cost), 0) as total_spent,
-            COALESCE(SUM(CASE WHEN i.is_confirmed = 1 THEN i.cost ELSE 0 END), 0) as confirmed_spent,
-            COALESCE(SUM(CASE WHEN i.is_confirmed = 0 THEN i.cost ELSE 0 END), 0) as estimated_spent
+            COALESCE(SUM(i.cost * i.exchange_rate_snapshot), 0) as total_spent,
+            COALESCE(SUM(CASE WHEN i.is_confirmed = 1 THEN i.cost * i.exchange_rate_snapshot ELSE 0 END), 0) as confirmed_spent,
+            COALESCE(SUM(CASE WHEN i.is_confirmed = 0 THEN i.cost * i.exchange_rate_snapshot ELSE 0 END), 0) as estimated_spent
         FROM trips t
         JOIN executives e ON t.exec_id = e.id
         JOIN companies c ON e.company_id = c.id
@@ -1230,7 +1224,7 @@ def merge_database_data(data):
                     1 if item.get("is_confirmed") else 0,
                     item.get("confirmation_code"),
                     item.get("notes"),
-                    1.0,
+                    1.0,  # default snapshot
                 ),
             )
             added_items += 1
