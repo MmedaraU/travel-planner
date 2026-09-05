@@ -26,6 +26,9 @@ def migrate_db():
         c.execute("ALTER TABLE trips ADD COLUMN base_currency TEXT DEFAULT 'USD'")
     if "display_currency" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN display_currency TEXT DEFAULT 'USD'")
+    # --- NEW: display_exchange_rate ---
+    if "display_exchange_rate" not in existing_trips:
+        c.execute("ALTER TABLE trips ADD COLUMN display_exchange_rate REAL DEFAULT 1.0")
 
     # --- Columns for 'itinerary_items' table ---
     c.execute("PRAGMA table_info(itinerary_items)")
@@ -602,6 +605,48 @@ def update_trip_currencies(trip_id, base_currency, display_currency):
     )
     conn.commit()
     conn.close()
+
+def update_trip_display_exchange_rate(trip_id, rate):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE trips SET display_exchange_rate = ? WHERE id = ?", (rate, trip_id))
+    conn.commit()
+    conn.close()
+    
+# --- NEW: update display_exchange_rate ---
+def update_trip_display_exchange_rate(trip_id, rate):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trips SET display_exchange_rate = ? WHERE id = ?", (rate, trip_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# NEW: Get trip by purpose and overlapping dates (for duplicate detection)
+# =========================================================
+def get_trip_by_purpose_and_date(exec_id, purpose, start_date, end_date):
+    """
+    Check if a trip with the same executive, purpose, and overlapping date range exists.
+    Returns the trip ID if found, else None.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT id FROM trips
+        WHERE exec_id = ? AND purpose = ?
+          AND start_date <= ? AND end_date >= ?
+          AND status != 'deleted'
+        LIMIT 1
+    """,
+        (exec_id, purpose, end_date, start_date),
+    )
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 def delete_trip(trip_id):

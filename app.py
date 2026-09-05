@@ -14,7 +14,7 @@ from excel_export import (
     export_expense_to_excel,
     export_spending_to_excel,
 )
-from currency import get_snapshot_rate, convert, get_exchange_rates, get_currency_symbol
+from currency import get_currency_symbol
 import duplicate_detection
 
 
@@ -95,6 +95,22 @@ st.markdown(
         border-color: #87CEEB !important;
         box-shadow: 0 0 0 0.2rem rgba(135, 206, 235, 0.4) !important;
     }
+    /* Radio button styling for tabs */
+    div[data-testid="stHorizontalRadio"] {
+        gap: 10px;
+        margin-bottom: 20px;
+    }
+    div[data-testid="stHorizontalRadio"] label {
+        background-color: #f0f2f6;
+        padding: 8px 20px;
+        border-radius: 20px;
+        font-weight: 500;
+        cursor: pointer;
+    }
+    div[data-testid="stHorizontalRadio"] label[data-selected="true"] {
+        background-color: #87CEEB;
+        color: white;
+    }
 </style>
 """,
     unsafe_allow_html=True,
@@ -104,7 +120,7 @@ st.markdown(
 if "upload_counter" not in st.session_state:
     st.session_state.upload_counter = 0
 
-st.title("✈️ Executive Travel Planner")
+st.title("Executive Travel Planner")
 
 # --- Init DB ---
 db.init_db()
@@ -139,7 +155,8 @@ if profile:
         if mems:
             st.caption(f"✈️ {len(mems)} memberships")
         if st.button("👤 View Full Profile"):
-            st.session_state["active_tab"] = "Executive Management"
+            st.session_state.selected_tab = 1
+            st.session_state.show_edit_form = True
             st.rerun()
 
     # Export buttons (collapsible)
@@ -240,32 +257,69 @@ with st.sidebar.expander("💾 Import / Restore Database"):
                 st.error(f"Import failed: {e}")
 
 # =========================================================
-# MAIN AREA: TABS
+# MAIN AREA: NAVIGATION (Radio buttons)
 # =========================================================
-# Determine default tab index from session state
-tab_names = [
+tab_options = [
     "✈️ Trip Planner",
     "👤 Executive Management",
     "📋 Trip Templates",
     "📊 Spending Dashboard",
 ]
-default_tab = st.session_state.get("active_tab", "✈️ Trip Planner")
-default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
-# Clear active_tab after reading so future reruns don't force the same tab
-if "active_tab" in st.session_state:
-    del st.session_state["active_tab"]
 
-tab1, tab2, tab3, tab4 = st.tabs(tab_names)
+# Initialize session state for selected tab if not exists
+if "selected_tab" not in st.session_state:
+    st.session_state.selected_tab = 0
+
+# Initialize show_edit_form if not exists (default True when viewing a profile)
+if "show_edit_form" not in st.session_state:
+    st.session_state.show_edit_form = True
+
+# Display radio buttons for navigation (no key – we control index via session state)
+selected_tab_name = st.radio(
+    "Navigate",
+    options=tab_options,
+    index=st.session_state.selected_tab,
+    horizontal=True,
+    label_visibility="collapsed",
+)
+# Update session state index based on selection (for future reruns)
+st.session_state.selected_tab = tab_options.index(selected_tab_name)
 
 # ------------------------------------------------------------------
 # TAB 1: TRIP PLANNER
 # ------------------------------------------------------------------
-with tab1:
+if selected_tab_name == "✈️ Trip Planner":
     if not profile:
         st.warning("Please add an executive in the 'Executive Management' tab first.")
         st.stop()
 
     st.header("📅 Trip Setup")
+
+    # --- Clear form function (clears widget keys too) ---
+    def clear_trip_form():
+        """Reset all trip-related session state to clear the form."""
+        # Trip data keys
+        trip_keys = ["current_trip_id", "trip_stops", "trip_destination_summary"]
+        for key in trip_keys:
+            if key in st.session_state:
+                del st.session_state[key]
+        # Widget keys – these keep values even if trip_data is cleared
+        widget_keys = [
+            "trip_purpose_input",
+            "departure_city_input",
+            "departure_region_input",
+            "departure_country_input",
+            "trip_display_currency",
+            "trip_base_currency",
+            "display_exchange_rate",
+            "budget_currency_label",
+            "trip_budget_input",
+        ]
+        for key in widget_keys:
+            if key in st.session_state:
+                del st.session_state[key]
+        # Also reset the stops to empty list (in case we keep the variable)
+        st.session_state["trip_stops"] = []
 
     # --- Executive dropdown for the trip ---
     exec_dropdown_options = {f"{name} (ID: {id})": id for id, name, _ in executives}
@@ -325,6 +379,7 @@ with tab1:
         "Trip Name / Purpose (e.g., 'Q3 Sales Tour')",
         value=trip_data.get("purpose", "") if is_editing and trip_data else "",
         disabled=not is_draft,
+        key="trip_purpose_input",
     )
 
     # --- Departure ---
@@ -337,7 +392,7 @@ with tab1:
                 trip_data.get("departure_city", "") if is_editing and trip_data else ""
             ),
             disabled=not is_draft,
-            key="departure_city",
+            key="departure_city_input",
         )
     with col_dep_region:
         departure_region = st.text_input(
@@ -348,7 +403,7 @@ with tab1:
                 else ""
             ),
             disabled=not is_draft,
-            key="departure_region",
+            key="departure_region_input",
         )
 
     country_list = sorted([c.name for c in pycountry.countries])
@@ -361,7 +416,7 @@ with tab1:
             else 0
         ),
         disabled=not is_draft,
-        key="departure_country_select",
+        key="departure_country_input",
     )
 
     # --- Stops ---
@@ -450,16 +505,6 @@ with tab1:
             else:
                 st.warning("City, Start Date, and End Date are required.")
 
-    # --- Budget ---
-    budget = st.number_input(
-        f"💰 Trip Budget",
-        min_value=0.0,
-        step=100.0,
-        value=float(trip_data.get("budget", 0)) if is_editing and trip_data else 0.0,
-        disabled=not is_draft,
-        key="trip_budget",
-    )
-
     # --- Currencies ---
     st.subheader("💱 Trip Currencies")
     col_currency1, col_currency2 = st.columns(2)
@@ -479,6 +524,7 @@ with tab1:
             ),
             disabled=not is_draft,
             key="trip_display_currency",
+            help="The currency used for all item costs in this trip.",
         )
     base_currency_options = [
         "USD",
@@ -508,132 +554,71 @@ with tab1:
             ),
             disabled=not is_draft,
             key="trip_base_currency",
+            help="All expenses are converted to this currency using the trip‑wide exchange rate.",
         )
 
-    # --- Create / Update ---
-    if is_editing:
-        if is_draft:
-            if st.button("🚀 Update Draft", key="update_trip"):
-                if trip_purpose and st.session_state["trip_stops"]:
-                    first_stop = st.session_state["trip_stops"][0]
-                    last_stop = st.session_state["trip_stops"][-1]
-                    overall_start = first_stop["start_date"]
-                    overall_end = last_stop["end_date"]
-                    stop_cities = [
-                        stop["city"] for stop in st.session_state["trip_stops"]
-                    ]
-                    dest_summary = " → ".join(stop_cities)
-
-                    existing_trips = duplicate_detection.find_duplicate_trips(
-                        trip_exec_id,
-                        trip_purpose,
-                        overall_start,
-                        overall_end,
-                        exclude_trip_id=trip_id,
-                    )
-                    if existing_trips:
-                        st.warning(
-                            "⚠️ You already have a trip with the same purpose and overlapping dates:"
-                        )
-                        for dup in existing_trips:
-                            st.write(
-                                f"- {dup['destination']} ({dup['start_date'][:10]} to {dup['end_date'][:10]})"
-                            )
-                        if not st.checkbox("Proceed anyway?", key="force_trip_update"):
-                            st.stop()
-
-                    db.update_trip_purpose(trip_id, trip_purpose)
-                    db.update_trip_dates(
-                        trip_id, overall_start, overall_end, dest_summary
-                    )
-                    db.update_trip_budget(trip_id, budget)
-                    db.update_trip_departure_details(
-                        trip_id, departure_city, departure_region, departure_country
-                    )
-                    db.update_trip_currencies(
-                        trip_id, trip_base_currency, trip_display_currency
-                    )
-
-                    db.delete_all_trip_stops(trip_id)
-                    for idx, stop in enumerate(st.session_state["trip_stops"]):
-                        db.add_trip_stop(
-                            trip_id,
-                            idx + 1,
-                            stop["city"],
-                            stop.get("country", ""),
-                            stop.get("region", ""),
-                            stop["start_date"],
-                            stop["end_date"],
-                            stop.get("notes", ""),
-                        )
-                    st.session_state["trip_destination_summary"] = dest_summary
-                    st.success(f"Trip '{trip_purpose}' updated successfully!")
-                    st.rerun()
-                else:
-                    st.warning("Enter a Trip Name and add at least one stop.")
-        else:
-            st.warning(
-                f"⚠️ This trip is **{trip_status.title()}** and cannot be edited directly. Use the 'Revert to Draft' button below or Duplicate it."
-            )
+    # --- Exchange rate from Base to Display (trip‑wide) ---
+    if is_editing and trip_data:
+        default_display_rate = trip_data.get("display_exchange_rate", 1.0)
     else:
-        if st.button("🚀 Create Trip", key="create_trip"):
-            if trip_purpose and st.session_state["trip_stops"]:
-                first_stop = st.session_state["trip_stops"][0]
-                last_stop = st.session_state["trip_stops"][-1]
-                overall_start = first_stop["start_date"]
-                overall_end = last_stop["end_date"]
-                stop_cities = [stop["city"] for stop in st.session_state["trip_stops"]]
-                dest_summary = " → ".join(stop_cities)
+        default_display_rate = 1.0
 
-                existing_trips = duplicate_detection.find_duplicate_trips(
-                    trip_exec_id, trip_purpose, overall_start, overall_end
-                )
-                if existing_trips:
-                    st.warning(
-                        "⚠️ You already have a trip with the same purpose and overlapping dates:"
-                    )
-                    for dup in existing_trips:
-                        st.write(
-                            f"- {dup['destination']} ({dup['start_date'][:10]} to {dup['end_date'][:10]})"
-                        )
-                    if not st.checkbox("Proceed anyway?", key="force_trip_create"):
-                        st.stop()
+    display_exchange_rate = st.number_input(
+        f"Exchange Rate (1 {trip_base_currency} = ? {trip_display_currency})",
+        min_value=0.000001,
+        step=0.0001,
+        value=default_display_rate,
+        disabled=not is_draft,
+        key="display_exchange_rate",
+        help=f"Enter the exchange rate from {trip_base_currency} to {trip_display_currency}. All item costs are assumed to be in {trip_display_currency} and will be converted using this rate.",
+    )
+    st.caption(
+        f"💡 Check current rate: [XE.com](https://www.xe.com/currencyconverter/convert/?Amount=1&From={trip_base_currency}&To={trip_display_currency})"
+    )
 
-                trip_id = db.create_or_get_trip(
-                    trip_exec_id,
-                    dest_summary,
-                    overall_start,
-                    overall_end,
-                    trip_purpose,
-                    trip_display_currency,
-                    trip_base_currency,
-                )
-                db.update_trip_budget(trip_id, budget)
-                db.update_trip_departure_details(
-                    trip_id, departure_city, departure_region, departure_country
-                )
+    # --- Budget with currency selector ---
+    st.subheader("💰 Trip Budget")
+    # Determine budget currency options
+    budget_currency_options = {
+        f"Base Currency ({trip_base_currency})": "base",
+        f"Display Currency ({trip_display_currency})": "display",
+    }
+    budget_currency_label = st.selectbox(
+        "Budget Currency",
+        options=list(budget_currency_options.keys()),
+        index=0,
+        key="budget_currency_label",
+        disabled=not is_draft,
+        help="Select the currency in which you want to enter the budget amount.",
+    )
+    budget_currency_code = budget_currency_options[budget_currency_label]
 
-                db.delete_all_trip_stops(trip_id)
-                for idx, stop in enumerate(st.session_state["trip_stops"]):
-                    db.add_trip_stop(
-                        trip_id,
-                        idx + 1,
-                        stop["city"],
-                        stop.get("country", ""),
-                        stop.get("region", ""),
-                        stop["start_date"],
-                        stop["end_date"],
-                        stop.get("notes", ""),
-                    )
+    # Determine the displayed value and the actual base value
+    stored_budget = (
+        float(trip_data.get("budget", 0)) if is_editing and trip_data else 0.0
+    )
+    if budget_currency_code == "base":
+        budget_label = f"Budget (in {trip_base_currency})"
+        budget_value = stored_budget
+    else:
+        budget_label = f"Budget (in {trip_display_currency})"
+        budget_value = stored_budget * display_exchange_rate
 
-                st.session_state["current_trip_id"] = trip_id
-                st.session_state["trip_destination_summary"] = dest_summary
-                st.success(
-                    f"Trip '{trip_purpose}' created for {trip_exec_label} with {len(st.session_state['trip_stops'])} stops!"
-                )
-                st.rerun()
-            else:
-                st.warning("Enter a Trip Name and add at least one stop.")
+    budget = st.number_input(
+        budget_label,
+        min_value=0.0,
+        step=100.0,
+        value=budget_value,
+        disabled=not is_draft,
+        key="trip_budget_input",
+        help=f"Enter the total budget for this trip in {budget_currency_code.upper()}.",
+    )
+
+    # --- Helper: budget to base ---
+    def budget_to_base(budget_val, currency_code, exchange_rate):
+        if currency_code == "display":
+            return budget_val / exchange_rate if exchange_rate != 0 else 0
+        return budget_val
 
     # --- ITINERARY & ITEMS (if trip exists) ---
     if "current_trip_id" in st.session_state:
@@ -651,6 +636,107 @@ with tab1:
         display_symbol = get_currency_symbol(trip_display_currency)
         trip_base_currency = trip_data.get("base_currency", "USD")
         base_symbol = get_currency_symbol(trip_base_currency)
+        display_rate = trip_data.get("display_exchange_rate", 1.0)
+
+        # --- Define the add-item form function here (accessible to both branches) ---
+        def render_add_item_form(
+            trip_id,
+            trip_base_currency,
+            trip_display_currency,
+            display_rate,
+            key_suffix="",
+        ):
+            with st.form(key=f"add_item_form_{key_suffix}"):
+                categories = db.get_all_categories()
+                cat_names = (
+                    [cat[1] for cat in categories]
+                    if categories
+                    else ["Flight", "Hotel", "Meeting", "Transport"]
+                )
+                cols = st.columns(4)
+                with cols[0]:
+                    item_type = st.selectbox(
+                        "Type", cat_names, key=f"item_type_{key_suffix}"
+                    )
+                with cols[1]:
+                    desc = st.text_input("Description", key=f"item_desc_{key_suffix}")
+                with cols[2]:
+                    dt_start = st.datetime_input(
+                        "Start Time",
+                        value=datetime.now(),
+                        key=f"item_start_{key_suffix}",
+                    )
+                with cols[3]:
+                    dt_end = st.datetime_input(
+                        "End Time", value=datetime.now(), key=f"item_end_{key_suffix}"
+                    )
+
+                col_loc, col_cost, col_conf = st.columns(3)
+                with col_loc:
+                    location = st.text_input(
+                        "Location", key=f"item_location_{key_suffix}"
+                    )
+                with col_cost:
+                    cost = st.number_input(
+                        f"Cost (in {trip_display_currency})",
+                        min_value=0.0,
+                        step=10.0,
+                        key=f"item_cost_{key_suffix}",
+                    )
+                with col_conf:
+                    conf_code = st.text_input(
+                        "Confirmation Code", key=f"item_conf_{key_suffix}"
+                    )
+
+                notes = st.text_area("Notes", key=f"item_notes_{key_suffix}")
+                confirmed = st.checkbox(
+                    "✅ Confirmed / Booked", key=f"item_confirmed_{key_suffix}"
+                )
+
+                if st.form_submit_button("Add to Itinerary"):
+                    if desc and dt_start:
+                        existing_dupes = duplicate_detection.find_duplicate_item(
+                            trip_id,
+                            desc,
+                            dt_start.isoformat(),
+                            dt_end.isoformat() if dt_end else None,
+                            cost,
+                            item_type,
+                        )
+                        if existing_dupes:
+                            st.warning(
+                                "⚠️ This item looks like a duplicate of an existing one:"
+                            )
+                            for d in existing_dupes:
+                                st.write(
+                                    f"- {d['description']} ({d['datetime_start'][:16]})"
+                                )
+                            if not st.checkbox(
+                                "Add anyway?", key=f"force_add_item_{key_suffix}"
+                            ):
+                                st.stop()
+                        # Compute snapshot rate from trip-wide display exchange rate
+                        snapshot_rate = 1.0 / display_rate if display_rate != 0 else 1.0
+                        db.add_itinerary_item(
+                            trip_id,
+                            item_type,
+                            desc,
+                            dt_start.isoformat(),
+                            dt_end.isoformat() if dt_end else None,
+                            location,
+                            cost,
+                            conf_code,
+                            notes,
+                            1 if confirmed else 0,
+                            trip_display_currency,  # all costs in display currency
+                            snapshot_rate,
+                        )
+                        st.success("Added!")
+                        st.rerun()
+                        return True
+                    else:
+                        st.warning("Description and Start Time required.")
+                return False
 
         # --- Trip Management ---
         st.divider()
@@ -843,44 +929,79 @@ with tab1:
         # --- DISPLAY ITINERARY ITEMS ---
         if items:
             # Spending Summary
-            total_estimated_converted = 0.0
-            total_confirmed_converted = 0.0
-            total_all_converted = 0.0
+            total_estimated_base = 0.0
+            total_confirmed_base = 0.0
+            total_all_base = 0.0
             for item in items:
                 cost = item.get("cost", 0)
-                snapshot_rate = item.get("exchange_rate_snapshot", 1.0)
+                snapshot_rate = item.get(
+                    "exchange_rate_snapshot", 1.0
+                )  # stored as display->base
                 converted = cost * snapshot_rate
-                total_all_converted += converted
+                total_all_base += converted
                 if item.get("is_confirmed"):
-                    total_confirmed_converted += converted
+                    total_confirmed_base += converted
                 else:
-                    total_estimated_converted += converted
+                    total_estimated_base += converted
 
             st.subheader("💰 Spending Summary")
+            # Base row
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric(
-                    "Total Estimated (Quoted)",
-                    f"{base_symbol}{total_estimated_converted:,.2f}",
+                    "Total Estimated (Base)",
+                    f"{base_symbol}{total_estimated_base:,.2f}",
                 )
             with col2:
                 st.metric(
-                    "✅ Confirmed (Booked)",
-                    f"{base_symbol}{total_confirmed_converted:,.2f}",
+                    "✅ Confirmed (Base)", f"{base_symbol}{total_confirmed_base:,.2f}"
                 )
             with col3:
-                st.metric("📊 Total Spend", f"{base_symbol}{total_all_converted:,.2f}")
-            with col4:
-                remaining = trip_budget - total_all_converted
                 st.metric(
-                    "💰 Budget",
+                    "📊 Total Spend (Base)", f"{base_symbol}{total_all_base:,.2f}"
+                )
+            with col4:
+                remaining_base = trip_budget - total_all_base
+                st.metric(
+                    "💰 Budget (Base)",
                     f"{base_symbol}{trip_budget:,.2f}",
-                    delta=f"{base_symbol}{remaining:,.2f} remaining",
-                    delta_color="inverse" if remaining < 0 else "normal",
+                    delta=f"{base_symbol}{remaining_base:,.2f} remaining",
+                    delta_color="inverse" if remaining_base < 0 else "normal",
+                )
+
+            # Display row
+            st.divider()
+            col5, col6, col7, col8 = st.columns(4)
+            total_estimated_display = total_estimated_base * display_rate
+            total_confirmed_display = total_confirmed_base * display_rate
+            total_all_display = total_all_base * display_rate
+            budget_display = trip_budget * display_rate
+            remaining_display = budget_display - total_all_display
+            with col5:
+                st.metric(
+                    "Total Estimated (Display)",
+                    f"{display_symbol}{total_estimated_display:,.2f}",
+                )
+            with col6:
+                st.metric(
+                    "✅ Confirmed (Display)",
+                    f"{display_symbol}{total_confirmed_display:,.2f}",
+                )
+            with col7:
+                st.metric(
+                    "📊 Total Spend (Display)",
+                    f"{display_symbol}{total_all_display:,.2f}",
+                )
+            with col8:
+                st.metric(
+                    "💰 Budget (Display)",
+                    f"{display_symbol}{budget_display:,.2f}",
+                    delta=f"{display_symbol}{remaining_display:,.2f} remaining",
+                    delta_color="inverse" if remaining_display < 0 else "normal",
                 )
 
             if trip_budget > 0:
-                percent_used = min((total_all_converted / trip_budget) * 100, 100)
+                percent_used = min((total_all_base / trip_budget) * 100, 100)
                 st.progress(
                     percent_used / 100, text="{:.0f}% used".format(percent_used)
                 )
@@ -894,24 +1015,14 @@ with tab1:
             else:
                 st.success("✅ No scheduling conflicts detected.")
 
+            # --- Display modes ---
             display_mode = st.radio(
                 "Show costs in:",
-                [
-                    "Original Currency",
-                    "Snapshot (at time of expense)",
-                    "Live Conversion",
-                ],
+                ["Original Currency", "Snapshot (at time of expense)"],
                 index=0,
                 key="display_mode",
                 horizontal=True,
             )
-            live_rates = None
-            if display_mode == "Live Conversion":
-                try:
-                    live_rates = get_exchange_rates(trip_base_currency)
-                except Exception:
-                    st.warning("Could not fetch live rates. Using snapshot rates.")
-                    display_mode = "Snapshot (at time of expense)"
 
             st.subheader("📋 Itinerary Items")
 
@@ -925,26 +1036,16 @@ with tab1:
                     col_edit,
                 ) = st.columns([4, 2, 2, 1, 1, 1])
 
-                orig_currency = item.get("cost_currency", "USD")
+                orig_currency = item.get("cost_currency", trip_display_currency)
                 orig_cost = item.get("cost", 0)
                 snapshot_rate = item.get("exchange_rate_snapshot", 1.0)
 
                 if display_mode == "Original Currency":
                     display_cost = orig_cost
-                    display_symbol_local = display_symbol
-                    display_currency_code = trip_display_currency
-                elif display_mode == "Snapshot (at time of expense)":
+                    display_symbol_local = get_currency_symbol(orig_currency)
+                    display_currency_code = orig_currency
+                else:  # Snapshot
                     display_cost = orig_cost * snapshot_rate
-                    display_symbol_local = base_symbol
-                    display_currency_code = trip_base_currency
-                else:
-                    display_cost = (
-                        convert(
-                            orig_cost, orig_currency, trip_base_currency, live_rates
-                        )
-                        if live_rates
-                        else orig_cost * snapshot_rate
-                    )
                     display_symbol_local = base_symbol
                     display_currency_code = trip_base_currency
 
@@ -1107,19 +1208,14 @@ with tab1:
                                     value=float(item.get("cost", 0)),
                                     key=f"e_cost_{item['id']}",
                                 )
+                                # Currency dropdown: only Display currency (since all costs are in display)
                                 e_cost_currency = st.selectbox(
                                     "Currency",
-                                    options=["USD", "EUR", "GBP", "NGN", "JPY", "BRL"],
-                                    index=[
-                                        "USD",
-                                        "EUR",
-                                        "GBP",
-                                        "NGN",
-                                        "JPY",
-                                        "BRL",
-                                    ].index(item.get("cost_currency", "USD")),
+                                    options=[trip_display_currency],
+                                    index=0,
                                     key=f"e_cost_currency_{item['id']}",
                                 )
+                                # No exchange rate field – uses trip-wide rate
                             with col_conf1:
                                 e_conf = st.text_input(
                                     "Confirmation Code",
@@ -1140,8 +1236,9 @@ with tab1:
                             col_s, col_c = st.columns(2)
                             with col_s:
                                 if st.form_submit_button("💾 Save Changes"):
-                                    new_snapshot_rate = get_snapshot_rate(
-                                        trip_base_currency, e_cost_currency
+                                    # Compute snapshot rate from trip-wide display exchange rate
+                                    snapshot_rate = (
+                                        1.0 / display_rate if display_rate != 0 else 1.0
                                     )
                                     db.update_itinerary_item(
                                         item["id"],
@@ -1154,8 +1251,8 @@ with tab1:
                                         e_conf,
                                         e_notes,
                                         1 if e_confirmed else 0,
-                                        e_cost_currency,
-                                        new_snapshot_rate,
+                                        trip_display_currency,  # all costs in display currency
+                                        snapshot_rate,
                                     )
                                     st.session_state[f"editing_item_{item['id']}"] = (
                                         False
@@ -1172,88 +1269,9 @@ with tab1:
             # --- ADD NEW ITEM ---
             st.divider()
             st.subheader("➕ Add New Itinerary Item")
-            with st.form("add_item_form"):
-                categories = db.get_all_categories()
-                cat_names = (
-                    [cat[1] for cat in categories]
-                    if categories
-                    else ["Flight", "Hotel", "Meeting", "Transport"]
-                )
-                cols = st.columns(4)
-                with cols[0]:
-                    item_type = st.selectbox("Type", cat_names, key="item_type")
-                with cols[1]:
-                    desc = st.text_input("Description", key="item_desc")
-                with cols[2]:
-                    dt_start = st.datetime_input(
-                        "Start Time", value=datetime.now(), key="item_start"
-                    )
-                with cols[3]:
-                    dt_end = st.datetime_input(
-                        "End Time", value=datetime.now(), key="item_end"
-                    )
-                col_loc, col_cost, col_conf = st.columns(3)
-                with col_loc:
-                    location = st.text_input("Location", key="item_location")
-                with col_cost:
-                    cost = st.number_input(
-                        "Cost (original currency)",
-                        min_value=0.0,
-                        step=10.0,
-                        key="item_cost",
-                    )
-                with col_conf:
-                    conf_code = st.text_input("Confirmation Code", key="item_conf")
-                cost_currency = st.selectbox(
-                    "Currency",
-                    options=["USD", "EUR", "GBP", "NGN", "JPY", "BRL"],
-                    key="item_currency",
-                    index=0,
-                )
-                notes = st.text_area("Notes", key="item_notes")
-                confirmed = st.checkbox("✅ Confirmed / Booked", key="item_confirmed")
-
-                if st.form_submit_button("Add to Itinerary"):
-                    if desc and dt_start:
-                        existing_dupes = duplicate_detection.find_duplicate_item(
-                            trip_id,
-                            desc,
-                            dt_start.isoformat(),
-                            dt_end.isoformat() if dt_end else None,
-                            cost,
-                            item_type,
-                        )
-                        if existing_dupes:
-                            st.warning(
-                                "⚠️ This item looks like a duplicate of an existing one:"
-                            )
-                            for d in existing_dupes:
-                                st.write(
-                                    f"- {d['description']} ({d['datetime_start'][:16]})"
-                                )
-                            if not st.checkbox("Add anyway?", key="force_add_item"):
-                                st.stop()
-                        snapshot_rate = get_snapshot_rate(
-                            trip_base_currency, cost_currency
-                        )
-                        db.add_itinerary_item(
-                            trip_id,
-                            item_type,
-                            desc,
-                            dt_start.isoformat(),
-                            dt_end.isoformat() if dt_end else None,
-                            location,
-                            cost,
-                            conf_code,
-                            notes,
-                            1 if confirmed else 0,
-                            cost_currency,
-                            snapshot_rate,
-                        )
-                        st.success("Added!")
-                        st.rerun()
-                    else:
-                        st.warning("Description and Start Time required.")
+            render_add_item_form(
+                trip_id, trip_base_currency, trip_display_currency, display_rate
+            )
 
             # --- EXPORT BUTTONS ---
             st.divider()
@@ -1394,102 +1412,181 @@ with tab1:
         else:
             st.info("No itinerary items yet. Add one below.")
             st.divider()
-            st.subheader("➕ Add Itinerary Item")
-            with st.form("add_item_form_empty"):
-                categories = db.get_all_categories()
-                cat_names = (
-                    [cat[1] for cat in categories]
-                    if categories
-                    else ["Flight", "Hotel", "Meeting", "Transport"]
-                )
-                cols = st.columns(4)
-                with cols[0]:
-                    item_type = st.selectbox("Type", cat_names, key="item_type_empty")
-                with cols[1]:
-                    desc = st.text_input("Description", key="item_desc_empty")
-                with cols[2]:
-                    dt_start = st.datetime_input(
-                        "Start Time", value=datetime.now(), key="item_start_empty"
-                    )
-                with cols[3]:
-                    dt_end = st.datetime_input(
-                        "End Time", value=datetime.now(), key="item_end_empty"
-                    )
-                col_loc, col_cost, col_conf = st.columns(3)
-                with col_loc:
-                    location = st.text_input("Location", key="item_location_empty")
-                with col_cost:
-                    cost = st.number_input(
-                        "Cost (original currency)",
-                        min_value=0.0,
-                        step=10.0,
-                        key="item_cost_empty",
-                    )
-                with col_conf:
-                    conf_code = st.text_input(
-                        "Confirmation Code", key="item_conf_empty"
-                    )
-                cost_currency = st.selectbox(
-                    "Currency",
-                    options=["USD", "EUR", "GBP", "NGN", "JPY", "BRL"],
-                    key="item_currency_empty",
-                    index=0,
-                )
-                notes = st.text_area("Notes", key="item_notes_empty")
-                confirmed = st.checkbox(
-                    "✅ Confirmed / Booked", key="item_confirmed_empty"
-                )
-                if st.form_submit_button("Add to Itinerary"):
-                    if desc and dt_start:
-                        existing_dupes = duplicate_detection.find_duplicate_item(
-                            trip_id,
-                            desc,
-                            dt_start.isoformat(),
-                            dt_end.isoformat() if dt_end else None,
-                            cost,
-                            item_type,
+            st.subheader("➕ Add New Itinerary Item")
+            # Use the same add form
+            render_add_item_form(
+                trip_id,
+                trip_base_currency,
+                trip_display_currency,
+                display_rate,
+                key_suffix="empty",
+            )
+
+    # --- CREATE / UPDATE TRIP BUTTONS (at the very end of the form) ---
+    st.divider()
+    col_buttons = st.columns([1, 1, 2])
+    with col_buttons[0]:
+        if is_editing:
+            if is_draft:
+                if st.button("🚀 Update Draft", key="update_trip_bottom"):
+                    if trip_purpose and st.session_state["trip_stops"]:
+                        first_stop = st.session_state["trip_stops"][0]
+                        last_stop = st.session_state["trip_stops"][-1]
+                        overall_start = first_stop["start_date"]
+                        overall_end = last_stop["end_date"]
+                        stop_cities = [
+                            stop["city"] for stop in st.session_state["trip_stops"]
+                        ]
+                        dest_summary = " → ".join(stop_cities)
+
+                        existing_trips = duplicate_detection.find_duplicate_trips(
+                            trip_exec_id,
+                            trip_purpose,
+                            overall_start,
+                            overall_end,
+                            exclude_trip_id=trip_id,
                         )
-                        if existing_dupes:
+                        if existing_trips:
                             st.warning(
-                                "⚠️ This item looks like a duplicate of an existing one:"
+                                "⚠️ You already have a trip with the same purpose and overlapping dates:"
                             )
-                            for d in existing_dupes:
+                            for dup in existing_trips:
                                 st.write(
-                                    f"- {d['description']} ({d['datetime_start'][:16]})"
+                                    f"- {dup['destination']} ({dup['start_date'][:10]} to {dup['end_date'][:10]})"
                                 )
                             if not st.checkbox(
-                                "Add anyway?", key="force_add_item_empty"
+                                "Proceed anyway?", key="force_trip_update_bottom"
                             ):
                                 st.stop()
-                        snapshot_rate = get_snapshot_rate(
-                            trip_base_currency, cost_currency
+
+                        budget_base = budget_to_base(
+                            budget, budget_currency_code, display_exchange_rate
                         )
-                        db.add_itinerary_item(
-                            trip_id,
-                            item_type,
-                            desc,
-                            dt_start.isoformat(),
-                            dt_end.isoformat() if dt_end else None,
-                            location,
-                            cost,
-                            conf_code,
-                            notes,
-                            1 if confirmed else 0,
-                            cost_currency,
-                            snapshot_rate,
+
+                        db.update_trip_purpose(trip_id, trip_purpose)
+                        db.update_trip_dates(
+                            trip_id, overall_start, overall_end, dest_summary
                         )
-                        st.success("Added!")
+                        db.update_trip_budget(trip_id, budget_base)
+                        db.update_trip_departure_details(
+                            trip_id, departure_city, departure_region, departure_country
+                        )
+                        db.update_trip_currencies(
+                            trip_id, trip_base_currency, trip_display_currency
+                        )
+                        db.update_trip_display_exchange_rate(
+                            trip_id, display_exchange_rate
+                        )
+
+                        db.delete_all_trip_stops(trip_id)
+                        for idx, stop in enumerate(st.session_state["trip_stops"]):
+                            db.add_trip_stop(
+                                trip_id,
+                                idx + 1,
+                                stop["city"],
+                                stop.get("country", ""),
+                                stop.get("region", ""),
+                                stop["start_date"],
+                                stop["end_date"],
+                                stop.get("notes", ""),
+                            )
+                        st.success(f"Trip '{trip_purpose}' updated successfully!")
+
+                        # CLEAR FORM AFTER UPDATE
+                        clear_trip_form()
+                        # Keep the selected tab on Trip Planner
+                        st.session_state.selected_tab = 0
                         st.rerun()
                     else:
-                        st.warning("Description and Start Time required.")
+                        st.warning("Enter a Trip Name and add at least one stop.")
+            else:
+                st.warning(
+                    f"⚠️ This trip is **{trip_status.title()}** and cannot be edited directly. Use the 'Revert to Draft' button above or Duplicate it."
+                )
+        else:
+            if st.button("🚀 Create Trip", key="create_trip_bottom"):
+                if trip_purpose and st.session_state["trip_stops"]:
+                    first_stop = st.session_state["trip_stops"][0]
+                    last_stop = st.session_state["trip_stops"][-1]
+                    overall_start = first_stop["start_date"]
+                    overall_end = last_stop["end_date"]
+                    stop_cities = [
+                        stop["city"] for stop in st.session_state["trip_stops"]
+                    ]
+                    dest_summary = " → ".join(stop_cities)
+
+                    existing_trips = duplicate_detection.find_duplicate_trips(
+                        trip_exec_id, trip_purpose, overall_start, overall_end
+                    )
+                    if existing_trips:
+                        st.warning(
+                            "⚠️ You already have a trip with the same purpose and overlapping dates:"
+                        )
+                        for dup in existing_trips:
+                            st.write(
+                                f"- {dup['destination']} ({dup['start_date'][:10]} to {dup['end_date'][:10]})"
+                            )
+                        if not st.checkbox(
+                            "Proceed anyway?", key="force_trip_create_bottom"
+                        ):
+                            st.stop()
+
+                    budget_base = budget_to_base(
+                        budget, budget_currency_code, display_exchange_rate
+                    )
+
+                    trip_id = db.create_or_get_trip(
+                        trip_exec_id,
+                        dest_summary,
+                        overall_start,
+                        overall_end,
+                        trip_purpose,
+                        trip_display_currency,
+                        trip_base_currency,
+                    )
+                    db.update_trip_budget(trip_id, budget_base)
+                    db.update_trip_departure_details(
+                        trip_id, departure_city, departure_region, departure_country
+                    )
+                    db.update_trip_display_exchange_rate(trip_id, display_exchange_rate)
+
+                    db.delete_all_trip_stops(trip_id)
+                    for idx, stop in enumerate(st.session_state["trip_stops"]):
+                        db.add_trip_stop(
+                            trip_id,
+                            idx + 1,
+                            stop["city"],
+                            stop.get("country", ""),
+                            stop.get("region", ""),
+                            stop["start_date"],
+                            stop["end_date"],
+                            stop.get("notes", ""),
+                        )
+
+                    st.success(
+                        f"Trip '{trip_purpose}' created for {trip_exec_label} with {len(st.session_state['trip_stops'])} stops!"
+                    )
+
+                    # CLEAR FORM AFTER CREATE
+                    clear_trip_form()
+                    st.session_state.selected_tab = 0
+                    st.rerun()
+                else:
+                    st.warning("Enter a Trip Name and add at least one stop.")
+
+    with col_buttons[1]:
+        if st.button("🗑️ Clear Form", key="clear_form_bottom"):
+            clear_trip_form()
+            st.session_state.selected_tab = 0
+            st.rerun()
 
 # ------------------------------------------------------------------
-# TAB 2: EXECUTIVE MANAGEMENT
+# TAB 2: EXECUTIVE MANAGEMENT (unchanged)
 # ------------------------------------------------------------------
-with tab2:
+elif selected_tab_name == "👤 Executive Management":
     st.header("👤 Executive Management")
 
-    # --- Add Company ---
+    # --- Add Company (always visible) ---
     st.subheader("🏢 Add Company")
     with st.form("add_company_form_tab", clear_on_submit=True):
         comp_name = st.text_input("Company Name", key="comp_name_tab")
@@ -1504,89 +1601,13 @@ with tab2:
                 st.warning("Company Name is required.")
     st.divider()
 
-    # --- Add Executive ---
-    st.subheader("👤 Add Executive")
-    companies = db.get_all_companies()
-    company_options = {name: id for id, name in companies}
-    tz_display_names, tz_map = get_timezone_dropdown_options()
-    default_display = next(
-        (n for n in tz_display_names if "America/New_York" in n), tz_display_names[0]
-    )
-
-    with st.form("add_exec_form_tab", clear_on_submit=True):
-        exec_name = st.text_input("Full Name*", key="exec_name_tab")
-        exec_email = st.text_input("Email", key="exec_email_tab")
-        if companies:
-            sel_company = st.selectbox(
-                "Company*", list(company_options.keys()), key="exec_company_tab"
-            )
-            sel_company_id = company_options[sel_company]
-        else:
-            st.warning("Add a company first.")
-            sel_company_id = None
-        sel_tz = st.selectbox(
-            "Timezone",
-            tz_display_names,
-            index=tz_display_names.index(default_display),
-            key="exec_tz_tab",
-        )
-        exec_tz = tz_map[sel_tz]
-        exec_seat = st.selectbox(
-            "Seat Preference",
-            ["No Preference", "Aisle", "Window", "Middle"],
-            key="exec_seat_tab",
-        )
-        exec_hotel = st.text_input("Hotel Loyalty Program", key="exec_hotel_tab")
-        exec_ff = st.text_input("Frequent Flyer Number", key="exec_ff_tab")
-        exec_diet = st.text_input("Dietary Restrictions", key="exec_diet_tab")
-        exec_passport = st.text_input("Passport Number", key="exec_passport_tab")
-        exec_airline = st.text_input("Preferred Airline", key="exec_airline_tab")
-        exec_tsa = st.text_input("TSA PreCheck", key="exec_tsa_tab")
-        exec_meal = st.selectbox(
-            "Meal Preference",
-            ["No Preference", "Vegetarian", "Vegan", "Kosher", "Halal", "Gluten-Free"],
-            key="exec_meal_tab",
-        )
-
-        if st.form_submit_button("Add Executive"):
-            if exec_name and sel_company_id:
-                if exec_email:
-                    existing = duplicate_detection.find_duplicate_executive(
-                        exec_email, exec_name, sel_company_id
-                    )
-                    if existing:
-                        st.warning(
-                            "⚠️ An executive with the same email or name+company already exists:"
-                        )
-                        for dup in existing:
-                            st.write(f"- {dup['name']} (ID: {dup['id']})")
-                        if not st.checkbox("Add anyway?", key="force_add_exec_tab"):
-                            st.stop()
-                db.add_executive(
-                    sel_company_id,
-                    exec_name,
-                    exec_email,
-                    exec_tz,
-                    exec_seat if exec_seat != "No Preference" else "",
-                    exec_hotel,
-                    exec_ff,
-                    exec_diet,
-                    exec_passport,
-                    exec_airline,
-                    exec_tsa,
-                    exec_meal if exec_meal != "No Preference" else "",
-                )
-                st.success(f"Executive '{exec_name}' added!")
-                st.rerun()
-            else:
-                st.warning("Name and Company are required.")
-
-    # --- Edit / Delete Executive (if selected) ---
+    # --- If a profile exists, show either edit form or view-only summary ---
     if profile:
-        st.divider()
-        st.subheader(f"✏️ Editing: {profile['name']}")
-        # Edit form (reuse the same logic as before)
-        with st.form("edit_exec_form_tab"):
+        show_edit = st.session_state.get("show_edit_form", True)
+
+        if show_edit:
+            st.subheader(f"✏️ Editing: {profile['name']}")
+
             companies = db.get_all_companies()
             company_options = {name: id for id, name in companies}
             current_company_id = profile.get("company_id")
@@ -1687,29 +1708,66 @@ with tab2:
 
             col_save, col_cancel = st.columns(2)
             with col_save:
-                submitted = st.form_submit_button("💾 Save Changes")
+                if st.button("💾 Save Changes", key="save_exec_changes"):
+                    db.update_executive(
+                        exec_id,
+                        new_company_id,
+                        new_name,
+                        new_email,
+                        new_tz,
+                        new_seat if new_seat != "No Preference" else "",
+                        new_hotel,
+                        new_ff,
+                        new_diet,
+                        new_passport,
+                        new_airline,
+                        new_tsa,
+                        new_meal if new_meal != "No Preference" else "",
+                    )
+                    st.success(f"✅ Executive '{new_name}' updated!")
+                    st.rerun()
             with col_cancel:
-                cancel = st.form_submit_button("❌ Cancel")
+                if st.button("❌ Cancel", key="cancel_exec_changes"):
+                    st.session_state.show_edit_form = False
+                    st.rerun()
 
-            if submitted:
-                db.update_executive(
-                    exec_id,
-                    new_company_id,
-                    new_name,
-                    new_email,
-                    new_tz,
-                    new_seat if new_seat != "No Preference" else "",
-                    new_hotel,
-                    new_ff,
-                    new_diet,
-                    new_passport,
-                    new_airline,
-                    new_tsa,
-                    new_meal if new_meal != "No Preference" else "",
+        else:
+            st.subheader(f"📋 Profile: {profile['name']}")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Company:** {profile.get('company_name', 'N/A')}")
+                st.write(f"**Email:** {profile.get('email', 'N/A')}")
+                st.write(f"**Timezone:** {profile.get('timezone', 'N/A')}")
+                st.write(
+                    f"**Seat Preference:** {profile.get('seat_preference', 'N/A')}"
                 )
-                st.success(f"✅ Executive '{new_name}' updated!")
-                st.rerun()
-            if cancel:
+            with col2:
+                st.write(f"**Hotel Loyalty:** {profile.get('hotel_loyalty', 'N/A')}")
+                st.write(
+                    f"**Frequent Flyer:** {profile.get('frequent_flyer_number', 'N/A')}"
+                )
+                st.write(
+                    f"**Dietary Restrictions:** {profile.get('dietary_restrictions', 'N/A')}"
+                )
+                st.write(
+                    f"**Meal Preference:** {profile.get('meal_preference', 'N/A')}"
+                )
+
+            mems = db.get_memberships(exec_id)
+            if mems:
+                st.write("**Memberships:**")
+                for m in mems:
+                    emoji = (
+                        "✈️"
+                        if m["category"] == "airline"
+                        else "🏨" if m["category"] == "hotel" else "🚗"
+                    )
+                    st.write(f"  {emoji} {m['program_name']}: {m['membership_number']}")
+            else:
+                st.write("**Memberships:** None")
+
+            if st.button("✏️ Edit Executive"):
+                st.session_state.show_edit_form = True
                 st.rerun()
 
         # --- Manage Memberships ---
@@ -1787,7 +1845,94 @@ with tab2:
                     st.session_state["show_delete_exec_confirm_tab"] = False
                     st.rerun()
 
-    # --- Global duplicate executive scan ---
+    else:
+        # --- No profile – show Add Executive form ---
+        st.subheader("👤 Add Executive")
+        companies = db.get_all_companies()
+        company_options = {name: id for id, name in companies}
+        tz_display_names, tz_map = get_timezone_dropdown_options()
+        default_display = next(
+            (n for n in tz_display_names if "America/New_York" in n),
+            tz_display_names[0],
+        )
+
+        with st.form("add_exec_form_tab", clear_on_submit=True):
+            exec_name = st.text_input("Full Name*", key="exec_name_tab")
+            exec_email = st.text_input("Email", key="exec_email_tab")
+            if companies:
+                sel_company = st.selectbox(
+                    "Company*", list(company_options.keys()), key="exec_company_tab"
+                )
+                sel_company_id = company_options[sel_company]
+            else:
+                st.warning("Add a company first.")
+                sel_company_id = None
+            sel_tz = st.selectbox(
+                "Timezone",
+                tz_display_names,
+                index=tz_display_names.index(default_display),
+                key="exec_tz_tab",
+            )
+            exec_tz = tz_map[sel_tz]
+            exec_seat = st.selectbox(
+                "Seat Preference",
+                ["No Preference", "Aisle", "Window", "Middle"],
+                key="exec_seat_tab",
+            )
+            exec_hotel = st.text_input("Hotel Loyalty Program", key="exec_hotel_tab")
+            exec_ff = st.text_input("Frequent Flyer Number", key="exec_ff_tab")
+            exec_diet = st.text_input("Dietary Restrictions", key="exec_diet_tab")
+            exec_passport = st.text_input("Passport Number", key="exec_passport_tab")
+            exec_airline = st.text_input("Preferred Airline", key="exec_airline_tab")
+            exec_tsa = st.text_input("TSA PreCheck", key="exec_tsa_tab")
+            exec_meal = st.selectbox(
+                "Meal Preference",
+                [
+                    "No Preference",
+                    "Vegetarian",
+                    "Vegan",
+                    "Kosher",
+                    "Halal",
+                    "Gluten-Free",
+                ],
+                key="exec_meal_tab",
+            )
+
+            if st.form_submit_button("Add Executive"):
+                if exec_name and sel_company_id:
+                    if exec_email:
+                        existing = duplicate_detection.find_duplicate_executive(
+                            exec_email, exec_name, sel_company_id
+                        )
+                        if existing:
+                            st.warning(
+                                "⚠️ An executive with the same email or name+company already exists:"
+                            )
+                            for dup in existing:
+                                st.write(f"- {dup['name']} (ID: {dup['id']})")
+                            if not st.checkbox("Add anyway?", key="force_add_exec_tab"):
+                                st.stop()
+                    db.add_executive(
+                        sel_company_id,
+                        exec_name,
+                        exec_email,
+                        exec_tz,
+                        exec_seat if exec_seat != "No Preference" else "",
+                        exec_hotel,
+                        exec_ff,
+                        exec_diet,
+                        exec_passport,
+                        exec_airline,
+                        exec_tsa,
+                        exec_meal if exec_meal != "No Preference" else "",
+                    )
+                    st.success(f"Executive '{exec_name}' added!")
+                    st.session_state.show_edit_form = True
+                    st.rerun()
+                else:
+                    st.warning("Name and Company are required.")
+
+    # --- Global duplicate executive scan (always visible) ---
     st.divider()
     if st.button("🔍 Find Duplicate Executives (All)"):
         all_execs = db.get_all_executives()
@@ -1808,9 +1953,9 @@ with tab2:
             st.success("No duplicate emails found.")
 
 # ------------------------------------------------------------------
-# TAB 3: TRIP TEMPLATES
+# TAB 3: TRIP TEMPLATES (unchanged)
 # ------------------------------------------------------------------
-with tab3:
+elif selected_tab_name == "📋 Trip Templates":
     st.header("📋 Trip Templates")
     templates = db.get_trip_templates()
     if templates:
@@ -1851,7 +1996,6 @@ with tab3:
     else:
         st.caption("No templates saved yet.")
 
-    # Create from template
     if templates:
         st.divider()
         st.subheader("🚀 Create Trip from Template")
@@ -1907,7 +2051,7 @@ with tab3:
 # ------------------------------------------------------------------
 # TAB 4: SPENDING DASHBOARD
 # ------------------------------------------------------------------
-with tab4:
+else:  # "📊 Spending Dashboard"
     st.header("📊 Spending Dashboard (All Trips)")
     st.subheader("Filter & View Aggregate Spending")
     col_dash1, col_dash2 = st.columns(2)
@@ -1934,18 +2078,6 @@ with tab4:
         exec_id=exec_id_filter, start_date=start_filter, end_date=end_filter
     )
     if summary_data:
-        total_budget = sum(t["budget"] for t in summary_data)
-        total_spent = sum(t["total_spent"] for t in summary_data)
-        total_confirmed = sum(t["confirmed_spent"] for t in summary_data)
-        total_estimated = sum(t["estimated_spent"] for t in summary_data)
-        dashboard_symbol = get_currency_symbol("USD")
-
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        col_m1.metric("Total Trips", len(summary_data))
-        col_m2.metric("Total Budget", f"{dashboard_symbol}{total_budget:,.2f}")
-        col_m3.metric("Total Spent", f"{dashboard_symbol}{total_spent:,.2f}")
-        col_m4.metric("Total Confirmed", f"{dashboard_symbol}{total_confirmed:,.2f}")
-
         st.subheader("Trip-Level Breakdown")
         for trip in summary_data:
             trip_base_currency = trip.get("base_currency", "USD")
@@ -1982,6 +2114,7 @@ with tab4:
                 with col9:
                     if st.button("📂", key=f"open_trip_dash_{trip['trip_id']}"):
                         st.session_state["current_trip_id"] = trip["trip_id"]
+                        st.session_state.selected_tab = 0  # Switch to Trip Planner
                         st.success(f"Loaded trip: {trip['destination']}")
                         st.rerun()
                 with col10:
