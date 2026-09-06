@@ -2,52 +2,33 @@
 
 ### *The Complete Travel Management System for Executive Assistants & Personal Assistants*
 
-**Version 3.0** – *Now with Full CRUD, Excel Exports, Custom Categories, and Interactive Dashboards*
+**Version 3.0** – *Full CRUD, Excel Exports, Interactive Dashboard, and Company Management*
 
 ---
 
 ## 📋 Table of Contents
 
-- [✈️ Executive Travel Planner](#️-executive-travel-planner)
-    - [*The Complete Travel Management System for Executive Assistants \& Personal Assistants*](#the-complete-travel-management-system-for-executive-assistants--personal-assistants)
-  - [📋 Table of Contents](#-table-of-contents)
-  - [Overview](#overview)
-  - [🚀 What's New (Recent Major Upgrades)](#-whats-new-recent-major-upgrades)
-  - [✨ Full Feature Breakdown](#-full-feature-breakdown)
-    - [🏢 1. Executive \& Company Management](#-1-executive--company-management)
-    - [🗺️ 2. Trip Planning (Multi-City)](#️-2-trip-planning-multi-city)
-    - [📋 3. Itinerary Builder (Full CRUD)](#-3-itinerary-builder-full-crud)
-    - [💰 4. Budgeting \& Spending Management](#-4-budgeting--spending-management)
-    - [📊 5. Spending Dashboard (Interactive)](#-5-spending-dashboard-interactive)
-    - [🏷️ 6. Custom Categories](#️-6-custom-categories)
-    - [📄 7. Exports \& Reporting (Now with Excel!)](#-7-exports--reporting-now-with-excel)
-  - [🛠️ Tech Stack](#️-tech-stack)
-  - [📦 Installation \& Setup](#-installation--setup)
-    - [1. Prerequisites](#1-prerequisites)
-    - [2. Download the Project](#2-download-the-project)
-    - [3. Run the Setup Commands](#3-run-the-setup-commands)
-  - [▶️ Running the App](#️-running-the-app)
-  - [🧠 How the PA Uses It (Daily Workflow)](#-how-the-pa-uses-it-daily-workflow)
-  - [📤 Complete Export Matrix](#-complete-export-matrix)
-  - [📊 What Each Export Looks Like](#-what-each-export-looks-like)
-    - [📄 Word Documents](#-word-documents)
-    - [📊 Excel Spreadsheets](#-excel-spreadsheets)
-    - [📊 CSV Files](#-csv-files)
-    - [📅 Calendar (.ics)](#-calendar-ics)
-  - [🗃️ File Structure](#️-file-structure)
-  - [💱 Currency \& Date Management](#-currency--date-management)
-  - [🧩 Extending the Tool](#-extending-the-tool)
-    - [Adding a New Field to Executive Profiles](#adding-a-new-field-to-executive-profiles)
-    - [Adding a New Export Format](#adding-a-new-export-format)
-  - [🔒 Data Backup](#-data-backup)
-  - [🐞 Troubleshooting](#-troubleshooting)
-  - [📄 License](#-license)
+- [Overview](#overview)
+- [What's New](#-whats-new-recent-major-upgrades)
+- [Full Feature Breakdown](#-full-feature-breakdown)
+- [Tech Stack](#️-tech-stack)
+- [Installation & Setup](#-installation--setup)
+- [Running the App](#️-running-the-app)
+- [How the PA Uses It (Daily Workflow)](#-how-the-pa-uses-it-daily-workflow)
+- [Complete Export Matrix](#-complete-export-matrix)
+- [What Each Export Looks Like](#-what-each-export-looks-like)
+- [File Structure](#-file-structure)
+- [Currency & Date Management](#-currency--date-management)
+- [Extending the Tool](#-extending-the-tool)
+- [Data Backup](#-data-backup)
+- [Troubleshooting](#-troubleshooting)
+- [License](#-license)
 
 ---
 
 ## Overview
 
-Stop juggling between spreadsheets, Word docs, and calendar invites. This tool is a single, self-contained Python application that allows **one Personal Assistant** to manage **multiple executives across multiple companies** – from storing detailed travel profiles to generating polished itineraries, expense reports, and interactive spending dashboards.
+Stop juggling between spreadsheets, Word docs, and calendar invites. This single Python application lets **one Personal Assistant** manage **multiple executives across multiple companies** – from storing detailed travel profiles to generating polished itineraries, expense reports, and interactive spending dashboards.
 
 **Best of all:** 100% local. No cloud fees. No API subscriptions. All data stays on your machine.
 
@@ -58,63 +39,63 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This tool i
 | Feature                                      | Description                                                                                                         |
 | :------------------------------------------- | :------------------------------------------------------------------------------------------------------------------ |
 | **Full CRUD (Create, Read, Update, Delete)** | Edit or delete any itinerary item, trip stop, or entire trip directly from the UI. No more manual database editing! |
-| **Custom Itinerary Categories**              | Create your own item types (e.g., "Car Rental", "Dinner", "Conference") alongside the defaults.                     |
-| **Trip Status Workflow**                     | Mark trips as **Draft → Approved → Final** to track the planning lifecycle.                                         |
-| **Interactive Spending Dashboard**           | Open (📂) any trip directly for editing, or delete (🗑️) it with a confirmation popup – all from the dashboard.        |
 | **Excel Exports**                            | Export everything to Excel (.xlsx): Executive Profiles, Itineraries, Expense Reports, and Spending Dashboards.      |
-| **Receipt Attachments**                      | Upload receipts (PNG, JPG, PDF) to individual itinerary items. Embedded as thumbnails in Expense Reports.           |
-| **Multi‑City / Multi‑Country Stops**         | Plan complex roadshows. Each stop includes City, Region/State, and a Country dropdown.                              |
+| **Interactive Spending Dashboard**           | Open (📂) any trip directly for editing, or delete (🗑️) it with a confirmation popup – all from the dashboard.        |
+| **Trip Status Workflow**                     | Mark trips as **Draft → Approved → Final** to track the planning lifecycle.                                         |
+| **Multi‑City / Multi‑Country Stops**         | Plan complex roadshows with structured locations (City, Region, Country).                                           |
 | **Structured Departure Location**            | Define a "Home Base" with City, Region, and Country for accurate route mapping.                                     |
-| **DD-MM-YYYY Date Format**                   | European-style date format applied across the UI and all exported documents.                                        |
-| **In-App Category Management**               | Add, view, and delete custom categories directly from the sidebar.                                                  |
-| **Edit Stops**                               | Modify city, country, region, dates, or notes for any stop in the trip.                                             |
+| **DD‑MM‑YYYY Date Format**                   | European‑style date format applied across the UI and all exported documents.                                        |
+| **Receipt Attachments**                      | Upload receipts (PNG, JPG, PDF) to individual itinerary items; embedded as thumbnails in Expense Reports.           |
+| **Company Management**                       | Fully‑fledged **Companies tab** to add, edit, and delete companies – with cost centers and policy notes.            |
 
 ---
 
 ## ✨ Full Feature Breakdown
 
 ### 🏢 1. Executive & Company Management
-- Add unlimited **Companies** with cost centers and policy notes.
-- Add **Executives** with rich profiles:
+- **Companies**: Add unlimited companies with cost centers and policy notes. Full CRUD (Add, Edit, Delete) in the dedicated **🏢 Companies** tab.
+- **Executives**: Rich profiles including:
   - *Core*: Name, Email, Timezone, Seat Preference.
   - *Travel Documents*: Passport Number, TSA PreCheck.
   - *Preferences*: Preferred Airline, Hotel Loyalty, Dietary, and Meal preferences.
-  - **Multiple Memberships**: Store unlimited Frequent Flyer numbers and Hotel Loyalty numbers (Airline, Hotel, Car Rental).
+  - **Multiple Memberships**: Store unlimited Frequent Flyer and Hotel Loyalty numbers (Airline, Hotel, Car Rental).
+- **Passports**: Add multiple passports per executive with expiry and issue dates.
 - **Export Profiles**: Word, CSV, and Excel.
 
-### 🗺️ 2. Trip Planning (Multi-City)
+### 🗺️ 2. Trip Planning (Multi‑City)
 - **Departure Location**: Define the executive's "Home Base" (City, Region, Country).
 - **Trip Stops**: Add unlimited stops. Each stop captures City, Region, Country, Start Date, and End Date.
-- **Automatic Routing**: The system visualizes the route as `Home Base → Stop 1 → Stop 2`.
-- **DD-MM-YYYY Format**: All dates are displayed and exported in the clear European format.
+- **Automatic Routing**: The system visualises the route as `Home Base → Stop 1 → Stop 2`.
+- **DD‑MM‑YYYY Format**: All dates are displayed and exported in the clear European format.
 - **Edit Stops**: Modify any stop's details after creation.
 
 ### 📋 3. Itinerary Builder (Full CRUD)
-- **Add Items**: Add Flights, Hotels, Meetings, Transport, or any **Custom Category** you create.
+- **Add Items**: Add Flights, Hotels, Meetings, Transport, or any **Custom Category** you create (categories are added directly via the database – contact your administrator if you need new ones).
 - **Toggle Confirmed/Estimated**: Mark items as "Booked" (Confirmed) to separate estimated costs from actual spend.
 - **Edit Items**: Click the ✏️ button next to any item to update its details (time, location, cost, etc.).
 - **Delete Items**: Click the 🗑️ button to instantly remove an item.
 - **Receipt Attachments**: Upload receipts directly to items. View status ("Attached" / "No receipt").
 
 ### 💰 4. Budgeting & Spending Management
-- Set a **Trip Budget** (multi-currency aware).
-- Real-time **Spending Summary** (Estimated vs. Confirmed vs. Total).
+- Set a **Trip Budget** (multi‑currency aware).
+- Real‑time **Spending Summary** (Estimated vs. Confirmed vs. Total).
 - **Visual Progress Bar** showing budget usage percentage (Green/Orange/Red).
 - **Conflict Detection**: Automatically highlights overlapping meetings and flights.
 
 ### 📊 5. Spending Dashboard (Interactive)
 - **Aggregate Filters**: Filter spending by Executive or Date Range.
-- **Trip-Level Breakdown**: See a detailed table of all trips with budget and spending metrics.
+- **Trip‑Level Breakdown**: See a detailed table of all trips with budget and spending metrics.
 - **Interactive Actions**:
   - 📂 **Open Trip**: Load any trip into the main editor to modify it.
   - 🗑️ **Delete Trip**: Permanently delete trips with an inline confirmation check.
 - **Status Display**: See if a trip is "Draft", "Approved", or "Final" at a glance.
 - **Export**: CSV, Word, and Excel.
 
-### 🏷️ 6. Custom Categories
-- **Add Categories**: Create custom itinerary item types (e.g., "Car Rental", "Dinner", "Conference").
-- **Delete Categories**: Remove unused categories from the sidebar.
-- **Dynamic Dropdowns**: All item type dropdowns update automatically.
+### 🏢 6. Company Management (Full CRUD)
+- Dedicated **🏢 Companies** tab in the main interface.
+- Add new companies with default cost centers and policy notes.
+- Edit or delete existing companies.
+- Deleting a company is prevented if executives are still assigned to it.
 
 ### 📄 7. Exports & Reporting (Now with Excel!)
 
@@ -123,7 +104,7 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This tool i
 | **Itinerary**          | Word (.docx) + Excel (.xlsx)       | Daily agenda with costs, confirmation codes, conflict warnings, and spending summary. Excel includes 3 sheets: Trip Summary, Stops, Itinerary Items. |
 | **Expense Report**     | Word (.docx) + Excel (.xlsx)       | Items grouped by day with **embedded receipt thumbnails** (Word) or structured spreadsheet (Excel). Daily subtotals and grand totals.                |
 | **Executive Profile**  | Word (.docx) + Excel (.xlsx) + CSV | Complete profile with preferences, memberships, and finance details.                                                                                 |
-| **Calendar**           | .ics                               | One-click import into Google/Apple/Outlook calendars (hotels as multi-day events).                                                                   |
+| **Calendar**           | .ics                               | One‑click import into Google/Apple/Outlook calendars (hotels as multi‑day events).                                                                   |
 | **Spending Dashboard** | Word (.docx) + Excel (.xlsx) + CSV | Aggregate reports with totals and trip‑level breakdowns.                                                                                             |
 
 ---
@@ -133,14 +114,14 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This tool i
 | Layer                   | Technology                |
 | :---------------------- | :------------------------ |
 | **Language**            | Python 3.9+               |
-| **UI Framework**        | Streamlit (1.62.0)        |
+| **UI Framework**        | Streamlit (1.63.0)        |
 | **Database**            | SQLite (local `.db` file) |
 | **Document Generation** | python-docx               |
 | **Excel Export**        | openpyxl                  |
 | **Calendar Files**      | icalendar                 |
 | **Timezone Handling**   | pytz                      |
 | **Country Dropdown**    | pycountry                 |
-| **Data Export**         | Built-in `csv` module     |
+| **Data Export**         | Built‑in `csv` module     |
 
 ---
 
@@ -160,6 +141,8 @@ travel-planner/
 ├── doc_generator.py
 ├── excel_export.py
 ├── utils.py
+├── currency.py
+├── duplicate_detection.py
 ├── requirements.txt
 └── README.md
 ```
@@ -202,9 +185,9 @@ Your browser will open automatically to `http://localhost:8501`.
 1. **Select Executive**: Choose from the dropdown. Their preferences load instantly.
 2. **Create Trip**: Enter the purpose, define the *Departure City*, and add *Stops* with dates.
 3. **Set Budget**: Define the overall budget for the trip.
-4. **Plan Itinerary**: Add flights, hotels, meetings, etc. Use the "Add/Edit Categories" in the sidebar to customize item types.
+4. **Plan Itinerary**: Add flights, hotels, meetings, etc. Use the **🏢 Companies** tab to manage company details.
 5. **Attach Receipts**: Upload receipts directly to items using the "Attach" button.
-6. **Review**: Check the real-time spending summary, budget progress bar, and conflict warnings.
+6. **Review**: Check the real‑time spending summary, budget progress bar, and conflict warnings.
 7. **Generate Exports**:
    - 📄 Word Itinerary
    - 📊 Excel Itinerary
@@ -254,18 +237,20 @@ Your browser will open automatically to `http://localhost:8501`.
 
 ## 🗃️ File Structure
 
-```text
+```
 travel-planner/
 ├── app.py                      # Main Streamlit UI (All features)
 ├── database.py                 # SQLite models + migrations + full CRUD
-├── doc_generator.py            # Word document generation (itinerary, expense, profile, spending)
+├── doc_generator.py            # Word document generation
 ├── excel_export.py             # Excel (.xlsx) exports for all data
 ├── utils.py                    # Conflict detection & ICS calendar generation
+├── currency.py                 # Currency symbol mapping & exchange rate caching
+├── duplicate_detection.py      # Trip / executive / item duplicate detection
 ├── requirements.txt            # Dependencies
-├── generated_itineraries/      # Saved Word itineraries (auto-created)
-├── generated_expense_reports/  # Saved Expense reports (auto-created)
-├── receipts/                   # Uploaded receipt images (auto-created)
-└── travel_planner.db           # SQLite database (auto-created)
+├── generated_itineraries/      # Saved Word itineraries (auto‑created)
+├── generated_expense_reports/  # Saved Expense reports (auto‑created)
+├── receipts/                   # Uploaded receipt images (auto‑created)
+└── travel_planner.db           # SQLite database (auto‑created)
 ```
 
 **Database Highlights**:
@@ -277,8 +262,8 @@ travel-planner/
 
 ## 💱 Currency & Date Management
 
-- **Currency**: Select from **USD, EUR, GBP, NGN, JPY, BRL** in the sidebar. All numbers (budgets, costs, exports) update instantly.
-- **Date Format**: All dates are displayed and exported in **DD-MM-YYYY** format.
+- **Currency**: Select from **USD, EUR, GBP, NGN, JPY, BRL, CAD, AUD, CHF, CNY, INR** in the UI. All numbers (budgets, costs, exports) update instantly.
+- **Date Format**: All dates are displayed and exported in **DD‑MM‑YYYY** format.
 - **Timezone Dropdown**: Displays timezones with current abbreviation (e.g., `America/New_York (EDT)`).
 
 ---
