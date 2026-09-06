@@ -95,6 +95,12 @@ st.markdown(
         border-color: #87CEEB !important;
         box-shadow: 0 0 0 0.2rem rgba(135, 206, 235, 0.4) !important;
     }
+
+    /* Make popovers wider for the edit trip modal */
+    # div[data-testid="stPopover"] {
+    #     max-width: 900px !important;
+    #     width: 900px !important;
+    # }
 </style>
 """,
     unsafe_allow_html=True,
@@ -503,33 +509,35 @@ if st.session_state.get("show_full_profile", False):
                     new_name_mem = st.text_input("Program Name", key="edit_mem_name")
                 with col_num:
                     new_num_mem = st.text_input("Membership Number", key="edit_mem_num")
-                col_extra1, col_extra2 = st.columns(2)
-                if new_cat == "Airline":
-                    with col_extra1:
-                        new_tier = st.text_input("Tier", key="edit_mem_tier")
-                        new_alliance = st.text_input(
-                            "Alliance", key="edit_mem_alliance"
-                        )
-                    with col_extra2:
-                        new_airport = st.text_input(
-                            "Airport Code", key="edit_mem_airport"
-                        )
-                        new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
-                    new_alliance = new_alliance or None
-                    new_airport = new_airport or None
-                elif new_cat == "Hotel":
-                    with col_extra1:
-                        new_tier = st.text_input("Status/Tier", key="edit_mem_tier")
-                    with col_extra2:
-                        new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
-                    new_alliance = None
-                    new_airport = None
-                else:
-                    with col_extra1:
-                        new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
-                    new_tier = None
-                    new_alliance = None
-                    new_airport = None
+                # Extra fields inside nested expander (hidden by default)
+                with st.expander("➕ More details (optional)"):
+                    col_extra1, col_extra2 = st.columns(2)
+                    if new_cat == "Airline":
+                        with col_extra1:
+                            new_tier = st.text_input("Tier", key="edit_mem_tier")
+                            new_alliance = st.text_input(
+                                "Alliance", key="edit_mem_alliance"
+                            )
+                        with col_extra2:
+                            new_airport = st.text_input(
+                                "Airport Code", key="edit_mem_airport"
+                            )
+                            new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
+                        new_alliance = new_alliance or None
+                        new_airport = new_airport or None
+                    elif new_cat == "Hotel":
+                        with col_extra1:
+                            new_tier = st.text_input("Status/Tier", key="edit_mem_tier")
+                        with col_extra2:
+                            new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
+                        new_alliance = None
+                        new_airport = None
+                    else:  # Car
+                        with col_extra1:
+                            new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
+                        new_tier = None
+                        new_alliance = None
+                        new_airport = None
 
                 if st.button("➕ Add Membership", key="edit_mem_add_btn"):
                     if new_name_mem and new_num_mem:
@@ -691,7 +699,6 @@ if profile:
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
                         key="docx_download_side",
                     )
-        
 
         with col_excel:
             if st.button("📊 Excel"):
@@ -819,12 +826,12 @@ with st.sidebar.expander("💾 Import / Restore Database"):
                 st.error(f"Import failed: {e}")
 
 # =========================================================
-# MAIN AREA: TABS (Only Trip Planner, Templates, Spending)
+# MAIN AREA: TABS (Only Trip Planner, Templates, All Trips)
 # =========================================================
 tab_names = [
     "✈️ Trip Planner",
     "📋 Trip Templates",
-    "📊 Spending Dashboard",
+    "📋 All Trips",
 ]
 default_tab = st.session_state.get("active_tab", "✈️ Trip Planner")
 default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
@@ -866,7 +873,9 @@ with tab1:
     with col_end:
         overall_end = st.date_input(
             "End Date*",
-            value=st.session_state.get("create_overall_end", datetime.now() + timedelta(days=1)),
+            value=st.session_state.get(
+                "create_overall_end", datetime.now() + timedelta(days=1)
+            ),
             key="create_overall_end",
         )
     if overall_start and overall_end and overall_end >= overall_start:
@@ -1089,7 +1098,14 @@ with tab1:
                         # Use trip's display and base currencies
                         valid_currencies = [trip_display_currency, trip_base_currency]
                         # Ensure the current currency is in the list; if not, default to first
-                        default_index = valid_currencies.index(item.get("cost_currency", trip_display_currency)) if item.get("cost_currency", trip_display_currency) in valid_currencies else 0
+                        default_index = (
+                            valid_currencies.index(
+                                item.get("cost_currency", trip_display_currency)
+                            )
+                            if item.get("cost_currency", trip_display_currency)
+                            in valid_currencies
+                            else 0
+                        )
                         e_currency = st.selectbox(
                             "Currency",
                             options=valid_currencies,
@@ -1426,11 +1442,11 @@ with tab2:
                             st.warning("Please fill in all required fields.")
 
 # ------------------------------------------------------------------
-# TAB 3: SPENDING DASHBOARD (with mass delete)
+# TAB 3: ALL TRIPS (was Spending Dashboard)
 # ------------------------------------------------------------------
 with tab3:
-    st.header("📊 Spending Dashboard (All Trips)")
-    st.subheader("Filter & View Aggregate Spending")
+    st.header("📋 All Trips")
+    st.subheader("Filter & View Trips")
     col_dash1, col_dash2 = st.columns(2)
     with col_dash1:
         exec_filter_options = ["All"] + [
@@ -1459,12 +1475,6 @@ with tab3:
         st.session_state.selected_trip_ids = set()
 
     if summary_data:
-        total_budget = sum(t["budget"] for t in summary_data)
-        total_spent = sum(t["total_spent"] for t in summary_data)
-        total_confirmed = sum(t["confirmed_spent"] for t in summary_data)
-        total_estimated = sum(t["estimated_spent"] for t in summary_data)
-        dashboard_symbol = get_currency_symbol("USD")
-
         st.subheader("Trip-Level Breakdown")
 
         # --- Mass delete controls ---
@@ -1512,7 +1522,7 @@ with tab3:
                     st.rerun()
 
         # --- Table header ---
-        header_cols = st.columns([0.5, 1.5, 1.5, 1.5, 1, 1, 1, 1, 1, 0.8, 0.8])
+        header_cols = st.columns([0.5, 1.5, 1.5, 1.5, 1.2, 1, 1, 1, 1, 0.8, 0.8])
         with header_cols[0]:
             st.write("")
         with header_cols[1]:
@@ -1522,13 +1532,13 @@ with tab3:
         with header_cols[3]:
             st.write("**Destination**")
         with header_cols[4]:
-            st.write("**Budget**")
+            st.write("**Budget (Base)**")
         with header_cols[5]:
-            st.write("**Total Spent**")
+            st.write("**Total Spent (Base)**")
         with header_cols[6]:
-            st.write("**Confirmed**")
+            st.write("**Confirmed (Base)**")
         with header_cols[7]:
-            st.write("**Estimated**")
+            st.write("**Estimated (Base)**")
         with header_cols[8]:
             st.write("**Status**")
         with header_cols[9]:
@@ -1539,11 +1549,10 @@ with tab3:
         # --- Loop through trips ---
         for trip in summary_data:
             trip_base_currency = trip.get("base_currency", "USD")
-            trip_symbol = get_currency_symbol(trip_base_currency)
             trip_id = trip["trip_id"]
 
             with st.container():
-                cols = st.columns([0.5, 1.5, 1.5, 1.5, 1, 1, 1, 1, 1, 0.8, 0.8])
+                cols = st.columns([0.5, 1.5, 1.5, 1.5, 1.2, 1, 1, 1, 1, 0.8, 0.8])
 
                 with cols[0]:
                     is_checked = trip_id in st.session_state.selected_trip_ids
@@ -1559,13 +1568,13 @@ with tab3:
                 with cols[3]:
                     st.write(trip["destination"])
                 with cols[4]:
-                    st.write(f"{trip_symbol}{trip['budget']:.2f}")
+                    st.write(f"{trip['budget']:.2f} {trip_base_currency}")
                 with cols[5]:
-                    st.write(f"{trip_symbol}{trip['total_spent']:.2f}")
+                    st.write(f"{trip['total_spent']:.2f} {trip_base_currency}")
                 with cols[6]:
-                    st.write(f"{trip_symbol}{trip['confirmed_spent']:.2f}")
+                    st.write(f"{trip['confirmed_spent']:.2f} {trip_base_currency}")
                 with cols[7]:
-                    st.write(f"{trip_symbol}{trip['estimated_spent']:.2f}")
+                    st.write(f"{trip['estimated_spent']:.2f} {trip_base_currency}")
                 with cols[8]:
                     status = trip["status"]
                     st.write(
@@ -1578,14 +1587,16 @@ with tab3:
                         )
                     )
                 with cols[9]:
-                    # Full edit modal
-                    with st.popover("📂", use_container_width=True):
+                    # Full edit modal – using popover with CSS for width
+                    with st.popover("📂 Edit", use_container_width=True):
                         trip_id_modal = trip["trip_id"]
                         trip_modal_data = db.get_trip(trip_id_modal)
                         if trip_modal_data:
-                            st.subheader(
-                                f"✈️ Edit Trip: {trip_modal_data.get('purpose', 'Untitled')}"
-                            )
+                            # Determine if locked (approved or final)
+                            is_locked = trip_modal_data.get("status") in [
+                                "approved",
+                                "final",
+                            ]
 
                             if f"modal_stops_{trip_id_modal}" not in st.session_state:
                                 st.session_state[f"modal_stops_{trip_id_modal}"] = (
@@ -1596,11 +1607,21 @@ with tab3:
                                     db.get_items_for_trip(trip_id_modal)
                                 )
 
+                            st.subheader(
+                                f"✈️ Edit Trip: {trip_modal_data.get('purpose', 'Untitled')}"
+                            )
+                            if is_locked:
+                                st.info(
+                                    "🔒 This trip is Approved or Final – read‑only view."
+                                )
+
+                            # ---- MAIN FORM ----
                             with st.form(key=f"edit_trip_form_{trip_id_modal}"):
                                 new_purpose = st.text_input(
                                     "Trip Name",
                                     value=trip_modal_data.get("purpose", ""),
                                     key=f"modal_purpose_{trip_id_modal}",
+                                    disabled=is_locked,
                                 )
 
                                 col_dep1, col_dep2 = st.columns(2)
@@ -1609,6 +1630,7 @@ with tab3:
                                         "Departure City",
                                         value=trip_modal_data.get("departure_city", ""),
                                         key=f"modal_dep_city_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 with col_dep2:
                                     new_dep_region = st.text_input(
@@ -1617,6 +1639,7 @@ with tab3:
                                             "departure_region", ""
                                         ),
                                         key=f"modal_dep_region_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 new_dep_country = st.selectbox(
                                     "Departure Country",
@@ -1630,6 +1653,7 @@ with tab3:
                                         else 0
                                     ),
                                     key=f"modal_dep_country_{trip_id_modal}",
+                                    disabled=is_locked,
                                 )
 
                                 st.write("**Budget**")
@@ -1655,6 +1679,7 @@ with tab3:
                                         options=["Display Currency", "Base Currency"],
                                         index=0,
                                         key=f"modal_budget_currency_type_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     if edit_currency_type == "Display Currency":
                                         budget_value = budget_display
@@ -1666,6 +1691,7 @@ with tab3:
                                         step=100.0,
                                         value=float(budget_value),
                                         key=f"modal_budget_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 with col_bud2:
                                     st.write(
@@ -1688,6 +1714,7 @@ with tab3:
                                             else 0
                                         ),
                                         key=f"modal_display_currency_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 with col_cur2:
                                     new_base_currency = st.selectbox(
@@ -1704,6 +1731,7 @@ with tab3:
                                             else 0
                                         ),
                                         key=f"modal_base_currency_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
 
                                 current_status = trip_modal_data.get("status", "draft")
@@ -1719,100 +1747,113 @@ with tab3:
                                         else 0
                                     ),
                                     key=f"modal_status_{trip_id_modal}",
+                                    disabled=is_locked,
                                 )
 
-                                submitted = st.form_submit_button("💾 Save Changes")
-                                if submitted:
-                                    if edit_currency_type == "Display Currency":
-                                        try:
-                                            from currency import get_exchange_rates
+                                # Only show Save button if not locked
+                                if not is_locked:
+                                    submitted = st.form_submit_button("💾 Save Changes")
+                                    if submitted:
+                                        if edit_currency_type == "Display Currency":
+                                            try:
+                                                from currency import get_exchange_rates
 
-                                            rates = get_exchange_rates(
-                                                new_base_currency
-                                            )
-                                            rate = rates.get(new_display_currency, 1.0)
-                                            budget_base = new_budget / rate
-                                        except:
+                                                rates = get_exchange_rates(
+                                                    new_base_currency
+                                                )
+                                                rate = rates.get(
+                                                    new_display_currency, 1.0
+                                                )
+                                                budget_base = new_budget / rate
+                                            except:
+                                                budget_base = new_budget
+                                        else:
                                             budget_base = new_budget
-                                    else:
-                                        budget_base = new_budget
 
-                                    db.update_trip_purpose(trip_id_modal, new_purpose)
-                                    db.update_trip_budget(trip_id_modal, budget_base)
-                                    db.update_trip_departure_details(
-                                        trip_id_modal,
-                                        new_dep_city,
-                                        new_dep_region,
-                                        new_dep_country,
-                                    )
-                                    db.update_trip_currencies(
-                                        trip_id_modal,
-                                        new_base_currency,
-                                        new_display_currency,
-                                    )
-                                    db.update_trip_status(trip_id_modal, new_status)
-
-                                    db.delete_all_trip_stops(trip_id_modal)
-                                    for idx, stop in enumerate(
-                                        st.session_state[f"modal_stops_{trip_id_modal}"]
-                                    ):
-                                        db.add_trip_stop(
-                                            trip_id_modal,
-                                            idx + 1,
-                                            stop["city"],
-                                            stop.get("country", ""),
-                                            stop.get("region", ""),
-                                            stop["start_date"],
-                                            stop["end_date"],
-                                            stop.get("notes", ""),
+                                        db.update_trip_purpose(
+                                            trip_id_modal, new_purpose
                                         )
+                                        db.update_trip_budget(
+                                            trip_id_modal, budget_base
+                                        )
+                                        db.update_trip_departure_details(
+                                            trip_id_modal,
+                                            new_dep_city,
+                                            new_dep_region,
+                                            new_dep_country,
+                                        )
+                                        db.update_trip_currencies(
+                                            trip_id_modal,
+                                            new_base_currency,
+                                            new_display_currency,
+                                        )
+                                        db.update_trip_status(trip_id_modal, new_status)
 
-                                    valid_currencies = [
-                                        new_display_currency,
-                                        new_base_currency,
-                                    ]
-                                    conn = sqlite3.connect(db.DB_PATH)
-                                    c = conn.cursor()
-                                    c.execute(
-                                        "DELETE FROM itinerary_items WHERE trip_id = ?",
-                                        (trip_id_modal,),
-                                    )
-                                    conn.commit()
-                                    conn.close()
-
-                                    for item in st.session_state[
-                                        f"modal_items_{trip_id_modal}"
-                                    ]:
-                                        if (
-                                            item["cost_currency"]
-                                            not in valid_currencies
+                                        db.delete_all_trip_stops(trip_id_modal)
+                                        for idx, stop in enumerate(
+                                            st.session_state[
+                                                f"modal_stops_{trip_id_modal}"
+                                            ]
                                         ):
-                                            item["cost_currency"] = new_display_currency
-                                        db.add_itinerary_item(
-                                            trip_id_modal,
-                                            item["item_type"],
-                                            item["description"],
-                                            item["datetime_start"],
-                                            item["datetime_end"],
-                                            item.get("location", ""),
-                                            item.get("cost", 0),
-                                            item.get("confirmation_code", ""),
-                                            item.get("notes", ""),
-                                            item.get("is_confirmed", 0),
-                                            item["cost_currency"],
-                                            item.get("exchange_rate_snapshot", 1.0),
+                                            db.add_trip_stop(
+                                                trip_id_modal,
+                                                idx + 1,
+                                                stop["city"],
+                                                stop.get("country", ""),
+                                                stop.get("region", ""),
+                                                stop["start_date"],
+                                                stop["end_date"],
+                                                stop.get("notes", ""),
+                                            )
+
+                                        valid_currencies = [
+                                            new_display_currency,
+                                            new_base_currency,
+                                        ]
+                                        conn = sqlite3.connect(db.DB_PATH)
+                                        c = conn.cursor()
+                                        c.execute(
+                                            "DELETE FROM itinerary_items WHERE trip_id = ?",
+                                            (trip_id_modal,),
                                         )
+                                        conn.commit()
+                                        conn.close()
 
-                                    st.success("✅ Trip updated successfully!")
-                                    st.session_state.pop(
-                                        f"modal_stops_{trip_id_modal}", None
-                                    )
-                                    st.session_state.pop(
-                                        f"modal_items_{trip_id_modal}", None
-                                    )
-                                    st.rerun()
+                                        for item in st.session_state[
+                                            f"modal_items_{trip_id_modal}"
+                                        ]:
+                                            if (
+                                                item["cost_currency"]
+                                                not in valid_currencies
+                                            ):
+                                                item["cost_currency"] = (
+                                                    new_display_currency
+                                                )
+                                            db.add_itinerary_item(
+                                                trip_id_modal,
+                                                item["item_type"],
+                                                item["description"],
+                                                item["datetime_start"],
+                                                item["datetime_end"],
+                                                item.get("location", ""),
+                                                item.get("cost", 0),
+                                                item.get("confirmation_code", ""),
+                                                item.get("notes", ""),
+                                                item.get("is_confirmed", 0),
+                                                item["cost_currency"],
+                                                item.get("exchange_rate_snapshot", 1.0),
+                                            )
 
-                            # Stops management
+                                        st.success("✅ Trip updated successfully!")
+                                        st.session_state.pop(
+                                            f"modal_stops_{trip_id_modal}", None
+                                        )
+                                        st.session_state.pop(
+                                            f"modal_items_{trip_id_modal}", None
+                                        )
+                                        st.rerun()
+
+                            # ---- Stops management (outside form) ----
                             st.write("**📍 Stops**")
                             stops = st.session_state[f"modal_stops_{trip_id_modal}"]
                             for idx, stop in enumerate(stops):
@@ -1835,14 +1876,15 @@ with tab3:
                                 with col_s4:
                                     st.write(stop.get("notes", "")[:30])
                                 with col_s5:
-                                    if st.button(
-                                        "🗑️",
-                                        key=f"modal_del_stop_{trip_id_modal}_{idx}",
-                                    ):
-                                        st.session_state[
-                                            f"modal_stops_{trip_id_modal}"
-                                        ].pop(idx)
-                                        st.rerun()
+                                    if not is_locked:
+                                        if st.button(
+                                            "🗑️",
+                                            key=f"modal_del_stop_{trip_id_modal}_{idx}",
+                                        ):
+                                            st.session_state[
+                                                f"modal_stops_{trip_id_modal}"
+                                            ].pop(idx)
+                                            st.rerun()
 
                             with st.expander("➕ Add Stop"):
                                 col_sc1, col_sc2 = st.columns(2)
@@ -1850,23 +1892,27 @@ with tab3:
                                     new_stop_city = st.text_input(
                                         "City*",
                                         key=f"modal_new_stop_city_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 with col_sc2:
                                     new_stop_country = st.selectbox(
                                         "Country",
                                         options=[""] + country_list,
                                         key=f"modal_new_stop_country_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 col_sr, col_sn = st.columns(2)
                                 with col_sr:
                                     new_stop_region = st.text_input(
                                         "Region",
                                         key=f"modal_new_stop_region_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 with col_sn:
                                     new_stop_notes = st.text_input(
                                         "Notes",
                                         key=f"modal_new_stop_notes_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 col_ss, col_se = st.columns(2)
                                 with col_ss:
@@ -1874,40 +1920,44 @@ with tab3:
                                         "Start Date*",
                                         value=datetime.now(),
                                         key=f"modal_new_stop_start_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                 with col_se:
                                     new_stop_end = st.date_input(
                                         "End Date*",
                                         value=datetime.now(),
                                         key=f"modal_new_stop_end_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
-                                if st.button(
-                                    "➕ Add Stop", key=f"modal_add_stop_{trip_id_modal}"
-                                ):
-                                    if (
-                                        new_stop_city
-                                        and new_stop_start
-                                        and new_stop_end
+                                if not is_locked:
+                                    if st.button(
+                                        "➕ Add Stop",
+                                        key=f"modal_add_stop_{trip_id_modal}",
                                     ):
-                                        st.session_state[
-                                            f"modal_stops_{trip_id_modal}"
-                                        ].append(
-                                            {
-                                                "city": new_stop_city,
-                                                "country": new_stop_country,
-                                                "region": new_stop_region,
-                                                "start_date": new_stop_start.isoformat(),
-                                                "end_date": new_stop_end.isoformat(),
-                                                "notes": new_stop_notes,
-                                            }
-                                        )
-                                        st.rerun()
-                                    else:
-                                        st.warning(
-                                            "City, Start Date, and End Date are required."
-                                        )
+                                        if (
+                                            new_stop_city
+                                            and new_stop_start
+                                            and new_stop_end
+                                        ):
+                                            st.session_state[
+                                                f"modal_stops_{trip_id_modal}"
+                                            ].append(
+                                                {
+                                                    "city": new_stop_city,
+                                                    "country": new_stop_country,
+                                                    "region": new_stop_region,
+                                                    "start_date": new_stop_start.isoformat(),
+                                                    "end_date": new_stop_end.isoformat(),
+                                                    "notes": new_stop_notes,
+                                                }
+                                            )
+                                            st.rerun()
+                                        else:
+                                            st.warning(
+                                                "City, Start Date, and End Date are required."
+                                            )
 
-                            # Items management
+                            # ---- Items management (outside form) ----
                             st.write("**📋 Itinerary Items**")
                             display_cur_modal = trip_modal_data.get(
                                 "display_currency", "USD"
@@ -1929,25 +1979,31 @@ with tab3:
                                         f"{item.get('cost',0):.2f} {item.get('cost_currency','USD')}"
                                     )
                                 with col_i3:
-                                    if st.button(
-                                        "✏️",
-                                        key=f"modal_edit_item_{trip_id_modal}_{idx}",
-                                    ):
-                                        st.session_state[
-                                            f"modal_editing_item_{trip_id_modal}_{idx}"
-                                        ] = True
+                                    if not is_locked:
+                                        if st.button(
+                                            "✏️",
+                                            key=f"modal_edit_item_{trip_id_modal}_{idx}",
+                                        ):
+                                            st.session_state[
+                                                f"modal_editing_item_{trip_id_modal}_{idx}"
+                                            ] = True
                                 with col_i4:
-                                    if st.button(
-                                        "🗑️",
-                                        key=f"modal_del_item_{trip_id_modal}_{idx}",
-                                    ):
-                                        st.session_state[
-                                            f"modal_items_{trip_id_modal}"
-                                        ].pop(idx)
-                                        st.rerun()
+                                    if not is_locked:
+                                        if st.button(
+                                            "🗑️",
+                                            key=f"modal_del_item_{trip_id_modal}_{idx}",
+                                        ):
+                                            st.session_state[
+                                                f"modal_items_{trip_id_modal}"
+                                            ].pop(idx)
+                                            st.rerun()
 
-                                if st.session_state.get(
-                                    f"modal_editing_item_{trip_id_modal}_{idx}", False
+                                if (
+                                    st.session_state.get(
+                                        f"modal_editing_item_{trip_id_modal}_{idx}",
+                                        False,
+                                    )
+                                    and not is_locked
                                 ):
                                     with st.expander(
                                         f"Edit Item: {item['description']}",
@@ -2093,34 +2149,42 @@ with tab3:
                                             ]
                                         ),
                                         key=f"modal_n_type_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     n_desc = st.text_input(
                                         "Description",
                                         key=f"modal_n_desc_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     n_start = st.datetime_input(
                                         "Start",
                                         value=datetime.now(),
                                         key=f"modal_n_start_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     n_end = st.datetime_input(
                                         "End",
                                         value=datetime.now(),
                                         key=f"modal_n_end_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     n_loc = st.text_input(
-                                        "Location", key=f"modal_n_loc_{trip_id_modal}"
+                                        "Location",
+                                        key=f"modal_n_loc_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     n_cost = st.number_input(
                                         "Cost",
                                         min_value=0.0,
                                         value=0.0,
                                         key=f"modal_n_cost_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     n_currency = st.selectbox(
                                         "Currency",
                                         options=valid_currency_options,
                                         key=f"modal_n_currency_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     n_rate = st.number_input(
                                         "Exchange Rate (1 base currency = X this currency)",
@@ -2128,6 +2192,7 @@ with tab3:
                                         step=0.01,
                                         value=1.0,
                                         key=f"modal_n_rate_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     st.caption(
                                         "💡 [Check current rates on XE.com](https://www.xe.com)"
@@ -2135,42 +2200,123 @@ with tab3:
                                     n_confirmed = st.checkbox(
                                         "Confirmed",
                                         key=f"modal_n_confirmed_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
                                     n_notes = st.text_area(
-                                        "Notes", key=f"modal_n_notes_{trip_id_modal}"
+                                        "Notes",
+                                        key=f"modal_n_notes_{trip_id_modal}",
+                                        disabled=is_locked,
                                     )
-                                    if st.form_submit_button("➕ Add Item"):
-                                        if n_desc and n_start:
-                                            st.session_state[
-                                                f"modal_items_{trip_id_modal}"
-                                            ].append(
-                                                {
-                                                    "item_type": n_type,
-                                                    "description": n_desc,
-                                                    "datetime_start": n_start.isoformat(),
-                                                    "datetime_end": (
-                                                        n_end.isoformat()
-                                                        if n_end
-                                                        else None
-                                                    ),
-                                                    "location": n_loc,
-                                                    "cost": n_cost,
-                                                    "cost_currency": n_currency,
-                                                    "exchange_rate_snapshot": n_rate,
-                                                    "is_confirmed": (
-                                                        1 if n_confirmed else 0
-                                                    ),
-                                                    "confirmation_code": "",
-                                                    "notes": n_notes,
-                                                }
-                                            )
-                                            st.rerun()
-                                        else:
-                                            st.warning(
-                                                "Description and Start Time are required."
-                                            )
+                                    if not is_locked:
+                                        if st.form_submit_button("➕ Add Item"):
+                                            if n_desc and n_start:
+                                                st.session_state[
+                                                    f"modal_items_{trip_id_modal}"
+                                                ].append(
+                                                    {
+                                                        "item_type": n_type,
+                                                        "description": n_desc,
+                                                        "datetime_start": n_start.isoformat(),
+                                                        "datetime_end": (
+                                                            n_end.isoformat()
+                                                            if n_end
+                                                            else None
+                                                        ),
+                                                        "location": n_loc,
+                                                        "cost": n_cost,
+                                                        "cost_currency": n_currency,
+                                                        "exchange_rate_snapshot": n_rate,
+                                                        "is_confirmed": (
+                                                            1 if n_confirmed else 0
+                                                        ),
+                                                        "confirmation_code": "",
+                                                        "notes": n_notes,
+                                                    }
+                                                )
+                                                st.rerun()
+                                            else:
+                                                st.warning(
+                                                    "Description and Start Time are required."
+                                                )
+
+                            # ---- Additional actions (Delete, Revert) ----
+                            st.divider()
+                            col_actions_left, col_actions_right = st.columns(2)
+                            with col_actions_left:
+                                # Delete button - with unique key
+                                if not is_locked:
+                                    if st.button(
+                                        "🗑️ Delete This Trip",
+                                        type="primary",
+                                        use_container_width=True,
+                                        key=f"delete_trip_modal_{trip_id_modal}",
+                                    ):
+                                        st.session_state[
+                                            f"confirm_del_modal_{trip_id_modal}"
+                                        ] = True
+                            with col_actions_right:
+                                # Revert to Draft (only if status is approved or final) - with unique key
+                                if current_status in ["approved", "final"]:
+                                    if st.button(
+                                        "↩️ Revert to Draft",
+                                        use_container_width=True,
+                                        key=f"revert_trip_modal_{trip_id_modal}",
+                                    ):
+                                        db.update_trip_status(trip_id_modal, "draft")
+                                        st.success("Trip reverted to Draft status.")
+                                        st.session_state.pop(
+                                            f"modal_stops_{trip_id_modal}", None
+                                        )
+                                        st.session_state.pop(
+                                            f"modal_items_{trip_id_modal}", None
+                                        )
+                                        st.rerun()
+
+                            # Delete confirmation dialog
+                            if st.session_state.get(
+                                f"confirm_del_modal_{trip_id_modal}", False
+                            ):
+                                st.warning("⚠️ Permanently delete this trip?")
+                                col_yes, col_no = st.columns(2)
+                                with col_yes:
+                                    if st.button(
+                                        "✅ Yes, Delete",
+                                        key=f"confirm_del_modal_yes_{trip_id_modal}",
+                                    ):
+                                        db.delete_trip(trip_id_modal)
+                                        st.session_state.pop(
+                                            f"modal_stops_{trip_id_modal}", None
+                                        )
+                                        st.session_state.pop(
+                                            f"modal_items_{trip_id_modal}", None
+                                        )
+                                        st.session_state.pop(
+                                            f"confirm_del_modal_{trip_id_modal}", None
+                                        )
+                                        st.success("Trip deleted.")
+                                        st.rerun()
+                                with col_no:
+                                    if st.button(
+                                        "❌ Cancel",
+                                        key=f"confirm_del_modal_no_{trip_id_modal}",
+                                    ):
+                                        st.session_state.pop(
+                                            f"confirm_del_modal_{trip_id_modal}", None
+                                        )
+                                        st.rerun()
+
+                            # Close button for popover (already has unique key)
+                            if st.button("Close", key=f"close_modal_{trip_id_modal}"):
+                                st.session_state.pop(
+                                    f"modal_stops_{trip_id_modal}", None
+                                )
+                                st.session_state.pop(
+                                    f"modal_items_{trip_id_modal}", None
+                                )
+                                st.rerun()
                         else:
                             st.warning("Trip data not found.")
+
                 with cols[10]:
                     if st.button("🗑️", key=f"del_trip_dash_{trip_id}"):
                         st.session_state[f"confirm_del_trip_{trip_id}"] = True
@@ -2228,9 +2374,9 @@ with tab3:
             for row in rows_with_currency:
                 writer.writerow(row)
             st.download_button(
-                "📊 Export Dashboard CSV",
+                "📊 Export Trips CSV",
                 data=output.getvalue().encode("utf-8"),
-                file_name=f"spending_summary_{datetime.now().strftime('%Y%m%d')}.csv",
+                file_name=f"trips_summary_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
                 key="dash_csv_tab",
             )
@@ -2256,13 +2402,13 @@ with tab3:
         with col_exp3:
             if st.button("📊 Export to Excel", key="dash_excel_tab"):
                 excel_stream = export_spending_to_excel(
-                    summary_data, get_currency_symbol("USD"), "USD", base_currency="USD"
+                    summary_data, get_currency_symbol("USD"), "USD"
                 )
                 if excel_stream:
                     st.download_button(
                         "⬇️ Download .xlsx",
                         data=excel_stream,
-                        file_name=f"spending_summary_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        file_name=f"trips_summary_{datetime.now().strftime('%Y%m%d')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="dash_excel_download_tab",
                     )

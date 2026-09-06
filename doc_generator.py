@@ -8,9 +8,12 @@ from datetime import datetime
 
 def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
     """
-    Generate a Word document with the executive profile.
+    Generate a Word document with the executive profile in a bulleted list.
     """
     doc = Document()
+    doc.add_heading("Executive Profile", 0)
+
+    # Personal Information as bulleted list
     doc.add_heading("Personal Information", level=1)
     fields = [
         ("Name", profile_data.get("Name") or ""),
@@ -28,16 +31,15 @@ def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
         ("TSA PreCheck", profile_data.get("TSA PreCheck") or ""),
         ("Meal Preference", profile_data.get("Meal Preference") or ""),
     ]
-
     for field, value in fields:
         if value:
-            doc.add_paragraph(f"{field}: {value}", style='List Bullet')
+            doc.add_paragraph(f"{field}: {value}", style="List Bullet")
 
     # Memberships
     doc.add_heading("Memberships", level=1)
     mems = profile_data.get("Memberships", "")
     if mems:
-        doc.add_paragraph(mems)
+        doc.add_paragraph(mems, style="List Bullet")
     else:
         doc.add_paragraph("No memberships recorded.")
 
@@ -74,7 +76,7 @@ def generate_itinerary_doc(
     # Trip overview
     doc.add_heading("Trip Overview", level=1)
     table = doc.add_table(rows=1, cols=2)
-    table.style = 'Table Grid'
+    table.style = "Table Grid"
     hdr_cells = table.rows[0].cells
     hdr_cells[0].text = "Detail"
     hdr_cells[1].text = "Value"
@@ -82,7 +84,7 @@ def generate_itinerary_doc(
     dep_parts = [p for p in [dep_city, dep_region, dep_country] if p]
     departure_display = ", ".join(dep_parts) if dep_parts else "Not specified"
     rows_data = [
-        ("Executive", exec_data['name']),
+        ("Executive", exec_data["name"]),
         ("Departure", departure_display),
         ("Budget", f"{display_symbol}{trip_budget:.2f} {display_currency}"),
         ("Base Currency", base_currency),
@@ -106,14 +108,14 @@ def generate_itinerary_doc(
                 loc += f" ({', '.join(loc_parts)})"
             doc.add_paragraph(
                 f"• {loc}: {stop['start_date']} to {stop['end_date']}",
-                style='List Bullet'
+                style="List Bullet",
             )
 
     # Itinerary items
     if items:
         doc.add_heading("Itinerary", level=1)
         table = doc.add_table(rows=1, cols=5)
-        table.style = 'Table Grid'
+        table.style = "Table Grid"
         hdr_cells = table.rows[0].cells
         headers = ["Date/Time", "Type", "Description", "Location", "Cost"]
         for i, h in enumerate(headers):
@@ -122,13 +124,13 @@ def generate_itinerary_doc(
 
         for item in items:
             row_cells = table.add_row().cells
-            start_dt = datetime.fromisoformat(item['datetime_start'])
+            start_dt = datetime.fromisoformat(item["datetime_start"])
             row_cells[0].text = start_dt.strftime("%Y-%m-%d %H:%M")
-            row_cells[1].text = item.get('item_type', '')
-            row_cells[2].text = item.get('description', '')
-            row_cells[3].text = item.get('location', '')
-            cost = item.get('cost', 0)
-            currency = item.get('cost_currency', 'USD')
+            row_cells[1].text = item.get("item_type", "")
+            row_cells[2].text = item.get("description", "")
+            row_cells[3].text = item.get("location", "")
+            cost = item.get("cost", 0)
+            currency = item.get("cost_currency", "USD")
             row_cells[4].text = f"{cost:.2f} {currency}"
 
     doc.add_page_break()
@@ -159,13 +161,15 @@ def generate_expense_report_doc(
     doc.add_heading(f"Expense Report: {trip_purpose}", 0)
 
     # Summary
-    total_spent = sum(item.get('cost', 0) for item in items)
-    confirmed_spent = sum(item.get('cost', 0) for item in items if item.get('is_confirmed', 0))
+    total_spent = sum(item.get("cost", 0) for item in items)
+    confirmed_spent = sum(
+        item.get("cost", 0) for item in items if item.get("is_confirmed", 0)
+    )
     estimated_spent = total_spent - confirmed_spent
 
     doc.add_heading("Summary", level=1)
     table = doc.add_table(rows=1, cols=2)
-    table.style = 'Table Grid'
+    table.style = "Table Grid"
     hdr_cells = table.rows[0].cells
     hdr_cells[0].text = "Metric"
     hdr_cells[1].text = "Value"
@@ -173,9 +177,18 @@ def generate_expense_report_doc(
     rows_data = [
         ("Total Budget", f"{display_symbol}{trip_budget:.2f} {base_currency}"),
         ("Total Spent", f"{display_symbol}{total_spent:.2f} {base_currency}"),
-        ("Confirmed (Booked)", f"{display_symbol}{confirmed_spent:.2f} {base_currency}"),
-        ("Estimated (Quoted)", f"{display_symbol}{estimated_spent:.2f} {base_currency}"),
-        ("Remaining", f"{display_symbol}{trip_budget - total_spent:.2f} {base_currency}"),
+        (
+            "Confirmed (Booked)",
+            f"{display_symbol}{confirmed_spent:.2f} {base_currency}",
+        ),
+        (
+            "Estimated (Quoted)",
+            f"{display_symbol}{estimated_spent:.2f} {base_currency}",
+        ),
+        (
+            "Remaining",
+            f"{display_symbol}{trip_budget - total_spent:.2f} {base_currency}",
+        ),
     ]
     for label, value in rows_data:
         row_cells = table.add_row().cells
@@ -186,7 +199,7 @@ def generate_expense_report_doc(
     doc.add_heading("Expense Details", level=1)
     if items:
         table = doc.add_table(rows=1, cols=6)
-        table.style = 'Table Grid'
+        table.style = "Table Grid"
         hdr_cells = table.rows[0].cells
         headers = ["Date/Time", "Type", "Description", "Location", "Cost", "Confirmed"]
         for i, h in enumerate(headers):
@@ -195,15 +208,15 @@ def generate_expense_report_doc(
 
         for item in items:
             row_cells = table.add_row().cells
-            start_dt = datetime.fromisoformat(item['datetime_start'])
+            start_dt = datetime.fromisoformat(item["datetime_start"])
             row_cells[0].text = start_dt.strftime("%Y-%m-%d %H:%M")
-            row_cells[1].text = item.get('item_type', '')
-            row_cells[2].text = item.get('description', '')
-            row_cells[3].text = item.get('location', '')
-            cost = item.get('cost', 0)
-            currency = item.get('cost_currency', 'USD')
+            row_cells[1].text = item.get("item_type", "")
+            row_cells[2].text = item.get("description", "")
+            row_cells[3].text = item.get("location", "")
+            cost = item.get("cost", 0)
+            currency = item.get("cost_currency", "USD")
             row_cells[4].text = f"{cost:.2f} {currency}"
-            row_cells[5].text = "✅" if item.get('is_confirmed', 0) else "❌"
+            row_cells[5].text = "✅" if item.get("is_confirmed", 0) else "❌"
     else:
         doc.add_paragraph("No expenses recorded.")
 
@@ -216,10 +229,17 @@ def generate_expense_report_doc(
 
 
 def generate_spending_report_doc(
-    filter_label, summary_data, start_filter, end_filter, currency_symbol, base_currency="USD"
+    filter_label,
+    summary_data,
+    start_filter,
+    end_filter,
+    currency_symbol,
+    base_currency="USD",
 ):
     """
     Generate a Word document with spending summary report.
+    Numbers are shown without symbols, followed by the currency code.
+    A separate column indicates the base currency of each trip.
     """
     doc = Document()
     doc.add_heading("Spending Report", 0)
@@ -231,30 +251,42 @@ def generate_spending_report_doc(
         doc.add_paragraph(f"Start Date: {start_filter}")
     if end_filter:
         doc.add_paragraph(f"End Date: {end_filter}")
-    doc.add_paragraph(f"Base Currency: {base_currency}")
+    doc.add_paragraph(f"Base Currency (for numeric columns): {base_currency}")
 
     # Summary table
-    doc.add_heading("Summary", level=1)
+    doc.add_heading("Trip Breakdown", level=1)
     if summary_data:
-        table = doc.add_table(rows=1, cols=8)
-        table.style = 'Table Grid'
+        table = doc.add_table(rows=1, cols=7)
+        table.style = "Table Grid"
         hdr_cells = table.rows[0].cells
-        headers = ["Executive", "Destination", "Budget", "Total Spent", "Confirmed", "Estimated", "Status", "Currency"]
+        headers = [
+            "Executive",
+            "Destination",
+            "Budget",
+            "Total Spent",
+            "Confirmed",
+            "Status",
+            "Currency",
+        ]
         for i, h in enumerate(headers):
             hdr_cells[i].text = h
             hdr_cells[i].paragraphs[0].runs[0].bold = True
 
         for trip in summary_data:
             row_cells = table.add_row().cells
-            row_cells[0].text = trip.get('executive_name', '')
-            row_cells[1].text = trip.get('destination', '')
-            row_cells[2].text = f"{currency_symbol}{trip.get('budget', 0):.2f}"
-            row_cells[3].text = f"{currency_symbol}{trip.get('total_spent', 0):.2f}"
-            row_cells[4].text = f"{currency_symbol}{trip.get('confirmed_spent', 0):.2f}"
-            row_cells[5].text = f"{currency_symbol}{trip.get('estimated_spent', 0):.2f}"
-            row_cells[6].text = trip.get('status', '').title()
-            row_cells[7].text = trip.get('base_currency', '').title()
-            
+            row_cells[0].text = trip.get("executive_name", "")
+            row_cells[1].text = trip.get("destination", "")
+            row_cells[2].text = (
+                f"{trip.get('budget', 0):.2f} {trip.get('base_currency', 'USD')}"
+            )
+            row_cells[3].text = (
+                f"{trip.get('total_spent', 0):.2f} {trip.get('base_currency', 'USD')}"
+            )
+            row_cells[4].text = (
+                f"{trip.get('confirmed_spent', 0):.2f} {trip.get('base_currency', 'USD')}"
+            )
+            row_cells[5].text = trip.get("status", "").title()
+            row_cells[6].text = trip.get("base_currency", "USD")
     else:
         doc.add_paragraph("No trips found.")
 
@@ -269,6 +301,7 @@ def generate_spending_report_doc(
 def generate_all_executive_profiles_doc(profiles):
     """
     Generate a Word document with a list of all executive profiles.
+    Each executive appears as a heading followed by a bulleted list.
     """
     doc = Document()
     doc.add_heading("All Executive Profiles", 0)
@@ -300,5 +333,3 @@ def generate_all_executive_profiles_doc(profiles):
     doc.save(file_stream)
     file_stream.seek(0)
     return file_stream
-
-
