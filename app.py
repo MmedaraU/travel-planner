@@ -1084,12 +1084,14 @@ with tab1:
                             value=float(item.get("cost", 0)),
                             key=f"create_e_cost_{idx}",
                         )
+                        # Use trip's display and base currencies
+                        valid_currencies = [trip_display_currency, trip_base_currency]
+                        # Ensure the current currency is in the list; if not, default to first
+                        default_index = valid_currencies.index(item.get("cost_currency", trip_display_currency)) if item.get("cost_currency", trip_display_currency) in valid_currencies else 0
                         e_currency = st.selectbox(
                             "Currency",
-                            options=["USD", "EUR", "GBP", "NGN", "JPY", "BRL"],
-                            index=["USD", "EUR", "GBP", "NGN", "JPY", "BRL"].index(
-                                item.get("cost_currency", "USD")
-                            ),
+                            options=valid_currencies,
+                            index=default_index,
                             key=f"create_e_currency_{idx}",
                         )
                         e_rate = st.number_input(
@@ -1152,9 +1154,10 @@ with tab1:
             n_cost = st.number_input(
                 "Cost", min_value=0.0, value=0.0, key="create_n_cost"
             )
+            # Get display and base currency from the trip setup fields (already defined)
             n_currency = st.selectbox(
                 "Currency",
-                options=["USD", "EUR", "GBP", "NGN", "JPY", "BRL"],
+                options=[trip_display_currency, trip_base_currency],
                 key="create_n_currency",
             )
             n_rate = st.number_input(
