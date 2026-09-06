@@ -32,21 +32,15 @@ def migrate_db():
     existing_items = [row[1] for row in c.fetchall()]
 
     if "is_confirmed" not in existing_items:
-        c.execute(
-            "ALTER TABLE itinerary_items ADD COLUMN is_confirmed INTEGER DEFAULT 0"
-        )
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN is_confirmed INTEGER DEFAULT 0")
     if "receipt_path" not in existing_items:
         c.execute("ALTER TABLE itinerary_items ADD COLUMN receipt_path TEXT")
     if "cost_currency" not in existing_items:
-        c.execute(
-            "ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'"
-        )
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'")
     if "exchange_rate_snapshot" not in existing_items:
-        c.execute(
-            "ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0"
-        )
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0")
 
-    # --- Columns for 'executives' table (new preferences) ---
+    # --- Columns for 'executives' table ---
     c.execute("PRAGMA table_info(executives)")
     existing_execs = [row[1] for row in c.fetchall()]
 
@@ -60,17 +54,45 @@ def migrate_db():
         if col_name not in existing_execs:
             c.execute(f"ALTER TABLE executives ADD COLUMN {col_name} {col_type}")
 
-    # --- Create executive_memberships table ---
-    c.execute("""CREATE TABLE IF NOT EXISTS executive_memberships (
+    # --- Add columns to executive_memberships ---
+    c.execute("PRAGMA table_info(executive_memberships)")
+    existing_membership_cols = [row[1] for row in c.fetchall()]
+    new_membership_cols = [
+        ("tier", "TEXT"),
+        ("alliance", "TEXT"),
+        ("airport_code", "TEXT"),
+        ("notes", "TEXT"),
+    ]
+    for col_name, col_type in new_membership_cols:
+        if col_name not in existing_membership_cols:
+            c.execute(f"ALTER TABLE executive_memberships ADD COLUMN {col_name} {col_type}")
+
+    # --- Create executive_passports table ---
+    c.execute("""CREATE TABLE IF NOT EXISTS executive_passports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         exec_id INTEGER NOT NULL,
-        category TEXT NOT NULL,  -- 'airline', 'hotel', 'car'
-        program_name TEXT NOT NULL,
-        membership_number TEXT NOT NULL,
+        country TEXT NOT NULL,
+        passport_number TEXT NOT NULL,
+        expiry_date TEXT,
+        issued_date TEXT,
+        notes TEXT,
         FOREIGN KEY (exec_id) REFERENCES executives(id) ON DELETE CASCADE
     )""")
 
-    # --- Create trip_stops table (for multi‑city trips) ---
+    # --- Ensure other tables exist ---
+    c.execute("""CREATE TABLE IF NOT EXISTS executive_memberships (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        exec_id INTEGER NOT NULL,
+        category TEXT NOT NULL,
+        program_name TEXT NOT NULL,
+        membership_number TEXT NOT NULL,
+        tier TEXT,
+        alliance TEXT,
+        airport_code TEXT,
+        notes TEXT,
+        FOREIGN KEY (exec_id) REFERENCES executives(id) ON DELETE CASCADE
+    )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS trip_stops (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         trip_id INTEGER NOT NULL,
@@ -84,20 +106,17 @@ def migrate_db():
         FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
     )""")
 
-    # --- Create categories table (for custom itinerary item types) ---
     c.execute("""CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE NOT NULL
     )""")
 
-    # --- Seed default categories if table is empty ---
     c.execute("SELECT COUNT(*) FROM categories")
     if c.fetchone()[0] == 0:
         default_cats = ["Flight", "Hotel", "Meeting", "Transport"]
         for cat in default_cats:
             c.execute("INSERT INTO categories (name) VALUES (?)", (cat,))
 
-    # --- NEW: Create trip_templates table ---
     c.execute("""CREATE TABLE IF NOT EXISTS trip_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -108,8 +127,8 @@ def migrate_db():
         departure_country TEXT,
         display_currency TEXT DEFAULT 'USD',
         base_currency TEXT DEFAULT 'USD',
-        stops_json TEXT,  -- JSON array of stops
-        items_json TEXT   -- JSON array of itinerary items
+        stops_json TEXT,
+        items_json TEXT
     )""")
 
     conn.commit()
@@ -121,7 +140,6 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
 
-    # Companies
     c.execute("""CREATE TABLE IF NOT EXISTS companies (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -129,7 +147,6 @@ def init_db():
         policy_notes TEXT
     )""")
 
-    # Executives
     c.execute("""CREATE TABLE IF NOT EXISTS executives (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER,
@@ -140,10 +157,13 @@ def init_db():
         hotel_loyalty TEXT,
         frequent_flyer_number TEXT,
         dietary_restrictions TEXT,
+        passport_number TEXT,
+        preferred_airline TEXT,
+        tsa_precheck TEXT,
+        meal_preference TEXT,
         FOREIGN KEY (company_id) REFERENCES companies(id)
     )""")
 
-    # Trips
     c.execute("""CREATE TABLE IF NOT EXISTS trips (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         exec_id INTEGER,
@@ -153,10 +173,15 @@ def init_db():
         purpose TEXT,
         status TEXT DEFAULT 'draft',
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        budget REAL DEFAULT 0,
+        departure_city TEXT,
+        departure_region TEXT,
+        departure_country TEXT,
+        base_currency TEXT DEFAULT 'USD',
+        display_currency TEXT DEFAULT 'USD',
         FOREIGN KEY (exec_id) REFERENCES executives(id)
     )""")
 
-    # Itinerary Items
     c.execute("""CREATE TABLE IF NOT EXISTS itinerary_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         trip_id INTEGER,
@@ -168,13 +193,15 @@ def init_db():
         cost REAL,
         confirmation_code TEXT,
         notes TEXT,
+        is_confirmed INTEGER DEFAULT 0,
+        receipt_path TEXT,
+        cost_currency TEXT DEFAULT 'USD',
+        exchange_rate_snapshot REAL DEFAULT 1.0,
         FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
     )""")
 
     conn.commit()
     conn.close()
-
-    # Run migrations to add new columns and tables
     migrate_db()
 
 
@@ -369,17 +396,52 @@ def update_executive(
 
 
 # =========================================================
-# EXECUTIVE MEMBERSHIPS
+# EXECUTIVE PASSPORTS
 # =========================================================
-def add_membership(exec_id, category, program_name, membership_number):
+def add_passport(exec_id, country, passport_number, expiry_date=None, issued_date=None, notes=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        """
-        INSERT INTO executive_memberships (exec_id, category, program_name, membership_number)
-        VALUES (?, ?, ?, ?)
-    """,
-        (exec_id, category, program_name, membership_number),
+        """INSERT INTO executive_passports 
+           (exec_id, country, passport_number, expiry_date, issued_date, notes)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (exec_id, country, passport_number, expiry_date, issued_date, notes)
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_passports(exec_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM executive_passports WHERE exec_id = ? ORDER BY country", (exec_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def delete_passport(passport_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM executive_passports WHERE id = ?", (passport_id,))
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# EXECUTIVE MEMBERSHIPS
+# =========================================================
+def add_membership(exec_id, category, program_name, membership_number, tier=None, alliance=None, airport_code=None, notes=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO executive_memberships 
+           (exec_id, category, program_name, membership_number, tier, alliance, airport_code, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (exec_id, category, program_name, membership_number, tier, alliance, airport_code, notes)
     )
     conn.commit()
     new_id = c.lastrowid
@@ -475,16 +537,17 @@ def create_or_get_trip(
     purpose,
     display_currency="USD",
     base_currency="USD",
+    status="draft",
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
         """
         SELECT id FROM trips
-        WHERE exec_id = ? AND destination = ? AND start_date = ? AND status = 'draft'
+        WHERE exec_id = ? AND destination = ? AND start_date = ? AND status = ?
         ORDER BY created_at DESC LIMIT 1
     """,
-        (exec_id, destination_summary, start_date),
+        (exec_id, destination_summary, start_date, status),
     )
     row = c.fetchone()
     if row:
@@ -494,7 +557,7 @@ def create_or_get_trip(
             """
             INSERT INTO trips (exec_id, destination, start_date, end_date, purpose, status,
                                display_currency, base_currency)
-            VALUES (?, ?, ?, ?, ?, 'draft', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 exec_id,
@@ -502,6 +565,7 @@ def create_or_get_trip(
                 start_date,
                 end_date,
                 purpose,
+                status,
                 display_currency,
                 base_currency,
             ),
@@ -608,6 +672,18 @@ def delete_trip(trip_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_trips(trip_ids):
+    """Delete multiple trips by their IDs."""
+    if not trip_ids:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    placeholders = ','.join('?' * len(trip_ids))
+    c.execute(f"DELETE FROM trips WHERE id IN ({placeholders})", trip_ids)
     conn.commit()
     conn.close()
 
@@ -1022,6 +1098,7 @@ def delete_executive(exec_id, force=False):
         c.execute("DELETE FROM trips WHERE exec_id = ?", (exec_id,))
 
     c.execute("DELETE FROM executive_memberships WHERE exec_id = ?", (exec_id,))
+    c.execute("DELETE FROM executive_passports WHERE exec_id = ?", (exec_id,))
     c.execute("DELETE FROM executives WHERE id = ?", (exec_id,))
 
     conn.commit()
@@ -1189,7 +1266,7 @@ def merge_database_data(data):
                     1 if item.get("is_confirmed") else 0,
                     item.get("confirmation_code"),
                     item.get("notes"),
-                    1.0,  # default snapshot
+                    1.0,
                 ),
             )
             added_items += 1
@@ -1255,12 +1332,7 @@ def import_executives_from_csv(reader):
 # TRIP TEMPLATES
 # =========================================================
 def save_trip_as_template(trip_id, template_name, description=None):
-    """
-    Save an existing trip's structure as a template.
-    Returns the new template ID.
-    """
     import json
-    from datetime import datetime
 
     trip = get_trip(trip_id)
     if not trip:
@@ -1393,7 +1465,6 @@ def apply_trip_template(
         template.get("base_currency", "USD"),
     )
 
-    # Update budget and departure
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("UPDATE trips SET budget = ? WHERE id = ?", (budget, trip_id))
@@ -1407,7 +1478,6 @@ def apply_trip_template(
         template.get("departure_country", ""),
     )
 
-    # Add stops
     stop_order = 0
     for stop in stops:
         stop_order += 1
@@ -1422,7 +1492,6 @@ def apply_trip_template(
             stop.get("notes", ""),
         )
 
-    # Add items
     for item in template.get("items", []):
         add_itinerary_item(
             trip_id,
