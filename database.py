@@ -568,7 +568,47 @@ def delete_all_memberships(exec_id):
     conn.commit()
     conn.close()
 
+# =========================================================
+# EXECUTIVE MEMBERSHIPS (extended)
+# =========================================================
+def update_membership(
+    membership_id,
+    category,
+    program_name,
+    membership_number,
+    tier=None,
+    alliance=None,
+    airport_code=None,
+    notes=None,
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """UPDATE executive_memberships 
+           SET category = ?, program_name = ?, membership_number = ?, 
+               tier = ?, alliance = ?, airport_code = ?, notes = ?
+           WHERE id = ?""",
+        (category, program_name, membership_number, tier, alliance, airport_code, notes, membership_id),
+    )
+    conn.commit()
+    conn.close()
 
+
+# =========================================================
+# EXECUTIVE PASSPORTS (extended)
+# =========================================================
+def update_passport(passport_id, country, passport_number, expiry_date=None, issued_date=None, notes=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """UPDATE executive_passports 
+           SET country = ?, passport_number = ?, expiry_date = ?, issued_date = ?, notes = ?
+           WHERE id = ?""",
+        (country, passport_number, expiry_date, issued_date, notes, passport_id),
+    )
+    conn.commit()
+    conn.close()
+    
 # =========================================================
 # CATEGORY MANAGEMENT
 # =========================================================

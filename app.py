@@ -411,7 +411,7 @@ if st.session_state.get("show_full_profile", False):
             passports = db.get_passports(exec_id)
             if passports:
                 for p in passports:
-                    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
                     with col1:
                         st.write(f"{p['country']}: {p['passport_number']}")
                     with col2:
@@ -419,9 +419,86 @@ if st.session_state.get("show_full_profile", False):
                     with col3:
                         st.write((p.get("notes") or "")[:30])
                     with col4:
+                        if st.button("✏️", key=f"edit_pass_{p['id']}"):
+                            st.session_state[f"editing_passport_{p['id']}"] = True
+                    with col5:
                         if st.button("🗑️", key=f"del_pass_edit_{p['id']}"):
                             db.delete_passport(p["id"])
                             st.rerun()
+
+                    # ---- Edit Passport Form ----
+                    if st.session_state.get(f"editing_passport_{p['id']}", False):
+                        with st.expander(
+                            f"Edit Passport: {p['country']}", expanded=True
+                        ):
+                            with st.form(key=f"edit_pass_form_{p['id']}"):
+                                edit_country = st.text_input(
+                                    "Country",
+                                    value=p["country"],
+                                    key=f"edit_pass_country_{p['id']}",
+                                )
+                                edit_pass_num = st.text_input(
+                                    "Passport Number",
+                                    value=p["passport_number"],
+                                    key=f"edit_pass_num_{p['id']}",
+                                )
+                                edit_expiry = st.date_input(
+                                    "Expiry Date",
+                                    value=(
+                                        datetime.fromisoformat(p["expiry_date"])
+                                        if p.get("expiry_date")
+                                        else None
+                                    ),
+                                    key=f"edit_pass_expiry_{p['id']}",
+                                )
+                                edit_issued = st.date_input(
+                                    "Issued Date",
+                                    value=(
+                                        datetime.fromisoformat(p["issued_date"])
+                                        if p.get("issued_date")
+                                        else None
+                                    ),
+                                    key=f"edit_pass_issued_{p['id']}",
+                                )
+                                edit_notes = st.text_area(
+                                    "Notes",
+                                    value=p.get("notes", ""),
+                                    key=f"edit_pass_notes_{p['id']}",
+                                )
+                                col_save, col_cancel = st.columns(2)
+                                with col_save:
+                                    if st.form_submit_button("💾 Save"):
+                                        if edit_country and edit_pass_num:
+                                            db.update_passport(
+                                                p["id"],
+                                                edit_country,
+                                                edit_pass_num,
+                                                expiry_date=(
+                                                    edit_expiry.isoformat()
+                                                    if edit_expiry
+                                                    else None
+                                                ),
+                                                issued_date=(
+                                                    edit_issued.isoformat()
+                                                    if edit_issued
+                                                    else None
+                                                ),
+                                                notes=edit_notes,
+                                            )
+                                            st.session_state.pop(
+                                                f"editing_passport_{p['id']}", None
+                                            )
+                                            st.rerun()
+                                        else:
+                                            st.warning(
+                                                "Country and Passport Number are required."
+                                            )
+                                with col_cancel:
+                                    if st.form_submit_button("❌ Cancel"):
+                                        st.session_state.pop(
+                                            f"editing_passport_{p['id']}", None
+                                        )
+                                        st.rerun()
             else:
                 st.caption("No passports added.")
 
@@ -460,7 +537,7 @@ if st.session_state.get("show_full_profile", False):
             mems = db.get_memberships(exec_id)
             if mems:
                 for m in mems:
-                    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                    col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
                     with col1:
                         emoji = (
                             "✈️"
@@ -485,9 +562,112 @@ if st.session_state.get("show_full_profile", False):
                     with col3:
                         st.write((m.get("notes") or "")[:30])
                     with col4:
+                        if st.button("✏️", key=f"edit_mem_{m['id']}"):
+                            st.session_state[f"editing_membership_{m['id']}"] = True
+                    with col5:
                         if st.button("🗑️", key=f"del_mem_edit_{m['id']}"):
                             db.delete_membership(m["id"])
                             st.rerun()
+
+                    # ---- Edit Membership Form ----
+                    if st.session_state.get(f"editing_membership_{m['id']}", False):
+                        with st.expander(
+                            f"Edit Membership: {m['program_name']}", expanded=True
+                        ):
+                            with st.form(key=f"edit_mem_form_{m['id']}"):
+                                edit_cat = st.selectbox(
+                                    "Category",
+                                    ["Airline", "Hotel", "Car Rental"],
+                                    index=["airline", "hotel", "car rental"].index(
+                                        m["category"]
+                                    ),
+                                    key=f"edit_mem_cat_{m['id']}",
+                                )
+                                edit_prog = st.text_input(
+                                    "Program Name",
+                                    value=m["program_name"],
+                                    key=f"edit_mem_prog_{m['id']}",
+                                )
+                                edit_num = st.text_input(
+                                    "Membership Number",
+                                    value=m["membership_number"],
+                                    key=f"edit_mem_num_{m['id']}",
+                                )
+
+                                # Extra fields
+                                with st.expander("More details (optional)"):
+                                    if edit_cat == "Airline":
+                                        edit_tier = st.text_input(
+                                            "Tier",
+                                            value=m.get("tier") or "",
+                                            key=f"edit_mem_tier_{m['id']}",
+                                        )
+                                        edit_alliance = st.text_input(
+                                            "Alliance",
+                                            value=m.get("alliance") or "",
+                                            key=f"edit_mem_alliance_{m['id']}",
+                                        )
+                                        edit_airport = st.text_input(
+                                            "Airport Code",
+                                            value=m.get("airport_code") or "",
+                                            key=f"edit_mem_airport_{m['id']}",
+                                        )
+                                        edit_notes = st.text_area(
+                                            "Notes",
+                                            value=m.get("notes") or "",
+                                            key=f"edit_mem_notes_{m['id']}",
+                                        )
+                                    elif edit_cat == "Hotel":
+                                        edit_tier = st.text_input(
+                                            "Status/Tier",
+                                            value=m.get("tier") or "",
+                                            key=f"edit_mem_tier_{m['id']}",
+                                        )
+                                        edit_notes = st.text_area(
+                                            "Notes",
+                                            value=m.get("notes") or "",
+                                            key=f"edit_mem_notes_{m['id']}",
+                                        )
+                                        edit_alliance = None
+                                        edit_airport = None
+                                    else:  # Car
+                                        edit_notes = st.text_area(
+                                            "Notes",
+                                            value=m.get("notes") or "",
+                                            key=f"edit_mem_notes_{m['id']}",
+                                        )
+                                        edit_tier = None
+                                        edit_alliance = None
+                                        edit_airport = None
+
+                                col_save, col_cancel = st.columns(2)
+                                with col_save:
+                                    if st.form_submit_button("💾 Save"):
+                                        if edit_prog and edit_num:
+                                            db.update_membership(
+                                                m["id"],
+                                                edit_cat.lower(),
+                                                edit_prog,
+                                                edit_num,
+                                                tier=edit_tier,
+                                                alliance=edit_alliance,
+                                                airport_code=edit_airport,
+                                                notes=edit_notes,
+                                            )
+                                            st.session_state.pop(
+                                                f"editing_membership_{m['id']}", None
+                                            )
+                                            st.rerun()
+                                        else:
+                                            st.warning(
+                                                "Program Name and Membership Number are required."
+                                            )
+                                with col_cancel:
+                                    if st.form_submit_button("❌ Cancel"):
+                                        st.session_state.pop(
+                                            f"editing_membership_{m['id']}", None
+                                        )
+                                        st.rerun()
             else:
                 st.caption("No memberships added.")
 
@@ -909,6 +1089,7 @@ with tab1:
         st.write("")  # placeholder
 
     # --- Currencies (only Base Currency) ---
+    st.subheader("💱 Trip Currency")
     base_currency_options = [
         "USD",
         "EUR",
@@ -2499,9 +2680,9 @@ with tab4:
                 with col1:
                     st.write(f"**{comp['name']}**")
                 with col2:
-                    st.write(comp.get('default_cost_center', '') or '—')
+                    st.write(comp.get("default_cost_center", "") or "—")
                 with col3:
-                    st.write(comp.get('policy_notes', '') or '—')
+                    st.write(comp.get("policy_notes", "") or "—")
                 with col4:
                     if st.button("✏️", key=f"edit_comp_{comp_id}"):
                         st.session_state[f"edit_company_{comp_id}"] = True
@@ -2513,14 +2694,30 @@ with tab4:
                 if st.session_state.get(f"edit_company_{comp_id}", False):
                     with st.popover("Edit Company", use_container_width=True):
                         with st.form(key=f"edit_comp_form_{comp_id}"):
-                            edit_name = st.text_input("Company Name*", value=comp['name'], key=f"edit_comp_name_{comp_id}")
-                            edit_cc = st.text_input("Default Cost Center (optional)", value=comp.get('default_cost_center', ''), key=f"edit_comp_cc_{comp_id}")
-                            edit_policy = st.text_area("Policy Notes (optional)", value=comp.get('policy_notes', ''), key=f"edit_comp_policy_{comp_id}")
+                            edit_name = st.text_input(
+                                "Company Name*",
+                                value=comp["name"],
+                                key=f"edit_comp_name_{comp_id}",
+                            )
+                            edit_cc = st.text_input(
+                                "Default Cost Center (optional)",
+                                value=comp.get("default_cost_center", ""),
+                                key=f"edit_comp_cc_{comp_id}",
+                            )
+                            edit_policy = st.text_area(
+                                "Policy Notes (optional)",
+                                value=comp.get("policy_notes", ""),
+                                key=f"edit_comp_policy_{comp_id}",
+                            )
                             if st.form_submit_button("💾 Save Changes"):
                                 if edit_name:
-                                    db.update_company(comp_id, edit_name, edit_cc, edit_policy)
+                                    db.update_company(
+                                        comp_id, edit_name, edit_cc, edit_policy
+                                    )
                                     st.success(f"Company '{edit_name}' updated!")
-                                    st.session_state.pop(f"edit_company_{comp_id}", None)
+                                    st.session_state.pop(
+                                        f"edit_company_{comp_id}", None
+                                    )
                                     st.rerun()
                                 else:
                                     st.warning("Company Name is required.")
@@ -2533,11 +2730,15 @@ with tab4:
                     st.warning(f"⚠️ Permanently delete company '{comp['name']}'?")
                     col_yes, col_no = st.columns(2)
                     with col_yes:
-                        if st.button("✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"):
+                        if st.button(
+                            "✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"
+                        ):
                             success, msg = db.delete_company(comp_id)
                             if success:
                                 st.success(msg)
-                                st.session_state.pop(f"confirm_del_comp_{comp_id}", None)
+                                st.session_state.pop(
+                                    f"confirm_del_comp_{comp_id}", None
+                                )
                                 st.rerun()
                             else:
                                 st.error(msg)
