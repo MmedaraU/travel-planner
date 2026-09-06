@@ -95,12 +95,6 @@ st.markdown(
         border-color: #87CEEB !important;
         box-shadow: 0 0 0 0.2rem rgba(135, 206, 235, 0.4) !important;
     }
-
-    /* Make popovers wider for the edit trip modal */
-    # div[data-testid="stPopover"] {
-    #     max-width: 900px !important;
-    #     width: 900px !important;
-    # }
 </style>
 """,
     unsafe_allow_html=True,
@@ -900,34 +894,21 @@ with tab1:
         key="create_departure_country",
     )
 
-    # --- Budget ---
+    # --- Budget (always in Base Currency) ---
     col_budget1, col_budget2 = st.columns(2)
     with col_budget1:
         budget = st.number_input(
-            "Budget Amount",
+            "Budget Amount (in Base Currency)",
             min_value=0.0,
             step=100.0,
             value=0.0,
             key="create_trip_budget",
         )
     with col_budget2:
-        budget_currency_type = st.radio(
-            "Budget is in:",
-            options=["Display Currency", "Base Currency"],
-            index=0,
-            key="create_budget_currency_type",
-        )
+        st.write("")  # placeholder
 
-    # --- Currencies ---
-    col_currency1, col_currency2 = st.columns(2)
-    display_currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL"]
-    with col_currency1:
-        trip_display_currency = st.selectbox(
-            "Display Currency",
-            options=display_currency_options,
-            index=0,
-            key="create_display_currency",
-        )
+    # --- Currencies (only Base Currency) ---
+    st.subheader("💱 Trip Currency")
     base_currency_options = [
         "USD",
         "EUR",
@@ -941,13 +922,12 @@ with tab1:
         "CNY",
         "INR",
     ]
-    with col_currency2:
-        trip_base_currency = st.selectbox(
-            "Base Currency (for reporting & conversion)",
-            options=base_currency_options,
-            index=0,
-            key="create_base_currency",
-        )
+    trip_base_currency = st.selectbox(
+        "Base Currency (for reporting & conversion)",
+        options=base_currency_options,
+        index=0,
+        key="create_base_currency",
+    )
 
     # --- Status ---
     status_options = ["draft", "approved", "final"]
@@ -1095,21 +1075,28 @@ with tab1:
                             value=float(item.get("cost", 0)),
                             key=f"create_e_cost_{idx}",
                         )
-                        # Use trip's display and base currencies
-                        valid_currencies = [trip_display_currency, trip_base_currency]
-                        # Ensure the current currency is in the list; if not, default to first
-                        default_index = (
-                            valid_currencies.index(
-                                item.get("cost_currency", trip_display_currency)
-                            )
-                            if item.get("cost_currency", trip_display_currency)
-                            in valid_currencies
-                            else 0
-                        )
+                        # Currency dropdown – all common currencies
+                        currency_options = [
+                            "USD",
+                            "EUR",
+                            "GBP",
+                            "NGN",
+                            "JPY",
+                            "BRL",
+                            "CAD",
+                            "AUD",
+                            "CHF",
+                            "CNY",
+                            "INR",
+                        ]
                         e_currency = st.selectbox(
                             "Currency",
-                            options=valid_currencies,
-                            index=default_index,
+                            options=currency_options,
+                            index=(
+                                currency_options.index(item.get("cost_currency", "USD"))
+                                if item.get("cost_currency", "USD") in currency_options
+                                else 0
+                            ),
                             key=f"create_e_currency_{idx}",
                         )
                         e_rate = st.number_input(
@@ -1172,10 +1159,22 @@ with tab1:
             n_cost = st.number_input(
                 "Cost", min_value=0.0, value=0.0, key="create_n_cost"
             )
-            # Get display and base currency from the trip setup fields (already defined)
+            currency_options = [
+                "USD",
+                "EUR",
+                "GBP",
+                "NGN",
+                "JPY",
+                "BRL",
+                "CAD",
+                "AUD",
+                "CHF",
+                "CNY",
+                "INR",
+            ]
             n_currency = st.selectbox(
                 "Currency",
-                options=[trip_display_currency, trip_base_currency],
+                options=currency_options,
                 key="create_n_currency",
             )
             n_rate = st.number_input(
@@ -1222,7 +1221,6 @@ with tab1:
                 "create_departure_region",
                 "create_departure_country",
                 "create_trip_budget",
-                "create_display_currency",
                 "create_base_currency",
                 "create_trip_status",
                 "create_overall_start",
@@ -1256,18 +1254,8 @@ with tab1:
                     if not st.checkbox("Proceed anyway?", key="force_trip_create"):
                         st.stop()
 
-                # Convert budget to base currency before storing
-                if budget_currency_type == "Display Currency":
-                    try:
-                        from currency import get_exchange_rates
-
-                        rates = get_exchange_rates(trip_base_currency)
-                        rate = rates.get(trip_display_currency, 1.0)
-                        budget_base = budget / rate
-                    except:
-                        budget_base = budget
-                else:
-                    budget_base = budget
+                # Budget is already in base currency
+                budget_base = budget
 
                 trip_id = db.create_or_get_trip(
                     trip_exec_id,
@@ -1275,7 +1263,7 @@ with tab1:
                     overall_start,
                     overall_end,
                     trip_purpose,
-                    trip_display_currency,
+                    trip_base_currency,  # display_currency is now same as base
                     trip_base_currency,
                 )
                 db.update_trip_budget(trip_id, budget_base)
@@ -1298,10 +1286,7 @@ with tab1:
                     )
 
                 # Add items
-                valid_currencies = [trip_display_currency, trip_base_currency]
                 for item in st.session_state["create_trip_items"]:
-                    if item["cost_currency"] not in valid_currencies:
-                        item["cost_currency"] = trip_display_currency
                     db.add_itinerary_item(
                         trip_id,
                         item["item_type"],
@@ -1328,7 +1313,6 @@ with tab1:
                     "create_departure_region",
                     "create_departure_country",
                     "create_trip_budget",
-                    "create_display_currency",
                     "create_base_currency",
                     "create_trip_status",
                     "create_overall_start",
@@ -1340,7 +1324,61 @@ with tab1:
                 st.success(
                     f"✅ Trip '{trip_purpose}' created successfully with status '{trip_status}'!"
                 )
-                st.rerun()
+
+                # ---- Save as Template (after creation) ----
+                st.session_state["last_created_trip_id"] = trip_id
+                st.session_state["last_created_trip_name"] = trip_purpose
+
+                # Display Save as Template option
+                col_save_template, col_continue = st.columns(2)
+                with col_save_template:
+                    if st.button(
+                        "📋 Save as Template", key="save_template_after_create"
+                    ):
+                        st.session_state["show_save_template_after_create"] = True
+                with col_continue:
+                    if st.button("Continue", key="continue_after_create"):
+                        st.session_state.pop("last_created_trip_id", None)
+                        st.session_state.pop("last_created_trip_name", None)
+                        st.session_state.pop("show_save_template_after_create", None)
+                        st.rerun()
+
+                if st.session_state.get("show_save_template_after_create", False):
+                    st.info("Save this trip as a reusable template.")
+                    template_name = st.text_input(
+                        "Template Name*",
+                        value=f"{trip_purpose} Template",
+                        key="template_name_after_create",
+                    )
+                    template_desc = st.text_input(
+                        "Description (optional)", key="template_desc_after_create"
+                    )
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("💾 Save", key="confirm_save_after_create"):
+                            if template_name:
+                                new_id = db.save_trip_as_template(
+                                    trip_id, template_name, template_desc
+                                )
+                                if new_id:
+                                    st.success(f"✅ Template '{template_name}' saved!")
+                                    st.session_state.pop(
+                                        "show_save_template_after_create", None
+                                    )
+                                    st.session_state.pop("last_created_trip_id", None)
+                                    st.session_state.pop("last_created_trip_name", None)
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to save template.")
+                            else:
+                                st.warning("Template Name is required.")
+                    with col_no:
+                        if st.button("Cancel", key="cancel_save_after_create"):
+                            st.session_state.pop(
+                                "show_save_template_after_create", None
+                            )
+                            st.rerun()
+
             else:
                 st.warning("Enter a Trip Name and add at least one stop.")
 
@@ -1348,7 +1386,6 @@ with tab1:
 # TAB 2: TRIP TEMPLATES (unchanged)
 # ------------------------------------------------------------------
 with tab2:
-    st.header("📋 Trip Templates")
     templates = db.get_trip_templates()
     if templates:
         st.write("**Saved Templates:**")
@@ -1445,7 +1482,6 @@ with tab2:
 # TAB 3: ALL TRIPS (was Spending Dashboard)
 # ------------------------------------------------------------------
 with tab3:
-    st.header("📋 All Trips")
     st.subheader("Filter & View Trips")
     col_dash1, col_dash2 = st.columns(2)
     with col_dash1:
@@ -1659,81 +1695,51 @@ with tab3:
                                 st.write("**Budget**")
                                 col_bud1, col_bud2 = st.columns(2)
                                 with col_bud1:
-                                    display_cur = trip_modal_data.get(
-                                        "display_currency", "USD"
-                                    )
                                     base_cur = trip_modal_data.get(
                                         "base_currency", "USD"
                                     )
                                     budget_base = trip_modal_data.get("budget", 0.0)
-                                    try:
-                                        from currency import get_exchange_rates
-
-                                        rates = get_exchange_rates(base_cur)
-                                        rate = rates.get(display_cur, 1.0)
-                                        budget_display = budget_base * rate
-                                    except:
-                                        budget_display = budget_base
-                                    edit_currency_type = st.radio(
-                                        "Edit budget in:",
-                                        options=["Display Currency", "Base Currency"],
-                                        index=0,
-                                        key=f"modal_budget_currency_type_{trip_id_modal}",
-                                        disabled=is_locked,
-                                    )
-                                    if edit_currency_type == "Display Currency":
-                                        budget_value = budget_display
-                                    else:
-                                        budget_value = budget_base
                                     new_budget = st.number_input(
-                                        "Budget Amount",
+                                        "Budget Amount (in Base Currency)",
                                         min_value=0.0,
                                         step=100.0,
-                                        value=float(budget_value),
+                                        value=float(budget_base),
                                         key=f"modal_budget_{trip_id_modal}",
                                         disabled=is_locked,
                                     )
                                 with col_bud2:
-                                    st.write(
-                                        f"Display: {display_cur} | Base: {base_cur}"
-                                    )
+                                    st.write(f"Base Currency: {base_cur}")
 
-                                col_cur1, col_cur2 = st.columns(2)
-                                with col_cur1:
-                                    new_display_currency = st.selectbox(
-                                        "Display Currency",
-                                        options=display_currency_options,
-                                        index=(
-                                            display_currency_options.index(
-                                                trip_modal_data.get(
-                                                    "display_currency", "USD"
-                                                )
-                                            )
-                                            if trip_modal_data.get("display_currency")
-                                            in display_currency_options
-                                            else 0
-                                        ),
-                                        key=f"modal_display_currency_{trip_id_modal}",
-                                        disabled=is_locked,
-                                    )
-                                with col_cur2:
-                                    new_base_currency = st.selectbox(
-                                        "Base Currency",
-                                        options=base_currency_options,
-                                        index=(
-                                            base_currency_options.index(
-                                                trip_modal_data.get(
-                                                    "base_currency", "USD"
-                                                )
-                                            )
-                                            if trip_modal_data.get("base_currency")
-                                            in base_currency_options
-                                            else 0
-                                        ),
-                                        key=f"modal_base_currency_{trip_id_modal}",
-                                        disabled=is_locked,
-                                    )
+                                # ---- Currencies (only Base Currency) ----
+                                base_currency_options = [
+                                    "USD",
+                                    "EUR",
+                                    "GBP",
+                                    "NGN",
+                                    "JPY",
+                                    "BRL",
+                                    "CAD",
+                                    "AUD",
+                                    "CHF",
+                                    "CNY",
+                                    "INR",
+                                ]
+                                new_base_currency = st.selectbox(
+                                    "Base Currency",
+                                    options=base_currency_options,
+                                    index=(
+                                        base_currency_options.index(
+                                            trip_modal_data.get("base_currency", "USD")
+                                        )
+                                        if trip_modal_data.get("base_currency")
+                                        in base_currency_options
+                                        else 0
+                                    ),
+                                    key=f"modal_base_currency_{trip_id_modal}",
+                                    disabled=is_locked,
+                                )
 
+                                # ---- Status ----
                                 current_status = trip_modal_data.get("status", "draft")
                                 new_status = st.selectbox(
                                     "Status",
@@ -1750,42 +1756,25 @@ with tab3:
                                     disabled=is_locked,
                                 )
 
-                                # Only show Save button if not locked
+                                # ---- Save button ----
                                 if not is_locked:
                                     submitted = st.form_submit_button("💾 Save Changes")
                                     if submitted:
-                                        if edit_currency_type == "Display Currency":
-                                            try:
-                                                from currency import get_exchange_rates
-
-                                                rates = get_exchange_rates(
-                                                    new_base_currency
-                                                )
-                                                rate = rates.get(
-                                                    new_display_currency, 1.0
-                                                )
-                                                budget_base = new_budget / rate
-                                            except:
-                                                budget_base = new_budget
-                                        else:
-                                            budget_base = new_budget
-
                                         db.update_trip_purpose(
                                             trip_id_modal, new_purpose
                                         )
-                                        db.update_trip_budget(
-                                            trip_id_modal, budget_base
-                                        )
+                                        db.update_trip_budget(trip_id_modal, new_budget)
                                         db.update_trip_departure_details(
                                             trip_id_modal,
                                             new_dep_city,
                                             new_dep_region,
                                             new_dep_country,
                                         )
-                                        db.update_trip_currencies(
-                                            trip_id_modal,
-                                            new_base_currency,
-                                            new_display_currency,
+                                        db.update_trip_base_currency(
+                                            trip_id_modal, new_base_currency
+                                        )
+                                        db.update_trip_display_currency(
+                                            trip_id_modal, new_base_currency
                                         )
                                         db.update_trip_status(trip_id_modal, new_status)
 
@@ -1807,9 +1796,8 @@ with tab3:
                                             )
 
                                         valid_currencies = [
-                                            new_display_currency,
-                                            new_base_currency,
-                                        ]
+                                            new_base_currency
+                                        ] + base_currency_options  # allow all
                                         conn = sqlite3.connect(db.DB_PATH)
                                         c = conn.cursor()
                                         c.execute(
@@ -1822,13 +1810,6 @@ with tab3:
                                         for item in st.session_state[
                                             f"modal_items_{trip_id_modal}"
                                         ]:
-                                            if (
-                                                item["cost_currency"]
-                                                not in valid_currencies
-                                            ):
-                                                item["cost_currency"] = (
-                                                    new_display_currency
-                                                )
                                             db.add_itinerary_item(
                                                 trip_id_modal,
                                                 item["item_type"],
@@ -1959,11 +1940,20 @@ with tab3:
 
                             # ---- Items management (outside form) ----
                             st.write("**📋 Itinerary Items**")
-                            display_cur_modal = trip_modal_data.get(
-                                "display_currency", "USD"
-                            )
                             base_cur_modal = trip_modal_data.get("base_currency", "USD")
-                            valid_currency_options = [display_cur_modal, base_cur_modal]
+                            currency_options_all = [
+                                "USD",
+                                "EUR",
+                                "GBP",
+                                "NGN",
+                                "JPY",
+                                "BRL",
+                                "CAD",
+                                "AUD",
+                                "CHF",
+                                "CNY",
+                                "INR",
+                            ]
 
                             items = st.session_state[f"modal_items_{trip_id_modal}"]
                             for idx, item in enumerate(items):
@@ -2065,13 +2055,13 @@ with tab3:
                                             )
                                             e_currency = st.selectbox(
                                                 "Currency",
-                                                options=valid_currency_options,
+                                                options=currency_options_all,
                                                 index=(
-                                                    valid_currency_options.index(
+                                                    currency_options_all.index(
                                                         item.get("cost_currency", "USD")
                                                     )
                                                     if item.get("cost_currency", "USD")
-                                                    in valid_currency_options
+                                                    in currency_options_all
                                                     else 0
                                                 ),
                                                 key=f"modal_e_currency_{trip_id_modal}_{idx}",
@@ -2182,7 +2172,7 @@ with tab3:
                                     )
                                     n_currency = st.selectbox(
                                         "Currency",
-                                        options=valid_currency_options,
+                                        options=currency_options_all,
                                         key=f"modal_n_currency_{trip_id_modal}",
                                         disabled=is_locked,
                                     )
@@ -2239,11 +2229,13 @@ with tab3:
                                                     "Description and Start Time are required."
                                                 )
 
-                            # ---- Additional actions (Delete, Revert) ----
+                            # ---- Additional actions (Delete, Revert, Save as Template) ----
                             st.divider()
-                            col_actions_left, col_actions_right = st.columns(2)
+                            col_actions_left, col_actions_mid, col_actions_right = (
+                                st.columns(3)
+                            )
                             with col_actions_left:
-                                # Delete button - with unique key
+                                # Delete button
                                 if not is_locked:
                                     if st.button(
                                         "🗑️ Delete This Trip",
@@ -2254,8 +2246,8 @@ with tab3:
                                         st.session_state[
                                             f"confirm_del_modal_{trip_id_modal}"
                                         ] = True
-                            with col_actions_right:
-                                # Revert to Draft (only if status is approved or final) - with unique key
+                            with col_actions_mid:
+                                # Revert to Draft (only if status is approved or final)
                                 if current_status in ["approved", "final"]:
                                     if st.button(
                                         "↩️ Revert to Draft",
@@ -2269,6 +2261,66 @@ with tab3:
                                         )
                                         st.session_state.pop(
                                             f"modal_items_{trip_id_modal}", None
+                                        )
+                                        st.rerun()
+                            with col_actions_right:
+                                # Save as Template
+                                if st.button(
+                                    "📋 Save as Template",
+                                    use_container_width=True,
+                                    key=f"save_template_modal_{trip_id_modal}",
+                                ):
+                                    st.session_state[
+                                        f"show_save_template_modal_{trip_id_modal}"
+                                    ] = True
+
+                            # Save as Template confirmation
+                            if st.session_state.get(
+                                f"show_save_template_modal_{trip_id_modal}", False
+                            ):
+                                st.info("Save this trip as a reusable template.")
+                                template_name_modal = st.text_input(
+                                    "Template Name*",
+                                    value=f"{trip_modal_data.get('purpose', '')} Template",
+                                    key=f"template_name_modal_{trip_id_modal}",
+                                )
+                                template_desc_modal = st.text_input(
+                                    "Description (optional)",
+                                    key=f"template_desc_modal_{trip_id_modal}",
+                                )
+                                col_yes_modal, col_no_modal = st.columns(2)
+                                with col_yes_modal:
+                                    if st.button(
+                                        "💾 Save",
+                                        key=f"confirm_save_template_modal_{trip_id_modal}",
+                                    ):
+                                        if template_name_modal:
+                                            new_id = db.save_trip_as_template(
+                                                trip_id_modal,
+                                                template_name_modal,
+                                                template_desc_modal,
+                                            )
+                                            if new_id:
+                                                st.success(
+                                                    f"✅ Template '{template_name_modal}' saved!"
+                                                )
+                                                st.session_state.pop(
+                                                    f"show_save_template_modal_{trip_id_modal}",
+                                                    None,
+                                                )
+                                                st.rerun()
+                                            else:
+                                                st.error("Failed to save template.")
+                                        else:
+                                            st.warning("Template Name is required.")
+                                with col_no_modal:
+                                    if st.button(
+                                        "Cancel",
+                                        key=f"cancel_save_template_modal_{trip_id_modal}",
+                                    ):
+                                        st.session_state.pop(
+                                            f"show_save_template_modal_{trip_id_modal}",
+                                            None,
                                         )
                                         st.rerun()
 
@@ -2305,7 +2357,7 @@ with tab3:
                                         )
                                         st.rerun()
 
-                            # Close button for popover (already has unique key)
+                            # Close button for popover
                             if st.button("Close", key=f"close_modal_{trip_id_modal}"):
                                 st.session_state.pop(
                                     f"modal_stops_{trip_id_modal}", None
