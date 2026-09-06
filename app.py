@@ -859,12 +859,14 @@ with tab1:
     col_start, col_end = st.columns(2)
     with col_start:
         overall_start = st.date_input(
-            "Start Date*", value=datetime.now(), key="create_overall_start"
+            "Start Date*",
+            value=st.session_state.get("create_overall_start", datetime.now()),
+            key="create_overall_start",
         )
     with col_end:
         overall_end = st.date_input(
             "End Date*",
-            value=datetime.now() + timedelta(days=1),
+            value=st.session_state.get("create_overall_end", datetime.now() + timedelta(days=1)),
             key="create_overall_end",
         )
     if overall_start and overall_end and overall_end >= overall_start:
@@ -1197,6 +1199,21 @@ with tab1:
         if st.button("🗑️ Clear Form", key="clear_create_form"):
             st.session_state["create_trip_stops"] = []
             st.session_state["create_trip_items"] = []
+            # Clear all text/number/select/date fields
+            keys_to_clear = [
+                "create_trip_purpose",
+                "create_departure_city",
+                "create_departure_region",
+                "create_departure_country",
+                "create_trip_budget",
+                "create_display_currency",
+                "create_base_currency",
+                "create_trip_status",
+                "create_overall_start",
+                "create_overall_end",
+            ]
+            for key in keys_to_clear:
+                st.session_state.pop(key, None)
             st.rerun()
     with col_create:
         if st.button("🚀 Create Trip", key="create_trip_button"):
@@ -1447,12 +1464,6 @@ with tab3:
         total_confirmed = sum(t["confirmed_spent"] for t in summary_data)
         total_estimated = sum(t["estimated_spent"] for t in summary_data)
         dashboard_symbol = get_currency_symbol("USD")
-
-        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-        col_m1.metric("Total Trips", len(summary_data))
-        col_m2.metric("Total Budget", f"{dashboard_symbol}{total_budget:,.2f}")
-        col_m3.metric("Total Spent", f"{dashboard_symbol}{total_spent:,.2f}")
-        col_m4.metric("Total Confirmed", f"{dashboard_symbol}{total_confirmed:,.2f}")
 
         st.subheader("Trip-Level Breakdown")
 
@@ -2193,27 +2204,27 @@ with tab3:
                 "Confirmed",
                 "Estimated",
                 "Status",
+                "Base Currency",
             ]
             rows_with_currency = []
             for trip in summary_data:
                 trip_base = trip.get("base_currency", "USD")
-                sym = get_currency_symbol(trip_base)
                 rows_with_currency.append(
                     [
                         trip["executive_name"],
                         trip["company_name"],
                         trip["destination"],
-                        f"{sym}{trip['budget']:.2f}",
-                        f"{sym}{trip['total_spent']:.2f}",
-                        f"{sym}{trip['confirmed_spent']:.2f}",
-                        f"{sym}{trip['estimated_spent']:.2f}",
+                        f"{trip['budget']:.2f}",
+                        f"{trip['total_spent']:.2f}",
+                        f"{trip['confirmed_spent']:.2f}",
+                        f"{trip['estimated_spent']:.2f}",
                         trip["status"],
                         trip_base,
                     ]
                 )
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(headers + ["Base Currency"])
+            writer.writerow(headers)
             for row in rows_with_currency:
                 writer.writerow(row)
             st.download_button(

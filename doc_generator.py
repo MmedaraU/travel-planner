@@ -236,10 +236,10 @@ def generate_spending_report_doc(
     # Summary table
     doc.add_heading("Summary", level=1)
     if summary_data:
-        table = doc.add_table(rows=1, cols=6)
+        table = doc.add_table(rows=1, cols=8)
         table.style = 'Table Grid'
         hdr_cells = table.rows[0].cells
-        headers = ["Executive", "Destination", "Budget", "Total Spent", "Confirmed", "Status"]
+        headers = ["Executive", "Destination", "Budget", "Total Spent", "Confirmed", "Estimated", "Status", "Currency"]
         for i, h in enumerate(headers):
             hdr_cells[i].text = h
             hdr_cells[i].paragraphs[0].runs[0].bold = True
@@ -251,7 +251,10 @@ def generate_spending_report_doc(
             row_cells[2].text = f"{currency_symbol}{trip.get('budget', 0):.2f}"
             row_cells[3].text = f"{currency_symbol}{trip.get('total_spent', 0):.2f}"
             row_cells[4].text = f"{currency_symbol}{trip.get('confirmed_spent', 0):.2f}"
-            row_cells[5].text = trip.get('status', '').title()
+            row_cells[5].text = f"{currency_symbol}{trip.get('estimated_spent', 0):.2f}"
+            row_cells[6].text = trip.get('status', '').title()
+            row_cells[7].text = trip.get('base_currency', '').title()
+            
     else:
         doc.add_paragraph("No trips found.")
 
