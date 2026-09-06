@@ -672,9 +672,15 @@ if profile:
                         key="csv_download_side",
                     )
         with col_doc:
+
             if st.button("📄 Word"):
                 profile_data = db.get_full_executive_profile(exec_id)
                 if profile_data:
+                    mems = db.get_memberships(exec_id)
+                    mem_str = "; ".join(
+                        [f"{m['program_name']}: {m['membership_number']}" for m in mems]
+                    )
+                    profile_data["Memberships"] = mem_str
                     doc_stream = doc_generator.generate_executive_profile_doc(
                         profile_data, exec_id, get_currency_symbol("USD")
                     )
@@ -685,6 +691,8 @@ if profile:
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
                         key="docx_download_side",
                     )
+        
+
         with col_excel:
             if st.button("📊 Excel"):
                 profile_data = db.get_full_executive_profile(exec_id)
@@ -700,6 +708,67 @@ if profile:
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="excel_download_side",
                         )
+
+    # ---- Export All Profiles ----
+    with st.sidebar.expander("📤 Export All Profiles", expanded=False):
+        all_profiles = db.get_all_executive_profiles()
+        if all_profiles:
+            col_aw, col_ac, col_ae = st.columns(3)
+            with col_aw:
+                if st.button("📄 Word (All)"):
+                    doc_stream = doc_generator.generate_all_executive_profiles_doc(
+                        all_profiles
+                    )
+                    st.download_button(
+                        label="⬇️ Download Word",
+                        data=doc_stream,
+                        file_name=f"All_Executives_{datetime.now().strftime('%Y%m%d')}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
+                        key="all_doc_download",
+                    )
+            with col_ac:
+                if st.button("📊 CSV (All)"):
+                    output = io.StringIO()
+                    if all_profiles:
+                        # Use the same headers as single profile (excluding Memberships if needed)
+                        # The first profile has all keys; we'll include all.
+                        headers = list(all_profiles[0].keys())
+                        writer = csv.DictWriter(output, fieldnames=headers)
+                        writer.writeheader()
+                        for p in all_profiles:
+                            writer.writerow(p)
+                        st.download_button(
+                            label="⬇️ Download CSV",
+                            data=output.getvalue().encode("utf-8"),
+                            file_name=f"All_Executives_{datetime.now().strftime('%Y%m%d')}.csv",
+                            mime="text/csv",
+                            key="all_csv_download",
+                        )
+            with col_ae:
+                if st.button("📊 Excel (All)"):
+                    from openpyxl import Workbook
+
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = "All Executives"
+                    headers = list(all_profiles[0].keys())
+                    for col_idx, header in enumerate(headers, 1):
+                        ws.cell(row=1, column=col_idx, value=header)
+                    for row_idx, p in enumerate(all_profiles, 2):
+                        for col_idx, key in enumerate(headers, 1):
+                            ws.cell(row=row_idx, column=col_idx, value=p.get(key, ""))
+                    excel_stream = io.BytesIO()
+                    wb.save(excel_stream)
+                    excel_stream.seek(0)
+                    st.download_button(
+                        label="⬇️ Download Excel",
+                        data=excel_stream,
+                        file_name=f"All_Executives_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="all_excel_download",
+                    )
+        else:
+            st.caption("No executives available to export.")
 
 # --- Import / Restore ---
 with st.sidebar.expander("💾 Import / Restore Database"):

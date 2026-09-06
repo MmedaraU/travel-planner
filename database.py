@@ -356,10 +356,13 @@ def get_all_executive_profiles():
     for e_id, name, company in all_execs:
         profile = get_full_executive_profile(e_id)
         if profile:
+            # Add memberships
+            mems = get_memberships(e_id)
+            mem_str = "; ".join([f"{m['program_name']}: {m['membership_number']}" for m in mems])
+            profile["Memberships"] = mem_str
             profile["ID"] = e_id
             profiles.append(profile)
     return profiles
-
 
 def update_executive(
     exec_id,
