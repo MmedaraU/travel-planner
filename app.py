@@ -8,6 +8,7 @@ import io
 import pytz
 import os
 import pycountry
+from openpyxl import Workbook
 from excel_export import (
     export_profile_to_excel,
     export_itinerary_to_excel,
@@ -109,15 +110,13 @@ st.title("Executive Travel Planner")
 db.init_db()
 
 # =========================================================
-# SIDEBAR: Executive Selection & Quick Actions
+# SIDEBAR: Executive Selection & Full Management
 # =========================================================
-st.sidebar.header("👤 Select Executive")
+st.sidebar.header("👤 Executive Management")
 
 executives = db.get_all_executives()
 if not executives:
-    st.sidebar.warning(
-        "No executives found. Add one in the 'Executive Management' tab."
-    )
+    st.sidebar.warning("No executives found. Add one using the button below.")
     exec_id = None
     profile = None
 else:
@@ -126,7 +125,122 @@ else:
     exec_id = exec_options[selected_label]
     profile = db.get_executive_profile(exec_id)
 
-# Quick profile card (collapsible)
+# --- "Add New Executive" Button (opens popover) ---
+if st.sidebar.button("➕ Add New Executive", use_container_width=True):
+    st.session_state["show_add_executive"] = True
+
+if st.session_state.get("show_add_executive", False):
+    with st.popover("➕ Add New Executive", use_container_width=True):
+        st.subheader("Add New Executive")
+
+        # ---- Add Company (inline, outside the form) ----
+        with st.expander("➕ Add New Company"):
+            new_comp_name = st.text_input("Company Name", key="add_new_comp_name")
+            new_comp_cc = st.text_input(
+                "Default Cost Center (optional)", key="add_new_comp_cc"
+            )
+            new_comp_policy = st.text_area(
+                "Policy Notes (optional)", key="add_new_comp_policy"
+            )
+            if st.button("Add Company", key="add_new_comp_btn"):
+                if new_comp_name:
+                    db.add_company(new_comp_name, new_comp_cc, new_comp_policy)
+                    st.success(f"Company '{new_comp_name}' added!")
+                    st.rerun()
+                else:
+                    st.warning("Company Name required.")
+
+        # ---- Main form for executive creation ----
+        with st.form("add_executive_form"):
+            # Company dropdown
+            companies = db.get_all_companies()
+            company_options = {name: id for id, name in companies}
+            company_names = list(company_options.keys())
+            if company_names:
+                sel_company_label = st.selectbox(
+                    "Company*", company_names, key="add_company_sel"
+                )
+                sel_company_id = company_options[sel_company_label]
+            else:
+                st.warning(
+                    "No companies available. Please add a company first using the expander above."
+                )
+                sel_company_id = None
+
+            # Executive fields
+            exec_name = st.text_input("Full Name*", key="add_exec_name")
+            exec_email = st.text_input("Email", key="add_exec_email")
+            tz_display_names, tz_map = get_timezone_dropdown_options()
+            default_tz = next(
+                (n for n in tz_display_names if "America/New_York" in n),
+                tz_display_names[0],
+            )
+            sel_tz = st.selectbox(
+                "Timezone",
+                tz_display_names,
+                index=tz_display_names.index(default_tz),
+                key="add_exec_tz",
+            )
+            exec_tz = tz_map[sel_tz]
+            exec_seat = st.selectbox(
+                "Seat Preference",
+                ["No Preference", "Aisle", "Window", "Middle"],
+                key="add_exec_seat",
+            )
+            exec_diet = st.text_input("Dietary Restrictions", key="add_exec_diet")
+            exec_airline = st.text_input("Preferred Airline", key="add_exec_airline")
+            exec_tsa = st.text_input("TSA PreCheck", key="add_exec_tsa")
+            exec_meal = st.selectbox(
+                "Meal Preference",
+                [
+                    "No Preference",
+                    "Vegetarian",
+                    "Vegan",
+                    "Kosher",
+                    "Halal",
+                    "Gluten-Free",
+                ],
+                key="add_exec_meal",
+            )
+
+            # Submit button inside the form
+            if st.form_submit_button("💾 Create Executive"):
+                if exec_name and sel_company_id:
+                    if exec_email:
+                        existing = duplicate_detection.find_duplicate_executive(
+                            exec_email, exec_name, sel_company_id
+                        )
+                        if existing:
+                            st.warning(
+                                "⚠️ An executive with the same email or name+company already exists:"
+                            )
+                            for dup in existing:
+                                st.write(f"- {dup['name']} (ID: {dup['id']})")
+                            if not st.checkbox("Add anyway?", key="force_add_exec"):
+                                st.stop()
+                    new_id = db.add_executive(
+                        sel_company_id,
+                        exec_name,
+                        exec_email,
+                        exec_tz,
+                        exec_seat if exec_seat != "No Preference" else "",
+                        "",  # hotel_loyalty removed
+                        "",  # frequent_flyer_number removed
+                        exec_diet,
+                        None,  # passport_number removed
+                        exec_airline,
+                        exec_tsa,
+                        exec_meal if exec_meal != "No Preference" else "",
+                    )
+                    st.success(
+                        f"✅ Executive '{exec_name}' created! You can now add passports and memberships in the edit modal."
+                    )
+                    st.session_state["show_add_executive"] = False
+                    st.rerun()
+                else:
+                    st.warning("Name and Company are required.")
+
+# --- Quick Profile (collapsible) ---
 if profile:
     with st.sidebar.expander("📋 Quick Profile", expanded=False):
         st.write(f"**{profile['name']}**")
@@ -137,360 +251,404 @@ if profile:
         if mems:
             st.caption(f"✈️ {len(mems)} memberships")
 
-        if st.button("👤 View Full Profile"):
+        if st.button("👤 View Full Profile", use_container_width=True):
             st.session_state["show_full_profile"] = True
             st.session_state["profile_edit_mode"] = False
 
-    if st.session_state.get("show_full_profile", False):
-        with st.popover("👤 Full Profile", use_container_width=True):
-            if st.session_state.get("profile_edit_mode", False):
-                st.subheader(f"✏️ Editing: {profile['name']}")
-                with st.form("edit_exec_popover"):
-                    companies = db.get_all_companies()
-                    company_options = {name: id for id, name in companies}
-                    current_company_id = profile.get("company_id")
-                    curr_comp_name = next(
-                        (
-                            name
-                            for name, cid in company_options.items()
-                            if cid == current_company_id
-                        ),
-                        list(company_options.keys())[0] if company_options else "",
-                    )
-                    new_company_label = st.selectbox(
-                        "Company*",
-                        list(company_options.keys()),
-                        index=(
-                            list(company_options.keys()).index(curr_comp_name)
-                            if curr_comp_name in company_options
-                            else 0
-                        ),
-                        key="edit_company_popover",
-                    )
-                    new_company_id = company_options[new_company_label]
+# --- Full Profile Popover (Read-Only + Edit/Delete with Passports & Memberships) ---
+if st.session_state.get("show_full_profile", False):
+    with st.popover("👤 Full Profile", use_container_width=True):
+        # -------- EDIT MODE --------
+        if st.session_state.get("profile_edit_mode", False):
+            st.subheader(f"✏️ Editing: {profile['name']}")
+            with st.form("edit_exec_popover"):
+                companies = db.get_all_companies()
+                company_options = {name: id for id, name in companies}
+                current_company_id = profile.get("company_id")
+                curr_comp_name = next(
+                    (
+                        name
+                        for name, cid in company_options.items()
+                        if cid == current_company_id
+                    ),
+                    list(company_options.keys())[0] if company_options else "",
+                )
+                new_company_label = st.selectbox(
+                    "Company*",
+                    list(company_options.keys()),
+                    index=(
+                        list(company_options.keys()).index(curr_comp_name)
+                        if curr_comp_name in company_options
+                        else 0
+                    ),
+                    key="edit_company_popover",
+                )
+                new_company_id = company_options[new_company_label]
 
-                    new_name = st.text_input(
-                        "Full Name*",
-                        value=profile.get("name", ""),
-                        key="edit_name_popover",
-                    )
-                    new_email = st.text_input(
-                        "Email",
-                        value=profile.get("email", ""),
-                        key="edit_email_popover",
-                    )
+                new_name = st.text_input(
+                    "Full Name*", value=profile.get("name", ""), key="edit_name_popover"
+                )
+                new_email = st.text_input(
+                    "Email", value=profile.get("email", ""), key="edit_email_popover"
+                )
+                tz_display_names, tz_map = get_timezone_dropdown_options()
+                current_tz = profile.get("timezone", "America/New_York")
+                current_tz_display = next(
+                    (n for n in tz_display_names if current_tz in n),
+                    tz_display_names[0],
+                )
+                new_tz_display = st.selectbox(
+                    "Timezone",
+                    tz_display_names,
+                    index=tz_display_names.index(current_tz_display),
+                    key="edit_tz_popover",
+                )
+                new_tz = tz_map[new_tz_display]
+                seat_options = ["No Preference", "Aisle", "Window", "Middle"]
+                new_seat = st.selectbox(
+                    "Seat Preference",
+                    seat_options,
+                    index=safe_index(
+                        seat_options, profile.get("seat_preference", "No Preference")
+                    ),
+                    key="edit_seat_popover",
+                )
+                new_diet = st.text_input(
+                    "Dietary Restrictions",
+                    value=profile.get("dietary_restrictions", ""),
+                    key="edit_diet_popover",
+                )
+                new_airline = st.text_input(
+                    "Preferred Airline",
+                    value=profile.get("preferred_airline", ""),
+                    key="edit_airline_popover",
+                )
+                new_tsa = st.text_input(
+                    "TSA PreCheck",
+                    value=profile.get("tsa_precheck", ""),
+                    key="edit_tsa_popover",
+                )
+                meal_options = [
+                    "No Preference",
+                    "Vegetarian",
+                    "Vegan",
+                    "Kosher",
+                    "Halal",
+                    "Gluten-Free",
+                ]
+                new_meal = st.selectbox(
+                    "Meal Preference",
+                    meal_options,
+                    index=safe_index(
+                        meal_options, profile.get("meal_preference", "No Preference")
+                    ),
+                    key="edit_meal_popover",
+                )
 
-                    tz_display_names, tz_map = get_timezone_dropdown_options()
-                    current_tz = profile.get("timezone", "America/New_York")
-                    current_tz_display = next(
-                        (n for n in tz_display_names if current_tz in n),
-                        tz_display_names[0],
+                col_save, col_cancel, col_delete = st.columns(3)
+                with col_save:
+                    submitted = st.form_submit_button("💾 Save Changes")
+                with col_cancel:
+                    cancel = st.form_submit_button("❌ Cancel")
+                with col_delete:
+                    if st.form_submit_button("🗑️ Delete Executive", type="primary"):
+                        st.session_state["show_delete_confirmation"] = True
+
+                if submitted:
+                    db.update_executive(
+                        exec_id,
+                        new_company_id,
+                        new_name,
+                        new_email,
+                        new_tz,
+                        new_seat if new_seat != "No Preference" else "",
+                        "",  # hotel_loyalty removed
+                        "",  # frequent_flyer_number removed
+                        new_diet,
+                        None,  # passport_number removed
+                        new_airline,
+                        new_tsa,
+                        new_meal if new_meal != "No Preference" else "",
                     )
-                    new_tz_display = st.selectbox(
-                        "Timezone",
-                        tz_display_names,
-                        index=tz_display_names.index(current_tz_display),
-                        key="edit_tz_popover",
-                    )
-                    new_tz = tz_map[new_tz_display]
+                    st.success(f"✅ Executive '{new_name}' updated!")
+                    st.session_state["profile_edit_mode"] = False
+                    st.session_state["show_full_profile"] = False
+                    st.rerun()
+                if cancel:
+                    st.session_state["profile_edit_mode"] = False
+                    st.rerun()
 
-                    seat_options = ["No Preference", "Aisle", "Window", "Middle"]
-                    new_seat = st.selectbox(
-                        "Seat Preference",
-                        seat_options,
-                        index=safe_index(
-                            seat_options,
-                            profile.get("seat_preference", "No Preference"),
-                        ),
-                        key="edit_seat_popover",
-                    )
-                    new_diet = st.text_input(
-                        "Dietary Restrictions",
-                        value=profile.get("dietary_restrictions", ""),
-                        key="edit_diet_popover",
-                    )
-                    new_passport = st.text_input(
-                        "Passport Number",
-                        value=profile.get("passport_number", ""),
-                        key="edit_passport_popover",
-                    )
-                    new_airline = st.text_input(
-                        "Preferred Airline",
-                        value=profile.get("preferred_airline", ""),
-                        key="edit_airline_popover",
-                    )
-                    new_tsa = st.text_input(
-                        "TSA PreCheck",
-                        value=profile.get("tsa_precheck", ""),
-                        key="edit_tsa_popover",
-                    )
-                    meal_options = [
-                        "No Preference",
-                        "Vegetarian",
-                        "Vegan",
-                        "Kosher",
-                        "Halal",
-                        "Gluten-Free",
-                    ]
-                    new_meal = st.selectbox(
-                        "Meal Preference",
-                        meal_options,
-                        index=safe_index(
-                            meal_options,
-                            profile.get("meal_preference", "No Preference"),
-                        ),
-                        key="edit_meal_popover",
-                    )
-
-                    # -------- Passports Management (inside edit form) --------
-                    st.subheader("🛂 Passports")
-                    passports = db.get_passports(exec_id)
-                    if passports:
-                        for p in passports:
-                            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
-                            with col1:
-                                st.write(f"{p['country']}: {p['passport_number']}")
-                            with col2:
-                                st.write(f"Exp: {p.get('expiry_date') or ''}")
-                            with col3:
-                                st.write((p.get("notes") or "")[:30])
-                            with col4:
-                                if st.button("🗑️", key=f"del_pass_{p['id']}"):
-                                    db.delete_passport(p["id"])
-                                    st.rerun()
-                    else:
-                        st.caption("No passports added.")
-
-                    with st.expander("➕ Add Passport"):
-                        col_c, col_n = st.columns(2)
-                        with col_c:
-                            new_country = st.text_input(
-                                "Country", key="add_pass_country"
-                            )
-                        with col_n:
-                            new_pass_num = st.text_input(
-                                "Passport Number", key="add_pass_num"
-                            )
-                        col_e, col_i = st.columns(2)
-                        with col_e:
-                            new_expiry = st.date_input(
-                                "Expiry Date", value=None, key="add_pass_expiry"
-                            )
-                        with col_i:
-                            new_issued = st.date_input(
-                                "Issued Date", value=None, key="add_pass_issued"
-                            )
-                        new_notes_pass = st.text_area("Notes", key="add_pass_notes")
-                        if st.button("➕ Add Passport", key="add_pass_btn"):
-                            if new_country and new_pass_num:
-                                db.add_passport(
-                                    exec_id,
-                                    new_country,
-                                    new_pass_num,
-                                    expiry_date=(
-                                        new_expiry.isoformat() if new_expiry else None
-                                    ),
-                                    issued_date=(
-                                        new_issued.isoformat() if new_issued else None
-                                    ),
-                                    notes=new_notes_pass,
-                                )
-                                st.rerun()
-                            else:
-                                st.warning("Country and Passport Number required.")
-
-                    # -------- Memberships Management (inside edit form) --------
-                    st.subheader("✈️ Memberships")
-                    mems = db.get_memberships(exec_id)
-                    if mems:
-                        for m in mems:
-                            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
-                            with col1:
-                                emoji = (
-                                    "✈️"
-                                    if m["category"] == "airline"
-                                    else "🏨" if m["category"] == "hotel" else "🚗"
-                                )
-                                st.write(
-                                    f"{emoji} {m['program_name']}: {m['membership_number']}"
-                                )
-                            with col2:
-                                tier = m.get("tier") or ""
-                                alliance = m.get("alliance") or ""
-                                airport = m.get("airport_code") or ""
-                                details = []
-                                if tier:
-                                    details.append(tier)
-                                if alliance:
-                                    details.append(alliance)
-                                if airport:
-                                    details.append(airport)
-                                st.write(", ".join(details) if details else "")
-                            with col3:
-                                st.write((m.get("notes") or "")[:30])
-                            with col4:
-                                if st.button("🗑️", key=f"del_mem_pop_{m['id']}"):
-                                    db.delete_membership(m["id"])
-                                    st.rerun()
-                    else:
-                        st.caption("No memberships added.")
-
-                    with st.expander("➕ Add Membership"):
-                        col_cat, col_name, col_num = st.columns(3)
-                        with col_cat:
-                            new_cat_pop = st.selectbox(
-                                "Category",
-                                ["Airline", "Hotel", "Car Rental"],
-                                key="mem_pop_cat",
-                            )
-                        with col_name:
-                            new_name_pop = st.text_input(
-                                "Program Name", key="mem_pop_name"
-                            )
-                        with col_num:
-                            new_num_pop = st.text_input(
-                                "Membership Number", key="mem_pop_num"
-                            )
-                        col_extra1, col_extra2 = st.columns(2)
-                        if new_cat_pop == "Airline":
-                            with col_extra1:
-                                new_tier_pop = st.text_input("Tier", key="mem_pop_tier")
-                                new_alliance_pop = st.text_input(
-                                    "Alliance", key="mem_pop_alliance"
-                                )
-                            with col_extra2:
-                                new_airport_pop = st.text_input(
-                                    "Airport Code", key="mem_pop_airport"
-                                )
-                                new_notes_mem_pop = st.text_area(
-                                    "Notes", key="mem_pop_notes"
-                                )
-                            new_alliance_pop = new_alliance_pop or None
-                            new_airport_pop = new_airport_pop or None
-                        elif new_cat_pop == "Hotel":
-                            with col_extra1:
-                                new_tier_pop = st.text_input(
-                                    "Status/Tier", key="mem_pop_tier"
-                                )
-                            with col_extra2:
-                                new_notes_mem_pop = st.text_area(
-                                    "Notes", key="mem_pop_notes"
-                                )
-                            new_alliance_pop = None
-                            new_airport_pop = None
-                        else:  # Car
-                            with col_extra1:
-                                new_notes_mem_pop = st.text_area(
-                                    "Notes", key="mem_pop_notes"
-                                )
-                            new_tier_pop = None
-                            new_alliance_pop = None
-                            new_airport_pop = None
-
-                        if st.button(
-                            "➕ Add Membership (Popover)", key="add_mem_pop_btn"
-                        ):
-                            if new_name_pop and new_num_pop:
-                                db.add_membership(
-                                    exec_id,
-                                    new_cat_pop.lower(),
-                                    new_name_pop,
-                                    new_num_pop,
-                                    tier=new_tier_pop,
-                                    alliance=new_alliance_pop,
-                                    airport_code=new_airport_pop,
-                                    notes=new_notes_mem_pop,
-                                )
-                                st.rerun()
-                            else:
-                                st.warning(
-                                    "Program Name and Membership Number required."
-                                )
-
-                    # -------- End of extra sections --------
-
-                    col_save, col_cancel, col_delete = st.columns(3)
-                    with col_save:
-                        submitted = st.form_submit_button("💾 Save Changes")
-                    with col_cancel:
-                        cancel = st.form_submit_button("❌ Cancel")
-                    with col_delete:
-                        if st.form_submit_button("🗑️ Delete Executive", type="primary"):
-                            st.session_state["show_delete_confirmation"] = True
-
-                    if submitted:
-                        db.update_executive(
-                            exec_id,
-                            new_company_id,
-                            new_name,
-                            new_email,
-                            new_tz,
-                            new_seat if new_seat != "No Preference" else "",
-                            "",  # hotel_loyalty removed
-                            "",  # frequent_flyer_number removed
-                            new_diet,
-                            new_passport,
-                            new_airline,
-                            new_tsa,
-                            new_meal if new_meal != "No Preference" else "",
+                if st.session_state.get("show_delete_confirmation", False):
+                    st.warning(f"⚠️ Permanently delete executive '{profile['name']}'?")
+                    trip_count = db.get_executive_trip_count(exec_id)
+                    if trip_count > 0:
+                        st.error(
+                            f"⚠️ This executive has {trip_count} trip(s). They will also be deleted."
                         )
-                        st.success(f"✅ Executive '{new_name}' updated!")
-                        st.session_state["profile_edit_mode"] = False
-                        st.session_state["show_full_profile"] = False
-                        st.rerun()
-                    if cancel:
-                        st.session_state["profile_edit_mode"] = False
-                        st.rerun()
-
-                    if st.session_state.get("show_delete_confirmation", False):
-                        st.warning(
-                            f"⚠️ Permanently delete executive '{profile['name']}'?"
-                        )
-                        trip_count = db.get_executive_trip_count(exec_id)
-                        if trip_count > 0:
-                            st.error(
-                                f"⚠️ This executive has {trip_count} trip(s). They will also be deleted."
-                            )
-                        col_yes, col_no = st.columns(2)
-                        with col_yes:
-                            if st.button("✅ Yes, Delete", key="confirm_delete_modal"):
-                                success, msg = db.delete_executive(exec_id, force=True)
-                                if success:
-                                    st.success(msg)
-                                    st.session_state["show_full_profile"] = False
-                                    st.session_state["profile_edit_mode"] = False
-                                    st.session_state["show_delete_confirmation"] = False
-                                    if "current_trip_id" in st.session_state:
-                                        del st.session_state["current_trip_id"]
-                                    if "trip_stops" in st.session_state:
-                                        del st.session_state["trip_stops"]
-                                    st.rerun()
-                                else:
-                                    st.error(msg)
-                        with col_no:
-                            if st.button("❌ Cancel", key="cancel_delete_modal"):
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("✅ Yes, Delete", key="confirm_delete_modal"):
+                            success, msg = db.delete_executive(exec_id, force=True)
+                            if success:
+                                st.success(msg)
+                                st.session_state["show_full_profile"] = False
+                                st.session_state["profile_edit_mode"] = False
                                 st.session_state["show_delete_confirmation"] = False
+                                if "current_trip_id" in st.session_state:
+                                    del st.session_state["current_trip_id"]
+                                if "trip_stops" in st.session_state:
+                                    del st.session_state["trip_stops"]
                                 st.rerun()
+                            else:
+                                st.error(msg)
+                    with col_no:
+                        if st.button("❌ Cancel", key="cancel_delete_modal"):
+                            st.session_state["show_delete_confirmation"] = False
+                            st.rerun()
 
+            # ---- PASSPORTS (EDIT MODE) ----
+            st.subheader("🛂 Passports")
+            passports = db.get_passports(exec_id)
+            if passports:
+                for p in passports:
+                    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                    with col1:
+                        st.write(f"{p['country']}: {p['passport_number']}")
+                    with col2:
+                        st.write(f"Exp: {p.get('expiry_date') or ''}")
+                    with col3:
+                        st.write((p.get("notes") or "")[:30])
+                    with col4:
+                        if st.button("🗑️", key=f"del_pass_edit_{p['id']}"):
+                            db.delete_passport(p["id"])
+                            st.rerun()
             else:
-                profile_data = db.get_full_executive_profile(exec_id)
-                if profile_data:
-                    for key, value in profile_data.items():
-                        st.write(f"**{key}:** {value}")
+                st.caption("No passports added.")
 
-                st.divider()
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✏️ Edit Executive", use_container_width=True):
-                        st.session_state["profile_edit_mode"] = True
+            with st.expander("➕ Add Passport"):
+                col_c, col_n = st.columns(2)
+                with col_c:
+                    new_country = st.text_input("Country", key="edit_pass_country")
+                with col_n:
+                    new_pass_num = st.text_input("Passport Number", key="edit_pass_num")
+                col_e, col_i = st.columns(2)
+                with col_e:
+                    new_expiry = st.date_input(
+                        "Expiry Date", value=None, key="edit_pass_expiry"
+                    )
+                with col_i:
+                    new_issued = st.date_input(
+                        "Issued Date", value=None, key="edit_pass_issued"
+                    )
+                new_notes_pass = st.text_area("Notes", key="edit_pass_notes")
+                if st.button("➕ Add Passport", key="edit_pass_btn"):
+                    if new_country and new_pass_num:
+                        db.add_passport(
+                            exec_id,
+                            new_country,
+                            new_pass_num,
+                            expiry_date=new_expiry.isoformat() if new_expiry else None,
+                            issued_date=new_issued.isoformat() if new_issued else None,
+                            notes=new_notes_pass,
+                        )
                         st.rerun()
-                with col2:
-                    if st.button("❌ Close Profile", use_container_width=True):
-                        st.session_state["show_full_profile"] = False
-                        st.session_state["profile_edit_mode"] = False
+                    else:
+                        st.warning("Country and Passport Number required.")
+
+            # ---- MEMBERSHIPS (EDIT MODE) ----
+            st.subheader("✈️ Memberships")
+            mems = db.get_memberships(exec_id)
+            if mems:
+                for m in mems:
+                    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                    with col1:
+                        emoji = (
+                            "✈️"
+                            if m["category"] == "airline"
+                            else "🏨" if m["category"] == "hotel" else "🚗"
+                        )
+                        st.write(
+                            f"{emoji} {m['program_name']}: {m['membership_number']}"
+                        )
+                    with col2:
+                        tier = m.get("tier") or ""
+                        alliance = m.get("alliance") or ""
+                        airport = m.get("airport_code") or ""
+                        details = []
+                        if tier:
+                            details.append(tier)
+                        if alliance:
+                            details.append(alliance)
+                        if airport:
+                            details.append(airport)
+                        st.write(", ".join(details) if details else "")
+                    with col3:
+                        st.write((m.get("notes") or "")[:30])
+                    with col4:
+                        if st.button("🗑️", key=f"del_mem_edit_{m['id']}"):
+                            db.delete_membership(m["id"])
+                            st.rerun()
+            else:
+                st.caption("No memberships added.")
+
+            with st.expander("➕ Add Membership"):
+                col_cat, col_name, col_num = st.columns(3)
+                with col_cat:
+                    new_cat = st.selectbox(
+                        "Category",
+                        ["Airline", "Hotel", "Car Rental"],
+                        key="edit_mem_cat",
+                    )
+                with col_name:
+                    new_name_mem = st.text_input("Program Name", key="edit_mem_name")
+                with col_num:
+                    new_num_mem = st.text_input("Membership Number", key="edit_mem_num")
+                col_extra1, col_extra2 = st.columns(2)
+                if new_cat == "Airline":
+                    with col_extra1:
+                        new_tier = st.text_input("Tier", key="edit_mem_tier")
+                        new_alliance = st.text_input(
+                            "Alliance", key="edit_mem_alliance"
+                        )
+                    with col_extra2:
+                        new_airport = st.text_input(
+                            "Airport Code", key="edit_mem_airport"
+                        )
+                        new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
+                    new_alliance = new_alliance or None
+                    new_airport = new_airport or None
+                elif new_cat == "Hotel":
+                    with col_extra1:
+                        new_tier = st.text_input("Status/Tier", key="edit_mem_tier")
+                    with col_extra2:
+                        new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
+                    new_alliance = None
+                    new_airport = None
+                else:
+                    with col_extra1:
+                        new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
+                    new_tier = None
+                    new_alliance = None
+                    new_airport = None
+
+                if st.button("➕ Add Membership", key="edit_mem_add_btn"):
+                    if new_name_mem and new_num_mem:
+                        db.add_membership(
+                            exec_id,
+                            new_cat.lower(),
+                            new_name_mem,
+                            new_num_mem,
+                            tier=new_tier,
+                            alliance=new_alliance,
+                            airport_code=new_airport,
+                            notes=new_notes_mem,
+                        )
+                        st.rerun()
+                    else:
+                        st.warning("Program Name and Membership Number required.")
+
+        # -------- READ-ONLY MODE --------
+        else:
+            profile_data = db.get_full_executive_profile(exec_id)
+            if profile_data:
+                for key, value in profile_data.items():
+                    st.write(f"**{key}:** {value}")
+
+            # ---- PASSPORTS (READ-ONLY) ----
+            st.divider()
+            st.subheader("🛂 Passports")
+            passports = db.get_passports(exec_id)
+            if passports:
+                for p in passports:
+                    col1, col2, col3 = st.columns([2, 2, 2])
+                    with col1:
+                        st.write(f"{p['country']}: {p['passport_number']}")
+                    with col2:
+                        st.write(f"Exp: {p.get('expiry_date') or ''}")
+                    with col3:
+                        st.write(p.get("notes") or "")
+            else:
+                st.caption("No passports added.")
+
+            # ---- MEMBERSHIPS (READ-ONLY) ----
+            st.subheader("✈️ Memberships")
+            mems = db.get_memberships(exec_id)
+            if mems:
+                for m in mems:
+                    col1, col2, col3 = st.columns([2, 2, 2])
+                    with col1:
+                        emoji = (
+                            "✈️"
+                            if m["category"] == "airline"
+                            else "🏨" if m["category"] == "hotel" else "🚗"
+                        )
+                        st.write(
+                            f"{emoji} {m['program_name']}: {m['membership_number']}"
+                        )
+                    with col2:
+                        tier = m.get("tier") or ""
+                        alliance = m.get("alliance") or ""
+                        airport = m.get("airport_code") or ""
+                        details = []
+                        if tier:
+                            details.append(tier)
+                        if alliance:
+                            details.append(alliance)
+                        if airport:
+                            details.append(airport)
+                        st.write(", ".join(details) if details else "")
+                    with col3:
+                        st.write(m.get("notes") or "")
+            else:
+                st.caption("No memberships added.")
+
+            # ---- ACTION BUTTONS ----
+            st.divider()
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("✏️ Edit Executive", use_container_width=True):
+                    st.session_state["profile_edit_mode"] = True
+                    st.rerun()
+            with col2:
+                if st.button("🗑️ Delete Executive", use_container_width=True):
+                    st.session_state["confirm_delete_from_view"] = True
+            with col3:
+                if st.button("❌ Close Profile", use_container_width=True):
+                    st.session_state["show_full_profile"] = False
+                    st.session_state["profile_edit_mode"] = False
+                    st.session_state["confirm_delete_from_view"] = False
+                    st.rerun()
+
+            if st.session_state.get("confirm_delete_from_view", False):
+                st.warning(f"⚠️ Permanently delete executive '{profile['name']}'?")
+                trip_count = db.get_executive_trip_count(exec_id)
+                if trip_count > 0:
+                    st.error(
+                        f"⚠️ This executive has {trip_count} trip(s). They will also be deleted."
+                    )
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("✅ Yes, Delete", key="confirm_delete_view_yes"):
+                        success, msg = db.delete_executive(exec_id, force=True)
+                        if success:
+                            st.success(msg)
+                            st.session_state["show_full_profile"] = False
+                            st.session_state["profile_edit_mode"] = False
+                            st.session_state["confirm_delete_from_view"] = False
+                            if "current_trip_id" in st.session_state:
+                                del st.session_state["current_trip_id"]
+                            if "trip_stops" in st.session_state:
+                                del st.session_state["trip_stops"]
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                with col_no:
+                    if st.button("❌ Cancel", key="confirm_delete_view_no"):
+                        st.session_state["confirm_delete_from_view"] = False
                         st.rerun()
 
-    # Export buttons (collapsible)
+# Export buttons (collapsible) – moved to sidebar
+if profile:
     with st.sidebar.expander("📤 Export Profile", expanded=False):
         col_csv, col_doc, col_excel = st.columns(3)
         with col_csv:
@@ -592,11 +750,10 @@ with st.sidebar.expander("💾 Import / Restore Database"):
                 st.error(f"Import failed: {e}")
 
 # =========================================================
-# MAIN AREA: TABS
+# MAIN AREA: TABS (Only Trip Planner, Templates, Spending)
 # =========================================================
 tab_names = [
     "✈️ Trip Planner",
-    "👤 Executive Management",
     "📋 Trip Templates",
     "📊 Spending Dashboard",
 ]
@@ -605,14 +762,14 @@ default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
 if "active_tab" in st.session_state:
     del st.session_state["active_tab"]
 
-tab1, tab2, tab3, tab4 = st.tabs(tab_names)
+tab1, tab2, tab3 = st.tabs(tab_names)
 
 # ------------------------------------------------------------------
 # TAB 1: TRIP PLANNER (CREATE ONLY)
 # ------------------------------------------------------------------
 with tab1:
     if not profile:
-        st.warning("Please add an executive in the 'Executive Management' tab first.")
+        st.warning("Please add an executive using the sidebar first.")
         st.stop()
 
     # Executive dropdown
@@ -1083,177 +1240,9 @@ with tab1:
                 st.warning("Enter a Trip Name and add at least one stop.")
 
 # ------------------------------------------------------------------
-# TAB 2: EXECUTIVE MANAGEMENT (ADD ONLY + ADD MEMBERSHIP OUTSIDE FORM)
+# TAB 2: TRIP TEMPLATES (unchanged)
 # ------------------------------------------------------------------
 with tab2:
-
-    # Add Company
-    st.subheader("Add Company")
-    with st.form("add_company_form_tab", clear_on_submit=True):
-        comp_name = st.text_input("Company Name", key="comp_name_tab")
-        comp_cc = st.text_input("Default Cost Center (optional)", key="comp_cc_tab")
-        comp_policy = st.text_area("Policy Notes (optional)", key="comp_policy_tab")
-        if st.form_submit_button("Add Company"):
-            if comp_name:
-                db.add_company(comp_name, comp_cc, comp_policy)
-                st.success(f"Company '{comp_name}' added!")
-                st.rerun()
-            else:
-                st.warning("Company Name is required.")
-    st.divider()
-
-    # Add Executive
-    st.subheader("Add Executive")
-    companies = db.get_all_companies()
-    company_options = {name: id for id, name in companies}
-    tz_display_names, tz_map = get_timezone_dropdown_options()
-    default_display = next(
-        (n for n in tz_display_names if "America/New_York" in n), tz_display_names[0]
-    )
-
-    with st.form("add_exec_form_tab", clear_on_submit=True):
-        exec_name = st.text_input("Full Name*", key="exec_name_tab")
-        exec_email = st.text_input("Email", key="exec_email_tab")
-        if companies:
-            sel_company = st.selectbox(
-                "Company*", list(company_options.keys()), key="exec_company_tab"
-            )
-            sel_company_id = company_options[sel_company]
-        else:
-            st.warning("Add a company first.")
-            sel_company_id = None
-        sel_tz = st.selectbox(
-            "Timezone",
-            tz_display_names,
-            index=tz_display_names.index(default_display),
-            key="exec_tz_tab",
-        )
-        exec_tz = tz_map[sel_tz]
-        exec_seat = st.selectbox(
-            "Seat Preference",
-            ["No Preference", "Aisle", "Window", "Middle"],
-            key="exec_seat_tab",
-        )
-        exec_diet = st.text_input("Dietary Restrictions", key="exec_diet_tab")
-        exec_passport = st.text_input("Passport Number", key="exec_passport_tab")
-        exec_airline = st.text_input("Preferred Airline", key="exec_airline_tab")
-        exec_tsa = st.text_input("TSA PreCheck", key="exec_tsa_tab")
-        exec_meal = st.selectbox(
-            "Meal Preference",
-            ["No Preference", "Vegetarian", "Vegan", "Kosher", "Halal", "Gluten-Free"],
-            key="exec_meal_tab",
-        )
-
-        if st.form_submit_button("Add Executive"):
-            if exec_name and sel_company_id:
-                if exec_email:
-                    existing = duplicate_detection.find_duplicate_executive(
-                        exec_email, exec_name, sel_company_id
-                    )
-                    if existing:
-                        st.warning(
-                            "⚠️ An executive with the same email or name+company already exists:"
-                        )
-                        for dup in existing:
-                            st.write(f"- {dup['name']} (ID: {dup['id']})")
-                        if not st.checkbox("Add anyway?", key="force_add_exec_tab"):
-                            st.stop()
-                db.add_executive(
-                    sel_company_id,
-                    exec_name,
-                    exec_email,
-                    exec_tz,
-                    exec_seat if exec_seat != "No Preference" else "",
-                    "",  # hotel_loyalty removed
-                    "",  # frequent_flyer_number removed
-                    exec_diet,
-                    exec_passport,
-                    exec_airline,
-                    exec_tsa,
-                    exec_meal if exec_meal != "No Preference" else "",
-                )
-                st.success(f"Executive '{exec_name}' added!")
-                st.rerun()
-            else:
-                st.warning("Name and Company are required.")
-
-    # ---- Add New Membership (outside the Add Executive form) ----
-    st.write("**Add New Membership:**")
-    col_cat, col_name, col_num = st.columns(3)
-    with col_cat:
-        new_cat = st.selectbox(
-            "Category", ["Airline", "Hotel", "Car Rental"], key="edit_mem_cat_tab"
-        )
-    with col_name:
-        new_name = st.text_input("Program Name", key="edit_mem_name_tab")
-    with col_num:
-        new_num = st.text_input("Membership Number", key="edit_mem_num_tab")
-
-    col_extra1, col_extra2 = st.columns(2)
-    if new_cat == "Airline":
-        with col_extra1:
-            new_tier = st.text_input("Tier", key="edit_mem_tier_tab")
-            new_alliance = st.text_input("Alliance", key="edit_mem_alliance_tab")
-        with col_extra2:
-            new_airport = st.text_input("Airport Code", key="edit_mem_airport_tab")
-            new_notes_mem = st.text_area("Notes", key="edit_mem_notes_tab")
-        new_alliance = new_alliance or None
-        new_airport = new_airport or None
-    elif new_cat == "Hotel":
-        with col_extra1:
-            new_tier = st.text_input("Status/Tier", key="edit_mem_tier_tab")
-        with col_extra2:
-            new_notes_mem = st.text_area("Notes", key="edit_mem_notes_tab")
-        new_alliance = None
-        new_airport = None
-    else:  # Car
-        with col_extra1:
-            new_notes_mem = st.text_area("Notes", key="edit_mem_notes_tab")
-        new_tier = None
-        new_alliance = None
-        new_airport = None
-
-    if st.button("➕ Add Membership", key="edit_add_mem_tab"):
-        if new_name and new_num:
-            db.add_membership(
-                exec_id,
-                new_cat.lower(),
-                new_name,
-                new_num,
-                tier=new_tier,
-                alliance=new_alliance,
-                airport_code=new_airport,
-                notes=new_notes_mem,
-            )
-            st.success(f"Added {new_name}")
-            st.rerun()
-        else:
-            st.warning("Fill in Program Name and Membership Number.")
-
-    # Global duplicate executive scan (keep as a helper)
-    st.divider()
-    if st.button("🔍 Find Duplicate Executives (All)"):
-        all_execs = db.get_all_executives()
-        email_map = {}
-        for e_id, name, company in all_execs:
-            p = db.get_executive_profile(e_id)
-            email = p.get("email", "")
-            if email:
-                email_map.setdefault(email, []).append((e_id, name, company))
-        duplicates_found = False
-        for email, entries in email_map.items():
-            if len(entries) > 1:
-                duplicates_found = True
-                st.warning(f"Email {email} has {len(entries)} executives:")
-                for e_id, name, company in entries:
-                    st.write(f"  - {name} (ID: {e_id})")
-        if not duplicates_found:
-            st.success("No duplicate emails found.")
-
-# ------------------------------------------------------------------
-# TAB 3: TRIP TEMPLATES (unchanged)
-# ------------------------------------------------------------------
-with tab3:
     st.header("📋 Trip Templates")
     templates = db.get_trip_templates()
     if templates:
@@ -1348,9 +1337,9 @@ with tab3:
                             st.warning("Please fill in all required fields.")
 
 # ------------------------------------------------------------------
-# TAB 4: SPENDING DASHBOARD (with mass delete)
+# TAB 3: SPENDING DASHBOARD (with mass delete)
 # ------------------------------------------------------------------
-with tab4:
+with tab3:
     st.header("📊 Spending Dashboard (All Trips)")
     st.subheader("Filter & View Aggregate Spending")
     col_dash1, col_dash2 = st.columns(2)

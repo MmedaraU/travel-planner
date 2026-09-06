@@ -32,13 +32,19 @@ def migrate_db():
     existing_items = [row[1] for row in c.fetchall()]
 
     if "is_confirmed" not in existing_items:
-        c.execute("ALTER TABLE itinerary_items ADD COLUMN is_confirmed INTEGER DEFAULT 0")
+        c.execute(
+            "ALTER TABLE itinerary_items ADD COLUMN is_confirmed INTEGER DEFAULT 0"
+        )
     if "receipt_path" not in existing_items:
         c.execute("ALTER TABLE itinerary_items ADD COLUMN receipt_path TEXT")
     if "cost_currency" not in existing_items:
-        c.execute("ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'")
+        c.execute(
+            "ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'"
+        )
     if "exchange_rate_snapshot" not in existing_items:
-        c.execute("ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0")
+        c.execute(
+            "ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0"
+        )
 
     # --- Columns for 'executives' table ---
     c.execute("PRAGMA table_info(executives)")
@@ -65,7 +71,9 @@ def migrate_db():
     ]
     for col_name, col_type in new_membership_cols:
         if col_name not in existing_membership_cols:
-            c.execute(f"ALTER TABLE executive_memberships ADD COLUMN {col_name} {col_type}")
+            c.execute(
+                f"ALTER TABLE executive_memberships ADD COLUMN {col_name} {col_type}"
+            )
 
     # --- Create executive_passports table ---
     c.execute("""CREATE TABLE IF NOT EXISTS executive_passports (
@@ -79,7 +87,7 @@ def migrate_db():
         FOREIGN KEY (exec_id) REFERENCES executives(id) ON DELETE CASCADE
     )""")
 
-    # --- Ensure other tables exist ---
+    # --- Ensure other tables exist (with all columns) ---
     c.execute("""CREATE TABLE IF NOT EXISTS executive_memberships (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         exec_id INTEGER NOT NULL,
@@ -341,6 +349,18 @@ def get_full_executive_profile(exec_id):
     }
 
 
+def get_all_executive_profiles():
+    """Return a list of full profile dictionaries for all executives."""
+    all_execs = get_all_executives()
+    profiles = []
+    for e_id, name, company in all_execs:
+        profile = get_full_executive_profile(e_id)
+        if profile:
+            profile["ID"] = e_id
+            profiles.append(profile)
+    return profiles
+
+
 def update_executive(
     exec_id,
     company_id,
@@ -398,14 +418,16 @@ def update_executive(
 # =========================================================
 # EXECUTIVE PASSPORTS
 # =========================================================
-def add_passport(exec_id, country, passport_number, expiry_date=None, issued_date=None, notes=None):
+def add_passport(
+    exec_id, country, passport_number, expiry_date=None, issued_date=None, notes=None
+):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
         """INSERT INTO executive_passports 
            (exec_id, country, passport_number, expiry_date, issued_date, notes)
            VALUES (?, ?, ?, ?, ?, ?)""",
-        (exec_id, country, passport_number, expiry_date, issued_date, notes)
+        (exec_id, country, passport_number, expiry_date, issued_date, notes),
     )
     conn.commit()
     new_id = c.lastrowid
@@ -417,7 +439,10 @@ def get_passports(exec_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT * FROM executive_passports WHERE exec_id = ? ORDER BY country", (exec_id,))
+    c.execute(
+        "SELECT * FROM executive_passports WHERE exec_id = ? ORDER BY country",
+        (exec_id,),
+    )
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]
@@ -434,14 +459,32 @@ def delete_passport(passport_id):
 # =========================================================
 # EXECUTIVE MEMBERSHIPS
 # =========================================================
-def add_membership(exec_id, category, program_name, membership_number, tier=None, alliance=None, airport_code=None, notes=None):
+def add_membership(
+    exec_id,
+    category,
+    program_name,
+    membership_number,
+    tier=None,
+    alliance=None,
+    airport_code=None,
+    notes=None,
+):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
         """INSERT INTO executive_memberships 
            (exec_id, category, program_name, membership_number, tier, alliance, airport_code, notes)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (exec_id, category, program_name, membership_number, tier, alliance, airport_code, notes)
+        (
+            exec_id,
+            category,
+            program_name,
+            membership_number,
+            tier,
+            alliance,
+            airport_code,
+            notes,
+        ),
     )
     conn.commit()
     new_id = c.lastrowid
@@ -682,7 +725,7 @@ def delete_trips(trip_ids):
         return
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    placeholders = ','.join('?' * len(trip_ids))
+    placeholders = ",".join("?" * len(trip_ids))
     c.execute(f"DELETE FROM trips WHERE id IN ({placeholders})", trip_ids)
     conn.commit()
     conn.close()
