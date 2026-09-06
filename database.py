@@ -248,6 +248,37 @@ def get_company(company_id):
     return dict(row) if row else None
 
 
+def update_company(company_id, name, default_cost_center=None, policy_notes=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """UPDATE companies 
+           SET name = ?, default_cost_center = ?, policy_notes = ? 
+           WHERE id = ?""",
+        (name, default_cost_center, policy_notes, company_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_company(company_id):
+    # Check if any executive is still using this company
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM executives WHERE company_id = ?", (company_id,))
+    count = c.fetchone()[0]
+    if count > 0:
+        conn.close()
+        return (
+            False,
+            f"Cannot delete: {count} executive(s) are still assigned to this company.",
+        )
+    c.execute("DELETE FROM companies WHERE id = ?", (company_id,))
+    conn.commit()
+    conn.close()
+    return True, "Company deleted successfully."
+
+
 # =========================================================
 # EXECUTIVE MANAGEMENT
 # =========================================================

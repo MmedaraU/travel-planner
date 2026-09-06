@@ -1,7 +1,7 @@
 import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter  # <-- added import
 import database as db
 from datetime import datetime
 
@@ -73,10 +73,10 @@ def export_profile_to_excel(exec_id, currency_symbol="$"):
     else:
         ws.append(["No memberships recorded."])
 
-    # Auto-fit columns
+    # Auto-fit columns – fixed
     for col in ws.columns:
         max_length = 0
-        column = col[0].column_letter
+        col_letter = get_column_letter(col[0].column)
         for cell in col:
             try:
                 if len(str(cell.value)) > max_length:
@@ -84,7 +84,7 @@ def export_profile_to_excel(exec_id, currency_symbol="$"):
             except:
                 pass
         adjusted_width = min(max_length + 2, 50)
-        ws.column_dimensions[column].width = adjusted_width
+        ws.column_dimensions[col_letter].width = adjusted_width
 
     file_stream = io.BytesIO()
     wb.save(file_stream)
@@ -136,10 +136,10 @@ def export_itinerary_to_excel(items, trip_data, currency_symbol, base_currency="
             ]
         )
 
-    # Auto-fit columns
+    # Auto-fit columns – fixed
     for col in ws.columns:
         max_length = 0
-        column = col[0].column_letter
+        col_letter = get_column_letter(col[0].column)
         for cell in col:
             try:
                 if len(str(cell.value)) > max_length:
@@ -147,7 +147,7 @@ def export_itinerary_to_excel(items, trip_data, currency_symbol, base_currency="
             except:
                 pass
         adjusted_width = min(max_length + 2, 50)
-        ws.column_dimensions[column].width = adjusted_width
+        ws.column_dimensions[col_letter].width = adjusted_width
 
     file_stream = io.BytesIO()
     wb.save(file_stream)
@@ -220,10 +220,10 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
             ]
         )
 
-    # Auto-fit
+    # Auto-fit columns – fixed
     for col in ws.columns:
         max_length = 0
-        column = col[0].column_letter
+        col_letter = get_column_letter(col[0].column)
         for cell in col:
             try:
                 if len(str(cell.value)) > max_length:
@@ -231,7 +231,7 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
             except:
                 pass
         adjusted_width = min(max_length + 2, 50)
-        ws.column_dimensions[column].width = adjusted_width
+        ws.column_dimensions[col_letter].width = adjusted_width
 
     file_stream = io.BytesIO()
     wb.save(file_stream)
@@ -239,7 +239,7 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
     return file_stream
 
 
-def export_spending_to_excel(summary_data, currency_symbol, base_currency="USD"):
+def export_spending_to_excel(summary_data, base_currency="USD"):
     """
     Export spending summary to Excel.
     Columns: Executive, Company, Destination, Budget, Total Spent, Confirmed, Estimated, Status, Currency.
@@ -271,27 +271,29 @@ def export_spending_to_excel(summary_data, currency_symbol, base_currency="USD")
     for cell in ws[2]:
         cell.font = Font(bold=True)
 
+    def safe_float(value):
+        return float(value) if value is not None else 0.0
+
     # Data rows
     for trip in summary_data:
-        trip_base_currency = trip.get("base_currency", base_currency)
         ws.append(
             [
                 trip.get("executive_name", ""),
                 trip.get("company_name", ""),
                 trip.get("destination", ""),
-                f"{trip.get('budget', 0):.2f}",
-                f"{trip.get('total_spent', 0):.2f}",
-                f"{trip.get('confirmed_spent', 0):.2f}",
-                f"{trip.get('estimated_spent', 0):.2f}",
+                f"{safe_float(trip.get('budget')):.2f}",
+                f"{safe_float(trip.get('total_spent')):.2f}",
+                f"{safe_float(trip.get('confirmed_spent')):.2f}",
+                f"{safe_float(trip.get('estimated_spent')):.2f}",
                 trip.get("status", "").title(),
-                trip_base_currency,
+                trip.get("base_currency", base_currency),
             ]
         )
 
-    # Auto-fit columns
+    # Auto-fit columns – fixed
     for col in ws.columns:
         max_length = 0
-        column = col[0].column_letter
+        col_letter = get_column_letter(col[0].column)
         for cell in col:
             try:
                 if len(str(cell.value)) > max_length:
@@ -299,7 +301,7 @@ def export_spending_to_excel(summary_data, currency_symbol, base_currency="USD")
             except:
                 pass
         adjusted_width = min(max_length + 2, 50)
-        ws.column_dimensions[column].width = adjusted_width
+        ws.column_dimensions[col_letter].width = adjusted_width
 
     file_stream = io.BytesIO()
     wb.save(file_stream)

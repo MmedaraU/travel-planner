@@ -909,7 +909,6 @@ with tab1:
         st.write("")  # placeholder
 
     # --- Currencies (only Base Currency) ---
-    st.subheader("💱 Trip Currency")
     base_currency_options = [
         "USD",
         "EUR",
@@ -2454,9 +2453,7 @@ with tab3:
 
         with col_exp3:
             if st.button("📊 Export to Excel", key="dash_excel_tab"):
-                excel_stream = export_spending_to_excel(
-                    summary_data, get_currency_symbol("USD"), "USD"
-                )
+                excel_stream = export_spending_to_excel(summary_data, "USD")
                 if excel_stream:
                     st.download_button(
                         "⬇️ Download .xlsx",
