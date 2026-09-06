@@ -820,19 +820,20 @@ with st.sidebar.expander("💾 Import / Restore Database"):
                 st.error(f"Import failed: {e}")
 
 # =========================================================
-# MAIN AREA: TABS (Only Trip Planner, Templates, All Trips)
+# MAIN AREA: TABS (Only Trip Planner, Templates, All Trips, Companies)
 # =========================================================
 tab_names = [
     "✈️ Trip Planner",
     "📋 Trip Templates",
     "📋 All Trips",
+    "🏢 Companies",
 ]
 default_tab = st.session_state.get("active_tab", "✈️ Trip Planner")
 default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
 if "active_tab" in st.session_state:
     del st.session_state["active_tab"]
 
-tab1, tab2, tab3 = st.tabs(tab_names)
+tab1, tab2, tab3, tab4 = st.tabs(tab_names)
 
 # ------------------------------------------------------------------
 # TAB 1: TRIP PLANNER (CREATE ONLY)
@@ -2466,3 +2467,85 @@ with tab3:
                     )
     else:
         st.info("No trips found matching the filters.")
+
+# ------------------------------------------------------------------
+# TAB 4: COMPANIES (Management)
+# ------------------------------------------------------------------
+with tab4:
+    st.header("🏢 Company Management")
+
+    # ---- Add new company form ----
+    with st.expander("➕ Add New Company", expanded=False):
+        with st.form("add_company_manager_form"):
+            new_name = st.text_input("Company Name*", key="mgr_comp_name")
+            new_cc = st.text_input("Default Cost Center (optional)", key="mgr_comp_cc")
+            new_policy = st.text_area("Policy Notes (optional)", key="mgr_comp_policy")
+            if st.form_submit_button("Add Company"):
+                if new_name:
+                    db.add_company(new_name, new_cc, new_policy)
+                    st.success(f"Company '{new_name}' added!")
+                    st.rerun()
+                else:
+                    st.warning("Company Name is required.")
+
+    # ---- List of companies ----
+    companies = db.get_all_companies()
+    if not companies:
+        st.info("No companies yet. Add one using the expander above.")
+    else:
+        st.write("**Existing Companies**")
+        for comp_id, comp_name in companies:
+            # Get full details
+            comp = db.get_company(comp_id)
+            with st.container():
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
+                with col1:
+                    st.write(f"**{comp['name']}**")
+                with col2:
+                    st.write(comp.get('default_cost_center', '') or '—')
+                with col3:
+                    st.write(comp.get('policy_notes', '') or '—')
+                with col4:
+                    if st.button("✏️", key=f"edit_comp_{comp_id}"):
+                        st.session_state[f"edit_company_{comp_id}"] = True
+                with col5:
+                    if st.button("🗑️", key=f"del_comp_{comp_id}"):
+                        st.session_state[f"confirm_del_comp_{comp_id}"] = True
+
+                # ---- Edit company popover ----
+                if st.session_state.get(f"edit_company_{comp_id}", False):
+                    with st.popover("Edit Company", use_container_width=True):
+                        with st.form(key=f"edit_comp_form_{comp_id}"):
+                            edit_name = st.text_input("Company Name*", value=comp['name'], key=f"edit_comp_name_{comp_id}")
+                            edit_cc = st.text_input("Default Cost Center (optional)", value=comp.get('default_cost_center', ''), key=f"edit_comp_cc_{comp_id}")
+                            edit_policy = st.text_area("Policy Notes (optional)", value=comp.get('policy_notes', ''), key=f"edit_comp_policy_{comp_id}")
+                            if st.form_submit_button("💾 Save Changes"):
+                                if edit_name:
+                                    db.update_company(comp_id, edit_name, edit_cc, edit_policy)
+                                    st.success(f"Company '{edit_name}' updated!")
+                                    st.session_state.pop(f"edit_company_{comp_id}", None)
+                                    st.rerun()
+                                else:
+                                    st.warning("Company Name is required.")
+                            if st.form_submit_button("❌ Cancel"):
+                                st.session_state.pop(f"edit_company_{comp_id}", None)
+                                st.rerun()
+
+                # ---- Delete confirmation (inside the container) ----
+                if st.session_state.get(f"confirm_del_comp_{comp_id}", False):
+                    st.warning(f"⚠️ Permanently delete company '{comp['name']}'?")
+                    col_yes, col_no = st.columns(2)
+                    with col_yes:
+                        if st.button("✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"):
+                            success, msg = db.delete_company(comp_id)
+                            if success:
+                                st.success(msg)
+                                st.session_state.pop(f"confirm_del_comp_{comp_id}", None)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                    with col_no:
+                        if st.button("❌ Cancel", key=f"confirm_del_comp_no_{comp_id}"):
+                            st.session_state.pop(f"confirm_del_comp_{comp_id}", None)
+                            st.rerun()
+                st.divider()
