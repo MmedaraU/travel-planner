@@ -142,11 +142,7 @@ def migrate_db():
     # --- Phase 1 New Tables (with updated naming) ---
 
     # 1. Contacts table (with type column)
-    c.execute("PRAGMA table_info(contacts)")
-    existing_contact_cols = [row[1] for row in c.fetchall()]
-    if "type" not in existing_contact_cols:
-        c.execute("ALTER TABLE contacts ADD COLUMN type TEXT DEFAULT 'Local Support'")
-
+    # In migrate_db():
     c.execute("PRAGMA table_info(contacts)")
     existing_contact_cols = [row[1] for row in c.fetchall()]
     if "city" not in existing_contact_cols:
