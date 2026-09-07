@@ -307,3 +307,96 @@ def export_spending_to_excel(summary_data, base_currency="USD"):
     wb.save(file_stream)
     file_stream.seek(0)
     return file_stream
+
+
+def export_company_profile_to_excel(company_id):
+    """Export company profile to Excel with sheets: Company Info, Executives, Contacts, Participants."""
+    company = db.get_company(company_id)
+    if not company:
+        return None
+    executives = db.get_executives_by_company(company_id)
+    contacts = db.get_contacts(company_id, active_only=True)
+    participants = db.get_participants(company_id, active_only=True)
+
+    wb = Workbook()
+    # Sheet 1: Company Info
+    ws1 = wb.active
+    ws1.title = "Company Info"
+    ws1["A1"] = "Field"
+    ws1["B1"] = "Value"
+    ws1["A1"].font = Font(bold=True)
+    ws1["B1"].font = Font(bold=True)
+    ws1.append(["Name", company["name"]])
+    ws1.append(["Cost Center", company.get("default_cost_center", "")])
+    ws1.append(["Policy Notes", company.get("policy_notes", "")])
+    ws1.column_dimensions["A"].width = 20
+    ws1.column_dimensions["B"].width = 40
+
+    # Sheet 2: Executives
+    ws2 = wb.create_sheet("Executives")
+    headers = [
+        "Name",
+        "Email",
+        "Timezone",
+        "Seat Preference",
+        "Hotel Loyalty",
+        "Frequent Flyer",
+        "Dietary",
+        "Passport",
+        "Preferred Airline",
+        "TSA PreCheck",
+        "Meal Preference",
+    ]
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws2.cell(row=1, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+    for row_idx, e in enumerate(executives, 2):
+        ws2.cell(row=row_idx, column=1, value=e.get("name", ""))
+        ws2.cell(row=row_idx, column=2, value=e.get("email", ""))
+        ws2.cell(row=row_idx, column=3, value=e.get("timezone", ""))
+        ws2.cell(row=row_idx, column=4, value=e.get("seat_preference", ""))
+        ws2.cell(row=row_idx, column=5, value=e.get("hotel_loyalty", ""))
+        ws2.cell(row=row_idx, column=6, value=e.get("frequent_flyer_number", ""))
+        ws2.cell(row=row_idx, column=7, value=e.get("dietary_restrictions", ""))
+        ws2.cell(row=row_idx, column=8, value=e.get("passport_number", ""))
+        ws2.cell(row=row_idx, column=9, value=e.get("preferred_airline", ""))
+        ws2.cell(row=row_idx, column=10, value=e.get("tsa_precheck", ""))
+        ws2.cell(row=row_idx, column=11, value=e.get("meal_preference", ""))
+    for col in range(1, len(headers) + 1):
+        ws2.column_dimensions[get_column_letter(col)].width = 20
+
+    # Sheet 3: Contacts
+    ws3 = wb.create_sheet("Contacts")
+    headers = ["Name", "Role", "Phone", "Email", "Country", "Notes", "Tags"]
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws3.cell(row=1, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+    for row_idx, c in enumerate(contacts, 2):
+        ws3.cell(row=row_idx, column=1, value=c.get("name", ""))
+        ws3.cell(row=row_idx, column=2, value=c.get("role", ""))
+        ws3.cell(row=row_idx, column=3, value=c.get("phone", ""))
+        ws3.cell(row=row_idx, column=4, value=c.get("email", ""))
+        ws3.cell(row=row_idx, column=5, value=c.get("country", ""))
+        ws3.cell(row=row_idx, column=6, value=c.get("notes", ""))
+        ws3.cell(row=row_idx, column=7, value=c.get("tags", ""))
+    for col in range(1, len(headers) + 1):
+        ws3.column_dimensions[get_column_letter(col)].width = 20
+
+    # Sheet 4: Participants
+    ws4 = wb.create_sheet("Participants")
+    headers = ["Name", "Email", "Role", "Phone"]
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws4.cell(row=1, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+    for row_idx, p in enumerate(participants, 2):
+        ws4.cell(row=row_idx, column=1, value=p.get("name", ""))
+        ws4.cell(row=row_idx, column=2, value=p.get("email", ""))
+        ws4.cell(row=row_idx, column=3, value=p.get("role", ""))
+        ws4.cell(row=row_idx, column=4, value=p.get("phone", ""))
+    for col in range(1, len(headers) + 1):
+        ws4.column_dimensions[get_column_letter(col)].width = 20
+
+    file_stream = io.BytesIO()
+    wb.save(file_stream)
+    file_stream.seek(0)
+    return file_stream

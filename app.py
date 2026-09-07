@@ -15,6 +15,7 @@ from excel_export import (
     export_itinerary_to_excel,
     export_expense_to_excel,
     export_spending_to_excel,
+    export_company_profile_to_excel,
 )
 from currency import get_currency_symbol
 import duplicate_detection
@@ -2971,35 +2972,55 @@ with tab4:
     else:
         st.write("**Existing Companies**")
         for comp_id, comp_name in companies:
-            # Get full details
             comp = db.get_company(comp_id)
             with st.container():
-                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
+                col1, col2, col3, col4, col5, col6 = st.columns(
+                    [2, 1.5, 2, 0.8, 0.8, 1]
+                )
                 with col1:
                     st.write(f"**{comp['name']}**")
                 with col2:
-                    st.write(comp.get('default_cost_center', '') or '—')
+                    st.write(comp.get("default_cost_center", "") or "—")
                 with col3:
-                    st.write(comp.get('policy_notes', '') or '—')
+                    st.write(comp.get("policy_notes", "") or "—")
                 with col4:
                     if st.button("✏️", key=f"edit_comp_{comp_id}"):
                         st.session_state[f"edit_company_{comp_id}"] = True
                 with col5:
                     if st.button("🗑️", key=f"del_comp_{comp_id}"):
                         st.session_state[f"confirm_del_comp_{comp_id}"] = True
+                with col6:
+                    if st.button("📄", key=f"export_comp_{comp_id}"):
+                        st.session_state[f"export_company_{comp_id}"] = True
 
                 # ---- Edit company popover ----
                 if st.session_state.get(f"edit_company_{comp_id}", False):
                     with st.popover("Edit Company", use_container_width=True):
                         with st.form(key=f"edit_comp_form_{comp_id}"):
-                            edit_name = st.text_input("Company Name*", value=comp['name'], key=f"edit_comp_name_{comp_id}")
-                            edit_cc = st.text_input("Default Cost Center (optional)", value=comp.get('default_cost_center', ''), key=f"edit_comp_cc_{comp_id}")
-                            edit_policy = st.text_area("Policy Notes (optional)", value=comp.get('policy_notes', ''), key=f"edit_comp_policy_{comp_id}")
+                            edit_name = st.text_input(
+                                "Company Name*",
+                                value=comp["name"],
+                                key=f"edit_comp_name_{comp_id}",
+                            )
+                            edit_cc = st.text_input(
+                                "Default Cost Center (optional)",
+                                value=comp.get("default_cost_center", ""),
+                                key=f"edit_comp_cc_{comp_id}",
+                            )
+                            edit_policy = st.text_area(
+                                "Policy Notes (optional)",
+                                value=comp.get("policy_notes", ""),
+                                key=f"edit_comp_policy_{comp_id}",
+                            )
                             if st.form_submit_button("💾 Save Changes"):
                                 if edit_name:
-                                    db.update_company(comp_id, edit_name, edit_cc, edit_policy)
+                                    db.update_company(
+                                        comp_id, edit_name, edit_cc, edit_policy
+                                    )
                                     st.success(f"Company '{edit_name}' updated!")
-                                    st.session_state.pop(f"edit_company_{comp_id}", None)
+                                    st.session_state.pop(
+                                        f"edit_company_{comp_id}", None
+                                    )
                                     st.rerun()
                                 else:
                                     st.warning("Company Name is required.")
@@ -3012,11 +3033,15 @@ with tab4:
                     st.warning(f"⚠️ Permanently delete company '{comp['name']}'?")
                     col_yes, col_no = st.columns(2)
                     with col_yes:
-                        if st.button("✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"):
+                        if st.button(
+                            "✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"
+                        ):
                             success, msg = db.delete_company(comp_id)
                             if success:
                                 st.success(msg)
-                                st.session_state.pop(f"confirm_del_comp_{comp_id}", None)
+                                st.session_state.pop(
+                                    f"confirm_del_comp_{comp_id}", None
+                                )
                                 st.rerun()
                             else:
                                 st.error(msg)
@@ -3024,6 +3049,59 @@ with tab4:
                         if st.button("❌ Cancel", key=f"confirm_del_comp_no_{comp_id}"):
                             st.session_state.pop(f"confirm_del_comp_{comp_id}", None)
                             st.rerun()
+
+                # ---- Export company profile popover ----
+                if st.session_state.get(f"export_company_{comp_id}", False):
+                    with st.popover("Export Company Profile", use_container_width=True):
+                        st.write(f"Export: **{comp['name']}**")
+                        col_html, col_word, col_excel = st.columns(3)
+                        with col_html:
+                            if st.button("🌐 HTML", key=f"export_html_{comp_id}"):
+                                html = doc_generator.generate_company_profile_html(
+                                    comp_id
+                                )
+                                if html:
+                                    st.download_button(
+                                        label="⬇️ Download HTML",
+                                        data=html,
+                                        file_name=f"{comp['name']}_profile.html",
+                                        mime="text/html",
+                                        key=f"download_html_{comp_id}",
+                                    )
+                                else:
+                                    st.error("Failed to generate HTML.")
+                        with col_word:
+                            if st.button("📄 Word", key=f"export_word_{comp_id}"):
+                                docx = doc_generator.generate_company_profile_docx(
+                                    comp_id
+                                )
+                                if docx:
+                                    st.download_button(
+                                        label="⬇️ Download Word",
+                                        data=docx,
+                                        file_name=f"{comp['name']}_profile.docx",
+                                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
+                                        key=f"download_word_{comp_id}",
+                                    )
+                                else:
+                                    st.error("Failed to generate Word.")
+                        with col_excel:
+                            if st.button("📊 Excel", key=f"export_excel_{comp_id}"):
+                                excel = export_company_profile_to_excel(comp_id)
+                                if excel:
+                                    st.download_button(
+                                        label="⬇️ Download Excel",
+                                        data=excel,
+                                        file_name=f"{comp['name']}_profile.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                        key=f"download_excel_{comp_id}",
+                                    )
+                                else:
+                                    st.error("Failed to generate Excel.")
+                        if st.button("Close", key=f"close_export_comp_{comp_id}"):
+                            st.session_state.pop(f"export_company_{comp_id}", None)
+                            st.rerun()
+
                 st.divider()
 
 # ------------------------------------------------------------------

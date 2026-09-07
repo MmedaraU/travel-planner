@@ -348,6 +348,15 @@ def delete_company(company_id):
     conn.close()
     return True, "Company deleted successfully."
 
+def get_executives_by_company(company_id):
+    """Return all executives belonging to a company."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM executives WHERE company_id = ?", (company_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 # =========================================================
 # CONTACTS (NEW)

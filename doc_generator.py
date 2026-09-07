@@ -455,3 +455,98 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Executive Ho
     template = env.get_template("travel_pack.html")
     html = template.render(**context)
     return html
+
+
+def generate_company_profile_html(company_id):
+    """Generate a self‑contained HTML company profile."""
+    company = db.get_company(company_id)
+    if not company:
+        return None
+    executives = db.get_executives_by_company(company_id)
+    contacts = db.get_contacts(company_id, active_only=True)
+    participants = db.get_participants(company_id, active_only=True)
+    context = {
+        "company": company,
+        "executives": executives,
+        "contacts": contacts,
+        "participants": participants,
+        "now": datetime.now(),
+    }
+    env = Environment(loader=FileSystemLoader("templates"))
+    template = env.get_template("company_profile.html")
+    return template.render(**context)
+
+
+def generate_company_profile_docx(company_id):
+    """Generate a Word document with company profile."""
+    company = db.get_company(company_id)
+    if not company:
+        return None
+    executives = db.get_executives_by_company(company_id)
+    contacts = db.get_contacts(company_id, active_only=True)
+    participants = db.get_participants(company_id, active_only=True)
+
+    doc = Document()
+    doc.add_heading(f"Company Profile: {company['name']}", 0)
+    doc.add_paragraph(f"Cost Center: {company.get('default_cost_center') or 'N/A'}")
+    if company.get("policy_notes"):
+        doc.add_paragraph(f"Policy Notes: {company['policy_notes']}")
+
+    doc.add_heading("Executives", level=1)
+    if executives:
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        hdr[0].text = "Name"
+        hdr[1].text = "Email"
+        hdr[2].text = "Timezone"
+        hdr[3].text = "Seat Preference"
+        hdr[4].text = "Meal Preference"
+        for e in executives:
+            row = table.add_row().cells
+            row[0].text = e.get("name", "")
+            row[1].text = e.get("email", "")
+            row[2].text = e.get("timezone", "")
+            row[3].text = e.get("seat_preference", "")
+            row[4].text = e.get("meal_preference", "")
+    else:
+        doc.add_paragraph("No executives assigned.")
+
+    doc.add_heading("Contacts", level=1)
+    if contacts:
+        for c in contacts:
+            p = doc.add_paragraph()
+            p.add_run(f"{c['name']}").bold = True
+            if c.get("role"):
+                p.add_run(f" ({c['role']})")
+            p.add_run(
+                f"\n📞 {c.get('phone', '')}  ✉️ {c.get('email', '')}  🌍 {c.get('country', '')}"
+            )
+            if c.get("tags"):
+                p.add_run(f"\n🏷️ {c['tags']}")
+    else:
+        doc.add_paragraph("No contacts.")
+
+    doc.add_heading("Participants", level=1)
+    if participants:
+        table = doc.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        hdr[0].text = "Name"
+        hdr[1].text = "Email"
+        hdr[2].text = "Role"
+        hdr[3].text = "Phone"
+        for p in participants:
+            row = table.add_row().cells
+            row[0].text = p.get("name", "")
+            row[1].text = p.get("email", "")
+            row[2].text = p.get("role", "")
+            row[3].text = p.get("phone", "")
+    else:
+        doc.add_paragraph("No participants.")
+
+    doc.add_paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    file_stream = io.BytesIO()
+    doc.save(file_stream)
+    file_stream.seek(0)
+    return file_stream
