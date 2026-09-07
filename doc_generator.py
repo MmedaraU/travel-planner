@@ -333,3 +333,125 @@ def generate_all_executive_profiles_doc(profiles):
     doc.save(file_stream)
     file_stream.seek(0)
     return file_stream
+
+# Add at top if missing
+import json
+import os
+import base64
+from jinja2 import Environment, FileSystemLoader
+from datetime import datetime
+import pytz
+import database as db
+
+# ... other imports ...
+
+
+def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Executive Home"):
+    """
+    Generate a self-contained HTML travel pack.
+    Returns the HTML string.
+    """
+    # Fetch data
+    trip = db.get_trip(trip_id)
+    if not trip:
+        return None
+    executive = db.get_executive_profile(trip["exec_id"])
+    if not executive:
+        executive = {}
+
+    stops = db.get_trip_stops(trip_id)
+    items = db.get_items_for_trip(trip_id)
+    contacts = db.get_trip_contacts(trip_id)
+    memberships = db.get_memberships(trip["exec_id"])
+
+    # Budget totals
+    total_spent = sum(i.get("cost", 0) for i in items)
+    confirmed_spent = sum(i.get("cost", 0) for i in items if i.get("is_confirmed", 0))
+    estimated_spent = total_spent - confirmed_spent
+
+    # Format items with timezone
+    formatted_items = []
+    receipts = []
+    fallback_tz = pytz.timezone(exec_timezone)
+
+    for item in items:
+        # Get timezone
+        item_tz_str = item.get("timezone") or exec_timezone
+        try:
+            item_tz = pytz.timezone(item_tz_str)
+        except:
+            item_tz = fallback_tz
+
+        # Parse datetime
+        dt_naive = datetime.fromisoformat(item["datetime_start"])
+        dt_aware = item_tz.localize(dt_naive)
+
+        # Display
+        if display_mode == "Executive Home":
+            display_tz = fallback_tz
+        else:
+            display_tz = item_tz
+
+        dt_display = dt_aware.astimezone(display_tz)
+        formatted_time = dt_display.strftime("%d-%m-%Y %H:%M %Z")
+
+        # Get participants
+        participant_ids = db.get_item_participants(item["id"])
+        participant_names = (
+            [p["name"] for p in participant_ids] if participant_ids else []
+        )
+
+        # Create item dict for template
+        item_dict = {
+            "id": item["id"],
+            "item_type": item["item_type"],
+            "description": item["description"],
+            "location": item.get("location", ""),
+            "cost": item.get("cost", 0),
+            "cost_currency": item.get("cost_currency", "USD"),
+            "confirmation_code": item.get("confirmation_code", ""),
+            "notes": item.get("notes", ""),
+            "is_confirmed": item.get("is_confirmed", 0),
+            "formatted_time": formatted_time,
+            "participants": participant_names,
+        }
+        formatted_items.append(item_dict)
+
+        # Receipts
+        receipt_path = item.get("receipt_path")
+        if receipt_path and os.path.exists(receipt_path):
+            with open(receipt_path, "rb") as f:
+                image_data = f.read()
+                b64 = base64.b64encode(image_data).decode("utf-8")
+                # Determine mime type from extension
+                ext = os.path.splitext(receipt_path)[1].lower()
+                mime = (
+                    "image/png"
+                    if ext == ".png"
+                    else "image/jpeg" if ext in [".jpg", ".jpeg"] else "application/pdf"
+                )
+                data_uri = f"data:{mime};base64,{b64}"
+                receipts.append(
+                    {"description": item["description"], "data_uri": data_uri}
+                )
+
+    # Prepare context
+    context = {
+        "trip": trip,
+        "executive": executive,
+        "stops": stops,
+        "items": formatted_items,
+        "contacts": contacts,
+        "memberships": memberships,
+        "total_spent": total_spent,
+        "confirmed_spent": confirmed_spent,
+        "estimated_spent": estimated_spent,
+        "receipts": receipts,
+        "now": datetime.now(),
+    }
+
+    # Load and render template
+    env = Environment(loader=FileSystemLoader("templates"))
+    template = env.get_template("travel_pack.html")
+    html = template.render(**context)
+    return html

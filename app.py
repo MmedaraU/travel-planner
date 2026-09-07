@@ -1685,6 +1685,31 @@ with tab1:
             else:
                 st.warning("Enter a Trip Name and add at least one stop.")
 
+    # ---- Travel Pack Generation ----
+                if st.session_state.get(f"show_travel_pack_modal_{trip_id_modal}", False):
+                                st.info("Generate a self-contained HTML Travel Pack.")
+                                # Get exec timezone and display mode
+                                exec_profile_modal = db.get_executive_profile(trip_modal_data["exec_id"])
+                                exec_tz_modal = exec_profile_modal.get("timezone", "America/New_York") if exec_profile_modal else "America/New_York"
+                                display_mode_modal = st.session_state.get("timezone_display_mode", "Executive Home")
+                                html_content = doc_generator.generate_travel_pack_html(trip_id_modal, exec_tz_modal, display_mode_modal)
+                                if html_content:
+                                    col_yes, col_no = st.columns(2)
+                                    with col_yes:
+                                        st.download_button(
+                                            label="⬇️ Download HTML",
+                                            data=html_content,
+                                            file_name=f"TravelPack_{trip_modal_data.get('purpose', 'trip')}.html",
+                                            mime="text/html",
+                                            key=f"download_travel_pack_{trip_id_modal}"
+                                        )
+                                    with col_no:
+                                        if st.button("Close", key=f"close_travel_pack_{trip_id_modal}"):
+                                            st.session_state.pop(f"show_travel_pack_modal_{trip_id_modal}", None)
+                                            st.rerun()
+                                else:
+                                    st.error("Failed to generate travel pack.")
+
 # ------------------------------------------------------------------
 # TAB 2: TRIP TEMPLATES (unchanged)
 # ------------------------------------------------------------------
@@ -2679,9 +2704,12 @@ with tab3:
 
                             # ---- Additional actions ----
                             st.divider()
-                            col_actions_left, col_actions_mid, col_actions_right = (
-                                st.columns(3)
-                            )
+                            (
+                                col_actions_left,
+                                col_actions_mid,
+                                col_actions_right,
+                                col_actions_travel,
+                            ) = st.columns(4)
                             with col_actions_left:
                                 if not is_locked:
                                     if st.button(
@@ -2719,6 +2747,15 @@ with tab3:
                                         f"show_save_template_modal_{trip_id_modal}"
                                     ] = True
 
+                            with col_actions_travel:
+                                if st.button(
+                                    "📦 Travel Pack",
+                                    use_container_width=True,
+                                    key=f"travel_pack_modal_{trip_id_modal}",
+                                ):
+                                    st.session_state[
+                                        f"show_travel_pack_modal_{trip_id_modal}"
+                                    ] = True
                             if st.session_state.get(
                                 f"show_save_template_modal_{trip_id_modal}", False
                             ):
