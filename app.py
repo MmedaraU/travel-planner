@@ -1007,13 +1007,14 @@ tab_names = [
     "📋 Trip Templates",
     "📋 All Trips",
     "🏢 Companies",
+    "👥 Contacts",  # <-- new
 ]
 default_tab = st.session_state.get("active_tab", "✈️ Trip Planner")
 default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
 if "active_tab" in st.session_state:
     del st.session_state["active_tab"]
 
-tab1, tab2, tab3, tab4 = st.tabs(tab_names)
+tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
 
 # ------------------------------------------------------------------
 # TAB 1: TRIP PLANNER (CREATE ONLY)
@@ -2747,3 +2748,276 @@ with tab4:
                             st.session_state.pop(f"confirm_del_comp_{comp_id}", None)
                             st.rerun()
                 st.divider()
+
+# ------------------------------------------------------------------
+# TAB 5: CONTACTS
+# ------------------------------------------------------------------
+with tab5:
+    st.header("👥 Contacts")
+
+    # ---- Helper: get current company from session or default ----
+    if "selected_company_id" not in st.session_state:
+        st.session_state.selected_company_id = None
+
+    # ---- Company filter ----
+    companies = db.get_all_companies()
+    company_options = {name: id for id, name in companies}
+    company_names = list(company_options.keys())
+    selected_company_label = st.selectbox(
+        "Filter by Company",
+        options=["All Companies"] + company_names,
+        index=0,
+        key="contact_filter_company"
+    )
+    if selected_company_label == "All Companies":
+        selected_company_id = None
+    else:
+        selected_company_id = company_options[selected_company_label]
+        st.session_state.selected_company_id = selected_company_id
+
+    # ---- Search ----
+    search_term = st.text_input("🔍 Search Contacts", placeholder="Name, role, phone, email, country...", key="contact_search")
+
+    # ---- Add Contact Form ----
+    with st.expander("➕ Add New Contact", expanded=False):
+        with st.form("add_contact_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                add_name = st.text_input("Name*", key="add_contact_name")
+                add_role = st.text_input("Role", key="add_contact_role")
+                add_phone = st.text_input("Phone", key="add_contact_phone")
+            with col2:
+                add_email = st.text_input("Email", key="add_contact_email")
+                # Country dropdown
+                country_list = sorted([c.name for c in pycountry.countries])
+                add_country = st.selectbox("Country", options=[""] + country_list, key="add_contact_country")
+                add_notes = st.text_area("Notes", key="add_contact_notes")
+                add_tags = st.text_input("Tags (comma-separated)", key="add_contact_tags")
+
+            submitted = st.form_submit_button("➕ Add Contact")
+            if submitted:
+                if not add_name:
+                    st.warning("Name is required.")
+                elif selected_company_id is None:
+                    st.warning("Please select a company first.")
+                else:
+                    # Check duplicates
+                    dupes = db.find_duplicate_contacts(selected_company_id, name=add_name, email=add_email, phone=add_phone)
+                    if dupes:
+                        st.warning("⚠️ A contact with the same name, email, or phone already exists in this company:")
+                        for d in dupes:
+                            st.write(f"- {d['name']} ({d.get('role','')})")
+                        if not st.checkbox("Add anyway?", key="force_add_contact"):
+                            st.stop()
+                    db.add_contact(
+                        company_id=selected_company_id,
+                        name=add_name,
+                        role=add_role,
+                        phone=add_phone,
+                        email=add_email,
+                        country=add_country,
+                        notes=add_notes,
+                        tags=add_tags
+                    )
+                    st.success(f"✅ Contact '{add_name}' added!")
+                    st.rerun()
+
+    # ---- Fetch contacts ----
+    all_contacts = db.get_contacts(selected_company_id, active_only=True) if selected_company_id else db.get_contacts(active_only=True)
+
+    # Filter by search term
+    if search_term:
+        search_lower = search_term.lower()
+        all_contacts = [
+            c for c in all_contacts
+            if search_lower in c['name'].lower()
+            or search_lower in (c.get('role') or '').lower()
+            or search_lower in (c.get('phone') or '').lower()
+            or search_lower in (c.get('email') or '').lower()
+            or search_lower in (c.get('country') or '').lower()
+        ]
+
+    # ---- Display contacts ----
+    if not all_contacts:
+        st.info("No contacts found. Add one using the form above.")
+    else:
+        st.write(f"**{len(all_contacts)} contact(s)**")
+
+        # ---- CSV Export ----
+        col_export1, col_export2 = st.columns(2)
+        with col_export1:
+            if st.button("📥 Export CSV", key="export_contacts_csv"):
+                output = io.StringIO()
+                writer = csv.writer(output)
+                writer.writerow(["Name", "Role", "Phone", "Email", "Country", "Notes", "Tags"])
+                for c in all_contacts:
+                    writer.writerow([
+                        c['name'],
+                        c.get('role', ''),
+                        c.get('phone', ''),
+                        c.get('email', ''),
+                        c.get('country', ''),
+                        c.get('notes', ''),
+                        c.get('tags', '')
+                    ])
+                st.download_button(
+                    label="⬇️ Download CSV",
+                    data=output.getvalue().encode('utf-8'),
+                    file_name=f"contacts_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    key="contact_csv_download"
+                )
+
+        # ---- CSV Import ----
+        with col_export2:
+            uploaded_file = st.file_uploader("📤 Import CSV", type=["csv"], key="contact_csv_upload", help="Columns: Name, Role, Phone, Email, Country, Notes, Tags")
+            if uploaded_file is not None:
+                try:
+                    content = uploaded_file.getvalue().decode('utf-8').splitlines()
+                    reader = csv.DictReader(content)
+                    # Map columns if needed
+                    expected = ["Name", "Role", "Phone", "Email", "Country", "Notes", "Tags"]
+                    if all(h in reader.fieldnames for h in expected):
+                        if st.button("Start Import", key="contact_import_btn"):
+                            if selected_company_id is None:
+                                st.warning("Please select a company first.")
+                            else:
+                                added = 0
+                                skipped = 0
+                                for row in reader:
+                                    name = row.get("Name", "").strip()
+                                    if not name:
+                                        continue
+                                    # Check duplicates
+                                    dupes = db.find_duplicate_contacts(
+                                        selected_company_id,
+                                        name=name,
+                                        email=row.get("Email", "").strip() or None,
+                                        phone=row.get("Phone", "").strip() or None
+                                    )
+                                    if dupes and not st.checkbox(f"Duplicate contact '{name}' – add anyway?", key=f"force_import_{name}"):
+                                        skipped += 1
+                                        continue
+                                    db.add_contact(
+                                        company_id=selected_company_id,
+                                        name=name,
+                                        role=row.get("Role", "").strip() or None,
+                                        phone=row.get("Phone", "").strip() or None,
+                                        email=row.get("Email", "").strip() or None,
+                                        country=row.get("Country", "").strip() or None,
+                                        notes=row.get("Notes", "").strip() or None,
+                                        tags=row.get("Tags", "").strip() or None
+                                    )
+                                    added += 1
+                                st.success(f"✅ Imported {added} contacts. Skipped {skipped} duplicates.")
+                                st.rerun()
+                    else:
+                        st.error(f"CSV must have columns: {', '.join(expected)}")
+                except Exception as e:
+                    st.error(f"Import failed: {e}")
+
+        # ---- List contacts with Edit/Delete ----
+        for contact in all_contacts:
+            cid = contact['id']
+            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
+            with col1:
+                st.write(f"**{contact['name']}**")
+                if contact.get('role'):
+                    st.caption(f"👤 {contact['role']}")
+            with col2:
+                if contact.get('phone'):
+                    st.write(f"📞 {contact['phone']}")
+                if contact.get('email'):
+                    st.write(f"✉️ {contact['email']}")
+            with col3:
+                if contact.get('country'):
+                    st.write(f"🌍 {contact['country']}")
+                if contact.get('tags'):
+                    st.caption(f"🏷️ {contact['tags']}")
+            with col4:
+                if st.button("✏️", key=f"edit_contact_{cid}"):
+                    st.session_state[f"editing_contact_{cid}"] = True
+            with col5:
+                if st.button("🗑️", key=f"del_contact_{cid}"):
+                    st.session_state[f"delete_contact_{cid}"] = True
+
+            # ---- Edit expander ----
+            if st.session_state.get(f"editing_contact_{cid}", False):
+                with st.expander(f"Edit {contact['name']}", expanded=True):
+                    with st.form(key=f"edit_contact_form_{cid}"):
+                        edit_name = st.text_input("Name*", value=contact['name'], key=f"edit_name_{cid}")
+                        edit_role = st.text_input("Role", value=contact.get('role', ''), key=f"edit_role_{cid}")
+                        edit_phone = st.text_input("Phone", value=contact.get('phone', ''), key=f"edit_phone_{cid}")
+                        edit_email = st.text_input("Email", value=contact.get('email', ''), key=f"edit_email_{cid}")
+                        country_list = sorted([c.name for c in pycountry.countries])
+                        edit_country = st.selectbox("Country", options=[""] + country_list, index=(["", *country_list].index(contact.get('country', ''))), key=f"edit_country_{cid}")
+                        edit_notes = st.text_area("Notes", value=contact.get('notes', ''), key=f"edit_notes_{cid}")
+                        edit_tags = st.text_input("Tags", value=contact.get('tags', ''), key=f"edit_tags_{cid}")
+                        edit_active = st.checkbox("Active", value=contact.get('is_active', 1), key=f"edit_active_{cid}")
+
+                        col_edit_save, col_edit_cancel = st.columns(2)
+                        with col_edit_save:
+                            if st.form_submit_button("💾 Save"):
+                                if edit_name:
+                                    db.update_contact(
+                                        cid,
+                                        name=edit_name,
+                                        role=edit_role,
+                                        phone=edit_phone,
+                                        email=edit_email,
+                                        country=edit_country,
+                                        notes=edit_notes,
+                                        tags=edit_tags,
+                                        is_active=edit_active
+                                    )
+                                    st.session_state.pop(f"editing_contact_{cid}", None)
+                                    st.success("Contact updated!")
+                                    st.rerun()
+                                else:
+                                    st.warning("Name is required.")
+                        with col_edit_cancel:
+                            if st.form_submit_button("❌ Cancel"):
+                                st.session_state.pop(f"editing_contact_{cid}", None)
+                                st.rerun()
+
+            # ---- Delete confirmation ----
+            if st.session_state.get(f"delete_contact_{cid}", False):
+                st.warning(f"⚠️ Permanently delete contact '{contact['name']}'?")
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("✅ Yes", key=f"confirm_del_contact_{cid}"):
+                        db.delete_contact(cid)
+                        st.session_state.pop(f"delete_contact_{cid}", None)
+                        st.success("Contact deleted.")
+                        st.rerun()
+                with col_no:
+                    if st.button("❌ Cancel", key=f"cancel_del_contact_{cid}"):
+                        st.session_state.pop(f"delete_contact_{cid}", None)
+                        st.rerun()
+            st.divider()
+
+    # ---- Default Contacts section (only if a company is selected) ----
+    if selected_company_id:
+        st.subheader("⭐ Default Contacts for This Company")
+        company = db.get_company(selected_company_id)
+        if company:
+            default_ids = db.get_company_default_contacts(selected_company_id)
+            all_company_contacts = db.get_contacts(selected_company_id, active_only=True)
+            if all_company_contacts:
+                contact_options = {f"{c['name']} ({c.get('role','')})": c['id'] for c in all_company_contacts}
+                # Pre-select defaults
+                selected_defaults = [f"{c['name']} ({c.get('role','')})" for c in all_company_contacts if c['id'] in default_ids]
+                new_defaults = st.multiselect(
+                    "Select contacts to auto‑include in new trips",
+                    options=list(contact_options.keys()),
+                    default=selected_defaults,
+                    key="default_contact_selector"
+                )
+                if st.button("💾 Save Default Contacts", key="save_default_contacts"):
+                    db.set_company_default_contacts(selected_company_id, [contact_options[opt] for opt in new_defaults])
+                    st.success("Default contacts updated!")
+                    st.rerun()
+            else:
+                st.caption("No active contacts for this company yet.")
+    else:
+        st.info("Select a company above to set default contacts.")
