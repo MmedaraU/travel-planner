@@ -2974,15 +2974,14 @@ with tab4:
         for comp_id, comp_name in companies:
             comp = db.get_company(comp_id)
             with st.container():
-                col1, col2, col3, col4, col5, col6 = st.columns(
-                    [2, 1.5, 2, 0.8, 0.8, 1]
-                )
+                # ---- Company header row ----
+                col1, col2, col3, col4, col5, col6 = st.columns([2, 1.5, 2, 0.8, 0.8, 1])
                 with col1:
                     st.write(f"**{comp['name']}**")
                 with col2:
-                    st.write(comp.get("default_cost_center", "") or "—")
+                    st.write(comp.get('default_cost_center', '') or '—')
                 with col3:
-                    st.write(comp.get("policy_notes", "") or "—")
+                    st.write(comp.get('policy_notes', '') or '—')
                 with col4:
                     if st.button("✏️", key=f"edit_comp_{comp_id}"):
                         st.session_state[f"edit_company_{comp_id}"] = True
@@ -2997,30 +2996,14 @@ with tab4:
                 if st.session_state.get(f"edit_company_{comp_id}", False):
                     with st.popover("Edit Company", use_container_width=True):
                         with st.form(key=f"edit_comp_form_{comp_id}"):
-                            edit_name = st.text_input(
-                                "Company Name*",
-                                value=comp["name"],
-                                key=f"edit_comp_name_{comp_id}",
-                            )
-                            edit_cc = st.text_input(
-                                "Default Cost Center (optional)",
-                                value=comp.get("default_cost_center", ""),
-                                key=f"edit_comp_cc_{comp_id}",
-                            )
-                            edit_policy = st.text_area(
-                                "Policy Notes (optional)",
-                                value=comp.get("policy_notes", ""),
-                                key=f"edit_comp_policy_{comp_id}",
-                            )
+                            edit_name = st.text_input("Company Name*", value=comp['name'], key=f"edit_comp_name_{comp_id}")
+                            edit_cc = st.text_input("Default Cost Center (optional)", value=comp.get('default_cost_center', ''), key=f"edit_comp_cc_{comp_id}")
+                            edit_policy = st.text_area("Policy Notes (optional)", value=comp.get('policy_notes', ''), key=f"edit_comp_policy_{comp_id}")
                             if st.form_submit_button("💾 Save Changes"):
                                 if edit_name:
-                                    db.update_company(
-                                        comp_id, edit_name, edit_cc, edit_policy
-                                    )
+                                    db.update_company(comp_id, edit_name, edit_cc, edit_policy)
                                     st.success(f"Company '{edit_name}' updated!")
-                                    st.session_state.pop(
-                                        f"edit_company_{comp_id}", None
-                                    )
+                                    st.session_state.pop(f"edit_company_{comp_id}", None)
                                     st.rerun()
                                 else:
                                     st.warning("Company Name is required.")
@@ -3033,15 +3016,11 @@ with tab4:
                     st.warning(f"⚠️ Permanently delete company '{comp['name']}'?")
                     col_yes, col_no = st.columns(2)
                     with col_yes:
-                        if st.button(
-                            "✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"
-                        ):
+                        if st.button("✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"):
                             success, msg = db.delete_company(comp_id)
                             if success:
                                 st.success(msg)
-                                st.session_state.pop(
-                                    f"confirm_del_comp_{comp_id}", None
-                                )
+                                st.session_state.pop(f"confirm_del_comp_{comp_id}", None)
                                 st.rerun()
                             else:
                                 st.error(msg)
@@ -3057,31 +3036,27 @@ with tab4:
                         col_html, col_word, col_excel = st.columns(3)
                         with col_html:
                             if st.button("🌐 HTML", key=f"export_html_{comp_id}"):
-                                html = doc_generator.generate_company_profile_html(
-                                    comp_id
-                                )
+                                html = doc_generator.generate_company_profile_html(comp_id)
                                 if html:
                                     st.download_button(
                                         label="⬇️ Download HTML",
                                         data=html,
                                         file_name=f"{comp['name']}_profile.html",
                                         mime="text/html",
-                                        key=f"download_html_{comp_id}",
+                                        key=f"download_html_{comp_id}"
                                     )
                                 else:
                                     st.error("Failed to generate HTML.")
                         with col_word:
                             if st.button("📄 Word", key=f"export_word_{comp_id}"):
-                                docx = doc_generator.generate_company_profile_docx(
-                                    comp_id
-                                )
+                                docx = doc_generator.generate_company_profile_docx(comp_id)
                                 if docx:
                                     st.download_button(
                                         label="⬇️ Download Word",
                                         data=docx,
                                         file_name=f"{comp['name']}_profile.docx",
                                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
-                                        key=f"download_word_{comp_id}",
+                                        key=f"download_word_{comp_id}"
                                     )
                                 else:
                                     st.error("Failed to generate Word.")
@@ -3094,13 +3069,167 @@ with tab4:
                                         data=excel,
                                         file_name=f"{comp['name']}_profile.xlsx",
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        key=f"download_excel_{comp_id}",
+                                        key=f"download_excel_{comp_id}"
                                     )
                                 else:
                                     st.error("Failed to generate Excel.")
                         if st.button("Close", key=f"close_export_comp_{comp_id}"):
                             st.session_state.pop(f"export_company_{comp_id}", None)
                             st.rerun()
+
+                # ---- Phase 7: Participants Management for this company ----
+                with st.expander(f"👥 Participants ({len(db.get_participants(comp_id, active_only=True))})", expanded=False):
+                    # ---- Add new participant ----
+                    with st.form(key=f"add_participant_comp_{comp_id}"):
+                        col_name, col_email, col_role, col_phone = st.columns(4)
+                        with col_name:
+                            p_name = st.text_input("Name*", key=f"add_part_name_{comp_id}")
+                        with col_email:
+                            p_email = st.text_input("Email", key=f"add_part_email_{comp_id}")
+                        with col_role:
+                            p_role = st.text_input("Role", key=f"add_part_role_{comp_id}")
+                        with col_phone:
+                            p_phone = st.text_input("Phone", key=f"add_part_phone_{comp_id}")
+                        if st.form_submit_button("➕ Add Participant"):
+                            if p_name:
+                                # Check duplicate
+                                dupes = db.find_duplicate_participants(comp_id, name=p_name)
+                                if not dupes:
+                                    db.add_participant(comp_id, p_name, p_email, p_role, p_phone)
+                                    st.success(f"Participant '{p_name}' added!")
+                                    st.rerun()
+                                else:
+                                    st.warning("A participant with that name already exists.")
+                            else:
+                                st.warning("Name is required.")
+
+                    # ---- CSV Import ----
+                    st.write("**📤 CSV Import / Export**")
+                    col_imp, col_exp = st.columns(2)
+                    with col_imp:
+                        uploaded_file = st.file_uploader(
+                            "Import CSV",
+                            type=["csv"],
+                            key=f"import_participants_{comp_id}",
+                            help="Columns: Name, Email, Role, Phone"
+                        )
+                        if uploaded_file is not None:
+                            try:
+                                content = uploaded_file.getvalue().decode('utf-8').splitlines()
+                                reader = csv.DictReader(content)
+                                expected = ["Name", "Email", "Role", "Phone"]
+                                if all(h in reader.fieldnames for h in expected):
+                                    if st.button(f"Start Import", key=f"start_import_parts_{comp_id}"):
+                                        added = 0
+                                        skipped = 0
+                                        for row in reader:
+                                            name = row.get("Name", "").strip()
+                                            if not name:
+                                                continue
+                                            # Check duplicate
+                                            dupes = db.find_duplicate_participants(comp_id, name=name)
+                                            if dupes and not st.checkbox(f"Duplicate '{name}' – add anyway?", key=f"force_import_part_{name}_{comp_id}"):
+                                                skipped += 1
+                                                continue
+                                            db.add_participant(
+                                                company_id=comp_id,
+                                                name=name,
+                                                email=row.get("Email", "").strip() or None,
+                                                role=row.get("Role", "").strip() or None,
+                                                phone=row.get("Phone", "").strip() or None
+                                            )
+                                            added += 1
+                                        st.success(f"✅ Imported {added} participants. Skipped {skipped} duplicates.")
+                                        st.rerun()
+                                else:
+                                    st.error(f"CSV must have columns: {', '.join(expected)}")
+                            except Exception as e:
+                                st.error(f"Import failed: {e}")
+
+                    with col_exp:
+                        # Export CSV button
+                        if st.button("📥 Export CSV", key=f"export_participants_{comp_id}"):
+                            participants = db.get_participants(comp_id, active_only=True)
+                            output = io.StringIO()
+                            writer = csv.writer(output)
+                            writer.writerow(["Name", "Email", "Role", "Phone"])
+                            for p in participants:
+                                writer.writerow([
+                                    p['name'],
+                                    p.get('email', ''),
+                                    p.get('role', ''),
+                                    p.get('phone', '')
+                                ])
+                            st.download_button(
+                                label="⬇️ Download CSV",
+                                data=output.getvalue().encode('utf-8'),
+                                file_name=f"participants_{comp['name']}_{datetime.now().strftime('%Y%m%d')}.csv",
+                                mime="text/csv",
+                                key=f"download_participants_{comp_id}"
+                            )
+
+                    # ---- List existing participants ----
+                    participants = db.get_participants(comp_id, active_only=True)
+                    if not participants:
+                        st.caption("No participants yet.")
+                    else:
+                        st.write(f"**{len(participants)} active participants**")
+                        for p in participants:
+                            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
+                            with col1:
+                                st.write(f"**{p['name']}**")
+                            with col2:
+                                st.write(p.get('email', ''))
+                            with col3:
+                                st.write(f"{p.get('role', '')} | {p.get('phone', '')}")
+                            with col4:
+                                if st.button("✏️", key=f"edit_part_{p['id']}_{comp_id}"):
+                                    st.session_state[f"editing_participant_{p['id']}"] = True
+                            with col5:
+                                if st.button("🗑️", key=f"del_part_{p['id']}_{comp_id}"):
+                                    st.session_state[f"delete_participant_{p['id']}"] = True
+
+                            # ---- Edit participant popover ----
+                            if st.session_state.get(f"editing_participant_{p['id']}", False):
+                                with st.popover(f"Edit {p['name']}", use_container_width=True):
+                                    with st.form(key=f"edit_part_form_{p['id']}"):
+                                        e_name = st.text_input("Name*", value=p['name'], key=f"edit_part_name_{p['id']}")
+                                        e_email = st.text_input("Email", value=p.get('email', ''), key=f"edit_part_email_{p['id']}")
+                                        e_role = st.text_input("Role", value=p.get('role', ''), key=f"edit_part_role_{p['id']}")
+                                        e_phone = st.text_input("Phone", value=p.get('phone', ''), key=f"edit_part_phone_{p['id']}")
+                                        if st.form_submit_button("💾 Save"):
+                                            if e_name:
+                                                db.update_participant(
+                                                    p['id'],
+                                                    name=e_name,
+                                                    email=e_email,
+                                                    role=e_role,
+                                                    phone=e_phone
+                                                )
+                                                st.session_state.pop(f"editing_participant_{p['id']}", None)
+                                                st.success("Updated!")
+                                                st.rerun()
+                                            else:
+                                                st.warning("Name is required.")
+                                        if st.form_submit_button("❌ Cancel"):
+                                            st.session_state.pop(f"editing_participant_{p['id']}", None)
+                                            st.rerun()
+
+                            # ---- Delete confirmation ----
+                            if st.session_state.get(f"delete_participant_{p['id']}", False):
+                                st.warning(f"⚠️ Permanently delete participant '{p['name']}'?")
+                                col_yes, col_no = st.columns(2)
+                                with col_yes:
+                                    if st.button("✅ Yes", key=f"confirm_del_part_{p['id']}"):
+                                        db.delete_participant(p['id'])
+                                        st.session_state.pop(f"delete_participant_{p['id']}", None)
+                                        st.success("Deleted.")
+                                        st.rerun()
+                                with col_no:
+                                    if st.button("❌ Cancel", key=f"cancel_del_part_{p['id']}"):
+                                        st.session_state.pop(f"delete_participant_{p['id']}", None)
+                                        st.rerun()
+                            st.divider()
 
                 st.divider()
 
