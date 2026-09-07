@@ -3288,6 +3288,21 @@ with tab5:
     # ---- Search ----
     search_term = st.text_input("🔍 Search Contacts", placeholder="Name, role, phone, email, country...", key="contact_search")
 
+    # ---- Tag Filter (Phase 11) ----
+    # Gather all tags from visible contacts
+    all_contacts_for_tags = db.get_contacts(selected_company_id, active_only=True) if selected_company_id else db.get_contacts(active_only=True)
+    all_tags = set()
+    for c in all_contacts_for_tags:
+        if c.get('tags'):
+            for tag in [t.strip() for t in c['tags'].split(',') if t.strip()]:
+                all_tags.add(tag)
+    tag_options = sorted(list(all_tags))
+    selected_tags = st.multiselect(
+        "🏷️ Filter by Tags",
+        options=tag_options,
+        key="contact_tag_filter"
+    )
+
     # ---- Add Contact Form ----
     with st.expander("➕ Add New Contact", expanded=False):
         with st.form("add_contact_form"):
@@ -3345,6 +3360,17 @@ with tab5:
             or search_lower in (c.get('email') or '').lower()
             or search_lower in (c.get('country') or '').lower()
         ]
+
+    # ---- Filter by tags (Phase 11) ----
+    if selected_tags:
+        filtered = []
+        for c in all_contacts:
+            if not c.get('tags'):
+                continue
+            contact_tags = [t.strip() for t in c['tags'].split(',') if t.strip()]
+            if any(tag in contact_tags for tag in selected_tags):
+                filtered.append(c)
+        all_contacts = filtered
 
     # ---- Display contacts ----
     if not all_contacts:
@@ -3440,8 +3466,13 @@ with tab5:
             with col3:
                 if contact.get('country'):
                     st.write(f"🌍 {contact['country']}")
+                # ---- Tags as badges (Phase 11) ----
                 if contact.get('tags'):
-                    st.caption(f"🏷️ {contact['tags']}")
+                    tags_list = [t.strip() for t in contact['tags'].split(',') if t.strip()]
+                    if tags_list:
+                        # Use HTML spans for badges
+                        badge_html = " ".join([f"<span style='background:#e2e8f0;padding:2px 8px;border-radius:12px;font-size:12px;margin-right:4px;'>{t}</span>" for t in tags_list])
+                        st.markdown(f"<div style='margin-top:4px;'>{badge_html}</div>", unsafe_allow_html=True)
             with col4:
                 if st.button("✏️", key=f"edit_contact_{cid}"):
                     st.session_state[f"editing_contact_{cid}"] = True
