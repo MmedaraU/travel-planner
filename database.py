@@ -904,7 +904,7 @@ def update_executive(
 
 
 # =========================================================
-# EXECUTIVE PASSPORTS (Existing)
+# EXECUTIVE PASSPORTS
 # =========================================================
 
 
@@ -967,7 +967,7 @@ def update_passport(
 
 
 # =========================================================
-# EXECUTIVE MEMBERSHIPS (Existing)
+# EXECUTIVE MEMBERSHIPS
 # =========================================================
 
 
@@ -1080,7 +1080,7 @@ def update_membership(
 
 
 # =========================================================
-# CATEGORY MANAGEMENT (Existing)
+# CATEGORY MANAGEMENT
 # =========================================================
 
 
@@ -1355,7 +1355,7 @@ def duplicate_trip(trip_id, exec_id):
 
 
 # =========================================================
-# TRIP STOPS (Existing)
+# TRIP STOPS
 # =========================================================
 
 
@@ -1939,7 +1939,7 @@ def import_executives_from_csv(reader):
 
 
 # =========================================================
-# TRIP TEMPLATES (Existing)
+# TRIP TEMPLATES
 # =========================================================
 
 
