@@ -10,7 +10,6 @@ DB_PATH = "travel_planner.db"
 # MIGRATION
 # =========================================================
 
-
 def migrate_db():
     """Add new columns if they don't exist (handles schema upgrades)."""
     conn = sqlite3.connect(DB_PATH)
@@ -40,19 +39,13 @@ def migrate_db():
     existing_items = [row[1] for row in c.fetchall()]
 
     if "is_confirmed" not in existing_items:
-        c.execute(
-            "ALTER TABLE itinerary_items ADD COLUMN is_confirmed INTEGER DEFAULT 0"
-        )
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN is_confirmed INTEGER DEFAULT 0")
     if "receipt_path" not in existing_items:
         c.execute("ALTER TABLE itinerary_items ADD COLUMN receipt_path TEXT")
     if "cost_currency" not in existing_items:
-        c.execute(
-            "ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'"
-        )
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'")
     if "exchange_rate_snapshot" not in existing_items:
-        c.execute(
-            "ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0"
-        )
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0")
     if "timezone" not in existing_items:
         c.execute("ALTER TABLE itinerary_items ADD COLUMN timezone TEXT")
 
@@ -81,9 +74,7 @@ def migrate_db():
     ]
     for col_name, col_type in new_membership_cols:
         if col_name not in existing_membership_cols:
-            c.execute(
-                f"ALTER TABLE executive_memberships ADD COLUMN {col_name} {col_type}"
-            )
+            c.execute(f"ALTER TABLE executive_memberships ADD COLUMN {col_name} {col_type}")
 
     # --- Create tables if they don't exist ---
     c.execute("""CREATE TABLE IF NOT EXISTS executive_passports (
@@ -148,25 +139,26 @@ def migrate_db():
         items_json TEXT
     )""")
 
-    # --- Phase 1 New Tables ---
-    c.execute("""CREATE TABLE IF NOT EXISTS contacts (
+    # --- Phase 1 New Tables (with updated naming) ---
+
+    # 1. Contacts table (with type column)
+    c.execute("PRAGMA table_info(contacts)")
+    existing_contact_cols = [row[1] for row in c.fetchall()]
+    if "type" not in existing_contact_cols:
+        c.execute("ALTER TABLE contacts ADD COLUMN type TEXT DEFAULT 'Local Support'")
+
+    c.execute("PRAGMA table_info(contacts)")
+    existing_contact_cols = [row[1] for row in c.fetchall()]
+    if "city" not in existing_contact_cols:
+        c.execute("ALTER TABLE contacts ADD COLUMN city TEXT")
+
+    # 2. Delegation members (replaces company_participants)
+    # Drop old table if it exists to avoid conflict
+    c.execute("DROP TABLE IF EXISTS company_participants")
+    c.execute("""CREATE TABLE IF NOT EXISTS delegation_members (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         company_id INTEGER NOT NULL,
         name TEXT NOT NULL,
-        role TEXT,
-        phone TEXT,
-        email TEXT,
-        country TEXT,
-        notes TEXT,
-        is_active INTEGER DEFAULT 1,
-        tags TEXT,
-        FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
-    )""")
-
-    c.execute("""CREATE TABLE IF NOT EXISTS company_participants (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
         email TEXT,
         role TEXT,
         phone TEXT,
@@ -174,12 +166,14 @@ def migrate_db():
         FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
     )""")
 
-    c.execute("""CREATE TABLE IF NOT EXISTS item_participants (
+    # 3. Item delegation (replaces item_participants)
+    c.execute("DROP TABLE IF EXISTS item_participants")
+    c.execute("""CREATE TABLE IF NOT EXISTS item_delegation (
         item_id INTEGER NOT NULL,
-        participant_id INTEGER NOT NULL,
-        PRIMARY KEY (item_id, participant_id),
+        member_id INTEGER NOT NULL,
+        PRIMARY KEY (item_id, member_id),
         FOREIGN KEY (item_id) REFERENCES itinerary_items(id) ON DELETE CASCADE,
-        FOREIGN KEY (participant_id) REFERENCES company_participants(id) ON DELETE CASCADE
+        FOREIGN KEY (member_id) REFERENCES delegation_members(id) ON DELETE CASCADE
     )""")
 
     # --- Add default_contact_ids to companies if missing ---
@@ -191,12 +185,8 @@ def migrate_db():
     # --- Indexes for performance ---
     c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_country ON contacts(country)")
-    c.execute(
-        "CREATE INDEX IF NOT EXISTS idx_participants_company ON company_participants(company_id)"
-    )
-    c.execute(
-        "CREATE INDEX IF NOT EXISTS idx_item_participants_item ON item_participants(item_id)"
-    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_delegation_company ON delegation_members(company_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_item_delegation_item ON item_delegation(item_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_trip_contacts ON trips(trip_contacts)")
 
     conn.commit()
@@ -271,6 +261,22 @@ def init_db():
         FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
     )""")
 
+    # Create contacts table (if not exists) – type will be added in migration
+    c.execute("""CREATE TABLE IF NOT EXISTS contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        role TEXT,
+        phone TEXT,
+        email TEXT,
+        country TEXT,
+        notes TEXT,
+        is_active INTEGER DEFAULT 1,
+        tags TEXT,
+        type TEXT DEFAULT 'Local Support',
+        FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+    )""")
+
     conn.commit()
     conn.close()
     migrate_db()
@@ -279,7 +285,6 @@ def init_db():
 # =========================================================
 # COMPANY MANAGEMENT
 # =========================================================
-
 
 def add_company(name, default_cost_center=None, policy_notes=None):
     conn = sqlite3.connect(DB_PATH)
@@ -348,6 +353,7 @@ def delete_company(company_id):
     conn.close()
     return True, "Company deleted successfully."
 
+
 def get_executives_by_company(company_id):
     """Return all executives belonging to a company."""
     conn = sqlite3.connect(DB_PATH)
@@ -358,10 +364,10 @@ def get_executives_by_company(company_id):
     conn.close()
     return [dict(row) for row in rows]
 
-# =========================================================
-# CONTACTS (NEW)
-# =========================================================
 
+# =========================================================
+# CONTACTS (with type)
+# =========================================================
 
 def add_contact(
     company_id,
@@ -370,15 +376,17 @@ def add_contact(
     phone=None,
     email=None,
     country=None,
+    city=None,
     notes=None,
     tags=None,
+    type="Local Support",
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        """INSERT INTO contacts (company_id, name, role, phone, email, country, notes, tags)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (company_id, name, role, phone, email, country, notes, tags),
+        """INSERT INTO contacts (company_id, name, role, phone, email, country, city, notes, tags, type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (company_id, name, role, phone, email, country, city, notes, tags, type),
     )
     conn.commit()
     new_id = c.lastrowid
@@ -425,14 +433,16 @@ def get_contact(contact_id):
 
 def update_contact(
     contact_id,
-    name,
+    name=None,
     role=None,
     phone=None,
     email=None,
     country=None,
+    city=None,
     notes=None,
     tags=None,
     is_active=None,
+    type=None,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -453,6 +463,9 @@ def update_contact(
     if country is not None:
         fields.append("country = ?")
         params.append(country)
+    if city is not None:
+        fields.append("city = ?")
+        params.append(city)
     if notes is not None:
         fields.append("notes = ?")
         params.append(notes)
@@ -462,6 +475,9 @@ def update_contact(
     if is_active is not None:
         fields.append("is_active = ?")
         params.append(1 if is_active else 0)
+    if type is not None:
+        fields.append("type = ?")
+        params.append(type)
     params.append(contact_id)
     if fields:
         sql = f"UPDATE contacts SET {', '.join(fields)} WHERE id = ?"
@@ -505,15 +521,14 @@ def find_duplicate_contacts(company_id, name=None, email=None, phone=None):
 
 
 # =========================================================
-# COMPANY PARTICIPANTS (NEW)
+# DELEGATION MEMBERS (was company_participants)
 # =========================================================
 
-
-def add_participant(company_id, name, email=None, role=None, phone=None):
+def add_delegation_member(company_id, name, email=None, role=None, phone=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        """INSERT INTO company_participants (company_id, name, email, role, phone)
+        """INSERT INTO delegation_members (company_id, name, email, role, phone)
            VALUES (?, ?, ?, ?, ?)""",
         (company_id, name, email, role, phone),
     )
@@ -523,45 +538,45 @@ def add_participant(company_id, name, email=None, role=None, phone=None):
     return new_id
 
 
-def get_participants(company_id=None, active_only=True):
+def get_delegation_members(company_id=None, active_only=True):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     if company_id is not None:
         if active_only:
             c.execute(
-                "SELECT * FROM company_participants WHERE company_id = ? AND is_active = 1 ORDER BY name",
+                "SELECT * FROM delegation_members WHERE company_id = ? AND is_active = 1 ORDER BY name",
                 (company_id,),
             )
         else:
             c.execute(
-                "SELECT * FROM company_participants WHERE company_id = ? ORDER BY name",
+                "SELECT * FROM delegation_members WHERE company_id = ? ORDER BY name",
                 (company_id,),
             )
     else:
         if active_only:
             c.execute(
-                "SELECT * FROM company_participants WHERE is_active = 1 ORDER BY company_id, name"
+                "SELECT * FROM delegation_members WHERE is_active = 1 ORDER BY company_id, name"
             )
         else:
-            c.execute("SELECT * FROM company_participants ORDER BY company_id, name")
+            c.execute("SELECT * FROM delegation_members ORDER BY company_id, name")
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
 
-def get_participant(participant_id):
+def get_delegation_member(member_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT * FROM company_participants WHERE id = ?", (participant_id,))
+    c.execute("SELECT * FROM delegation_members WHERE id = ?", (member_id,))
     row = c.fetchone()
     conn.close()
     return dict(row) if row else None
 
 
-def update_participant(
-    participant_id, name=None, email=None, role=None, phone=None, is_active=None
+def update_delegation_member(
+    member_id, name=None, email=None, role=None, phone=None, is_active=None
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -582,26 +597,26 @@ def update_participant(
     if is_active is not None:
         fields.append("is_active = ?")
         params.append(1 if is_active else 0)
-    params.append(participant_id)
+    params.append(member_id)
     if fields:
-        sql = f"UPDATE company_participants SET {', '.join(fields)} WHERE id = ?"
+        sql = f"UPDATE delegation_members SET {', '.join(fields)} WHERE id = ?"
         c.execute(sql, params)
         conn.commit()
     conn.close()
 
 
-def delete_participant(participant_id):
+def delete_delegation_member(member_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM company_participants WHERE id = ?", (participant_id,))
+    c.execute("DELETE FROM delegation_members WHERE id = ?", (member_id,))
     conn.commit()
     conn.close()
 
 
-def find_duplicate_participants(company_id, name=None, email=None):
+def find_duplicate_delegation_members(company_id, name=None, email=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    query = "SELECT * FROM company_participants WHERE company_id = ? AND is_active = 1 AND ("
+    query = "SELECT * FROM delegation_members WHERE company_id = ? AND is_active = 1 AND ("
     conditions = []
     params = [company_id]
     if name:
@@ -622,42 +637,41 @@ def find_duplicate_participants(company_id, name=None, email=None):
 
 
 # =========================================================
-# ITEM-PARTICIPANT ASSOCIATIONS (NEW)
+# ITEM DELEGATION (was item_participants)
 # =========================================================
 
-
-def add_item_participant(item_id, participant_id):
+def add_item_delegation_member(item_id, member_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT OR IGNORE INTO item_participants (item_id, participant_id) VALUES (?, ?)",
-        (item_id, participant_id),
+        "INSERT OR IGNORE INTO item_delegation (item_id, member_id) VALUES (?, ?)",
+        (item_id, member_id),
     )
     conn.commit()
     conn.close()
 
 
-def remove_item_participant(item_id, participant_id):
+def remove_item_delegation_member(item_id, member_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "DELETE FROM item_participants WHERE item_id = ? AND participant_id = ?",
-        (item_id, participant_id),
+        "DELETE FROM item_delegation WHERE item_id = ? AND member_id = ?",
+        (item_id, member_id),
     )
     conn.commit()
     conn.close()
 
 
-def get_item_participants(item_id):
+def get_item_delegation_members(item_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute(
         """
-        SELECT p.* FROM company_participants p
-        JOIN item_participants ip ON p.id = ip.participant_id
-        WHERE ip.item_id = ?
-        ORDER BY p.name
+        SELECT m.* FROM delegation_members m
+        JOIN item_delegation id ON m.id = id.member_id
+        WHERE id.item_id = ?
+        ORDER BY m.name
     """,
         (item_id,),
     )
@@ -666,23 +680,22 @@ def get_item_participants(item_id):
     return [dict(row) for row in rows]
 
 
-def set_item_participants(item_id, participant_ids):
+def set_item_delegation_members(item_id, member_ids):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM item_participants WHERE item_id = ?", (item_id,))
-    for pid in participant_ids:
+    c.execute("DELETE FROM item_delegation WHERE item_id = ?", (item_id,))
+    for mid in member_ids:
         c.execute(
-            "INSERT OR IGNORE INTO item_participants (item_id, participant_id) VALUES (?, ?)",
-            (item_id, pid),
+            "INSERT OR IGNORE INTO item_delegation (item_id, member_id) VALUES (?, ?)",
+            (item_id, mid),
         )
     conn.commit()
     conn.close()
 
 
 # =========================================================
-# TRIP CONTACTS (NEW)
+# TRIP CONTACTS
 # =========================================================
-
 
 def get_trip_contacts(trip_id):
     trip = get_trip(trip_id)
@@ -742,7 +755,6 @@ def set_company_default_contacts(company_id, contact_ids):
 # =========================================================
 # EXECUTIVE MANAGEMENT (Existing)
 # =========================================================
-
 
 def add_executive(
     company_id,
@@ -916,7 +928,6 @@ def update_executive(
 # EXECUTIVE PASSPORTS
 # =========================================================
 
-
 def add_passport(
     exec_id, country, passport_number, expiry_date=None, issued_date=None, notes=None
 ):
@@ -978,7 +989,6 @@ def update_passport(
 # =========================================================
 # EXECUTIVE MEMBERSHIPS
 # =========================================================
-
 
 def add_membership(
     exec_id,
@@ -1092,7 +1102,6 @@ def update_membership(
 # CATEGORY MANAGEMENT
 # =========================================================
 
-
 def add_category(name):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1127,7 +1136,6 @@ def delete_category(category_id):
 # =========================================================
 # TRIP MANAGEMENT (Updated for trip_contacts and timezone)
 # =========================================================
-
 
 def create_or_get_trip(
     exec_id,
@@ -1367,7 +1375,6 @@ def duplicate_trip(trip_id, exec_id):
 # TRIP STOPS
 # =========================================================
 
-
 def add_trip_stop(
     trip_id, stop_order, city, country, region, start_date, end_date, notes=None
 ):
@@ -1437,7 +1444,6 @@ def delete_all_trip_stops(trip_id):
 # =========================================================
 # ITINERARY ITEMS (Updated for timezone)
 # =========================================================
-
 
 def add_itinerary_item(
     trip_id,
@@ -1578,7 +1584,6 @@ def update_receipt_path(item_id, file_path):
 # BUDGET & SPENDING FUNCTIONS
 # =========================================================
 
-
 def get_trip_spending(trip_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1661,7 +1666,6 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
 # EXECUTIVE DELETION FUNCTIONS
 # =========================================================
 
-
 def get_executive_trip_count(exec_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1725,7 +1729,6 @@ def delete_executive(exec_id, force=False):
 # =========================================================
 # IMPORT / MERGE FUNCTIONS
 # =========================================================
-
 
 def _find_or_create_company(name):
     conn = sqlite3.connect(DB_PATH)
@@ -1950,7 +1953,6 @@ def import_executives_from_csv(reader):
 # =========================================================
 # TRIP TEMPLATES
 # =========================================================
-
 
 def save_trip_as_template(trip_id, template_name, description=None):
     import json

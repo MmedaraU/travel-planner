@@ -69,32 +69,35 @@ def format_datetime_display(dt_str):
         return dt_str
 
 
-def get_company_participant_options(company_id):
-    """Return a dict of participant label -> id for a company."""
-    participants = db.get_participants(company_id, active_only=True)
-    return {f"{p['name']} ({p.get('role', '')})".strip(): p['id'] for p in participants}
+def get_company_delegation_options(company_id):
+    """Return a dict of delegation member label -> id for a company."""
+    members = db.get_delegation_members(company_id, active_only=True)
+    return {f"{m['name']} ({m.get('role', '')})".strip(): m["id"] for m in members}
 
 
 def get_company_contact_options(company_id):
     """Return a dict of contact label -> id for a company."""
     contacts = db.get_contacts(company_id, active_only=True)
-    return {f"{c['name']} ({c.get('role', '')})".strip(): c['id'] for c in contacts}
+    return {f"{c['name']} ({c.get('role', '')})".strip(): c["id"] for c in contacts}
 
 
-def get_participant_names(participant_ids):
-    """Return a comma-separated string of participant names for display."""
-    if not participant_ids:
+def get_delegation_names(delegation_ids):
+    """Return a comma-separated string of delegation member names for display."""
+    if not delegation_ids:
         return ""
     conn = sqlite3.connect(db.DB_PATH)
     c = conn.cursor()
-    placeholders = ",".join(["?"] * len(participant_ids))
-    c.execute(f"SELECT name FROM company_participants WHERE id IN ({placeholders})", participant_ids)
+    placeholders = ",".join(["?"] * len(delegation_ids))
+    c.execute(
+        f"SELECT name FROM delegation_members WHERE id IN ({placeholders})",
+        delegation_ids,
+    )
     names = [row[0] for row in c.fetchall()]
     conn.close()
     return ", ".join(names)
 
 
-# ---- New helper for timezone formatting (Phase 4) ----
+# ---- Helper for timezone formatting (Phase 4) ----
 def format_item_datetime(item, exec_timezone, display_mode="Executive Home"):
     """Return a formatted datetime string for an item based on display mode."""
     tz_str = item.get("timezone") or exec_timezone
@@ -143,8 +146,6 @@ st.markdown(
 # --- Session State ---
 if "upload_counter" not in st.session_state:
     st.session_state.upload_counter = 0
-if "timezone_display_mode" not in st.session_state:
-    st.session_state.timezone_display_mode = "Executive Home"
 
 st.title("Executive Travel Planner")
 
@@ -296,17 +297,6 @@ if profile:
         if st.button("👤 View Full Profile", use_container_width=True):
             st.session_state["show_full_profile"] = True
             st.session_state["profile_edit_mode"] = False
-
-# ---- Phase 4: Sidebar Timezone Display Toggle ----
-st.sidebar.divider()
-st.sidebar.subheader("🕐 Timezone Display")
-display_mode = st.sidebar.radio(
-    "Show times in:",
-    options=["Executive Home", "Event Local"],
-    index=0,
-    key="timezone_display_radio"
-)
-st.session_state.timezone_display_mode = display_mode
 
 # --- Full Profile Popover (Read-Only + Edit/Delete with Passports & Memberships) ---
 if st.session_state.get("show_full_profile", False):
@@ -481,40 +471,76 @@ if st.session_state.get("show_full_profile", False):
 
                     # ---- Edit Passport Form ----
                     if st.session_state.get(f"editing_passport_{p['id']}", False):
-                        with st.expander(f"Edit Passport: {p['country']}", expanded=True):
+                        with st.expander(
+                            f"Edit Passport: {p['country']}", expanded=True
+                        ):
                             with st.form(key=f"edit_pass_form_{p['id']}"):
-                                edit_country = st.text_input("Country", value=p['country'], key=f"edit_pass_country_{p['id']}")
-                                edit_pass_num = st.text_input("Passport Number", value=p['passport_number'], key=f"edit_pass_num_{p['id']}")
+                                edit_country = st.text_input(
+                                    "Country",
+                                    value=p["country"],
+                                    key=f"edit_pass_country_{p['id']}",
+                                )
+                                edit_pass_num = st.text_input(
+                                    "Passport Number",
+                                    value=p["passport_number"],
+                                    key=f"edit_pass_num_{p['id']}",
+                                )
                                 edit_expiry = st.date_input(
                                     "Expiry Date",
-                                    value=datetime.fromisoformat(p['expiry_date']) if p.get('expiry_date') else None,
-                                    key=f"edit_pass_expiry_{p['id']}"
+                                    value=(
+                                        datetime.fromisoformat(p["expiry_date"])
+                                        if p.get("expiry_date")
+                                        else None
+                                    ),
+                                    key=f"edit_pass_expiry_{p['id']}",
                                 )
                                 edit_issued = st.date_input(
                                     "Issued Date",
-                                    value=datetime.fromisoformat(p['issued_date']) if p.get('issued_date') else None,
-                                    key=f"edit_pass_issued_{p['id']}"
+                                    value=(
+                                        datetime.fromisoformat(p["issued_date"])
+                                        if p.get("issued_date")
+                                        else None
+                                    ),
+                                    key=f"edit_pass_issued_{p['id']}",
                                 )
-                                edit_notes = st.text_area("Notes", value=p.get('notes', ''), key=f"edit_pass_notes_{p['id']}")
+                                edit_notes = st.text_area(
+                                    "Notes",
+                                    value=p.get("notes", ""),
+                                    key=f"edit_pass_notes_{p['id']}",
+                                )
                                 col_save, col_cancel = st.columns(2)
                                 with col_save:
                                     if st.form_submit_button("💾 Save"):
                                         if edit_country and edit_pass_num:
                                             db.update_passport(
-                                                p['id'],
+                                                p["id"],
                                                 edit_country,
                                                 edit_pass_num,
-                                                expiry_date=edit_expiry.isoformat() if edit_expiry else None,
-                                                issued_date=edit_issued.isoformat() if edit_issued else None,
+                                                expiry_date=(
+                                                    edit_expiry.isoformat()
+                                                    if edit_expiry
+                                                    else None
+                                                ),
+                                                issued_date=(
+                                                    edit_issued.isoformat()
+                                                    if edit_issued
+                                                    else None
+                                                ),
                                                 notes=edit_notes,
                                             )
-                                            st.session_state.pop(f"editing_passport_{p['id']}", None)
+                                            st.session_state.pop(
+                                                f"editing_passport_{p['id']}", None
+                                            )
                                             st.rerun()
                                         else:
-                                            st.warning("Country and Passport Number are required.")
+                                            st.warning(
+                                                "Country and Passport Number are required."
+                                            )
                                 with col_cancel:
                                     if st.form_submit_button("❌ Cancel"):
-                                        st.session_state.pop(f"editing_passport_{p['id']}", None)
+                                        st.session_state.pop(
+                                            f"editing_passport_{p['id']}", None
+                                        )
                                         st.rerun()
             else:
                 st.caption("No passports added.")
@@ -588,31 +614,71 @@ if st.session_state.get("show_full_profile", False):
 
                     # ---- Edit Membership Form ----
                     if st.session_state.get(f"editing_membership_{m['id']}", False):
-                        with st.expander(f"Edit Membership: {m['program_name']}", expanded=True):
+                        with st.expander(
+                            f"Edit Membership: {m['program_name']}", expanded=True
+                        ):
                             with st.form(key=f"edit_mem_form_{m['id']}"):
                                 edit_cat = st.selectbox(
                                     "Category",
                                     ["Airline", "Hotel", "Car Rental"],
-                                    index=["airline", "hotel", "car rental"].index(m["category"]),
-                                    key=f"edit_mem_cat_{m['id']}"
+                                    index=["airline", "hotel", "car rental"].index(
+                                        m["category"]
+                                    ),
+                                    key=f"edit_mem_cat_{m['id']}",
                                 )
-                                edit_prog = st.text_input("Program Name", value=m['program_name'], key=f"edit_mem_prog_{m['id']}")
-                                edit_num = st.text_input("Membership Number", value=m['membership_number'], key=f"edit_mem_num_{m['id']}")
+                                edit_prog = st.text_input(
+                                    "Program Name",
+                                    value=m["program_name"],
+                                    key=f"edit_mem_prog_{m['id']}",
+                                )
+                                edit_num = st.text_input(
+                                    "Membership Number",
+                                    value=m["membership_number"],
+                                    key=f"edit_mem_num_{m['id']}",
+                                )
 
                                 # Extra fields
                                 with st.expander("More details (optional)"):
                                     if edit_cat == "Airline":
-                                        edit_tier = st.text_input("Tier", value=m.get('tier') or '', key=f"edit_mem_tier_{m['id']}")
-                                        edit_alliance = st.text_input("Alliance", value=m.get('alliance') or '', key=f"edit_mem_alliance_{m['id']}")
-                                        edit_airport = st.text_input("Airport Code", value=m.get('airport_code') or '', key=f"edit_mem_airport_{m['id']}")
-                                        edit_notes = st.text_area("Notes", value=m.get('notes') or '', key=f"edit_mem_notes_{m['id']}")
+                                        edit_tier = st.text_input(
+                                            "Tier",
+                                            value=m.get("tier") or "",
+                                            key=f"edit_mem_tier_{m['id']}",
+                                        )
+                                        edit_alliance = st.text_input(
+                                            "Alliance",
+                                            value=m.get("alliance") or "",
+                                            key=f"edit_mem_alliance_{m['id']}",
+                                        )
+                                        edit_airport = st.text_input(
+                                            "Airport Code",
+                                            value=m.get("airport_code") or "",
+                                            key=f"edit_mem_airport_{m['id']}",
+                                        )
+                                        edit_notes = st.text_area(
+                                            "Notes",
+                                            value=m.get("notes") or "",
+                                            key=f"edit_mem_notes_{m['id']}",
+                                        )
                                     elif edit_cat == "Hotel":
-                                        edit_tier = st.text_input("Status/Tier", value=m.get('tier') or '', key=f"edit_mem_tier_{m['id']}")
-                                        edit_notes = st.text_area("Notes", value=m.get('notes') or '', key=f"edit_mem_notes_{m['id']}")
+                                        edit_tier = st.text_input(
+                                            "Status/Tier",
+                                            value=m.get("tier") or "",
+                                            key=f"edit_mem_tier_{m['id']}",
+                                        )
+                                        edit_notes = st.text_area(
+                                            "Notes",
+                                            value=m.get("notes") or "",
+                                            key=f"edit_mem_notes_{m['id']}",
+                                        )
                                         edit_alliance = None
                                         edit_airport = None
                                     else:  # Car
-                                        edit_notes = st.text_area("Notes", value=m.get('notes') or '', key=f"edit_mem_notes_{m['id']}")
+                                        edit_notes = st.text_area(
+                                            "Notes",
+                                            value=m.get("notes") or "",
+                                            key=f"edit_mem_notes_{m['id']}",
+                                        )
                                         edit_tier = None
                                         edit_alliance = None
                                         edit_airport = None
@@ -622,7 +688,7 @@ if st.session_state.get("show_full_profile", False):
                                     if st.form_submit_button("💾 Save"):
                                         if edit_prog and edit_num:
                                             db.update_membership(
-                                                m['id'],
+                                                m["id"],
                                                 edit_cat.lower(),
                                                 edit_prog,
                                                 edit_num,
@@ -631,13 +697,19 @@ if st.session_state.get("show_full_profile", False):
                                                 airport_code=edit_airport,
                                                 notes=edit_notes,
                                             )
-                                            st.session_state.pop(f"editing_membership_{m['id']}", None)
+                                            st.session_state.pop(
+                                                f"editing_membership_{m['id']}", None
+                                            )
                                             st.rerun()
                                         else:
-                                            st.warning("Program Name and Membership Number are required.")
+                                            st.warning(
+                                                "Program Name and Membership Number are required."
+                                            )
                                 with col_cancel:
                                     if st.form_submit_button("❌ Cancel"):
-                                        st.session_state.pop(f"editing_membership_{m['id']}", None)
+                                        st.session_state.pop(
+                                            f"editing_membership_{m['id']}", None
+                                        )
                                         st.rerun()
             else:
                 st.caption("No memberships added.")
@@ -1059,7 +1131,6 @@ with tab1:
         st.write("")  # placeholder
 
     # --- Currencies (only Base Currency) ---
-    st.subheader("💱 Trip Currency")
     base_currency_options = [
         "USD",
         "EUR",
@@ -1089,6 +1160,16 @@ with tab1:
         key="create_trip_status",
         help="Set the initial status of the trip. Draft = editable, Approved = locked, Final = locked.",
     )
+
+    # ---- Timezone Display for this Trip ----
+    st.subheader("🕐 Timezone Display")
+    tz_display_mode = st.radio(
+        "Show times in:",
+        options=["Executive Home", "Event Local"],
+        index=0,
+        key="create_tz_display_mode",
+    )
+    # No manual assignment – widget updates session state automatically
 
     # Stops
     if "create_trip_stops" not in st.session_state:
@@ -1165,64 +1246,72 @@ with tab1:
             else:
                 st.warning("City, Start Date, and End Date are required.")
 
-    # ---- Contacts for this Trip ----
+    # ---- Contacts for this Trip (Local Support) ----
     st.subheader("📋 Contacts for This Trip")
     company_id = profile.get("company_id")
     if company_id:
         contact_options = get_company_contact_options(company_id)
         default_contact_ids = db.get_company_default_contacts(company_id)
-        default_labels = [label for label, cid in contact_options.items() if cid in default_contact_ids]
+        default_labels = [
+            label
+            for label, cid in contact_options.items()
+            if cid in default_contact_ids
+        ]
         selected_contact_labels = st.multiselect(
-            "Select contacts to include in the travel pack",
+            "Select local support contacts to include in the travel pack",
             options=list(contact_options.keys()),
             default=default_labels,
-            key="create_trip_contacts"
+            key="create_trip_contacts",
         )
-        selected_contact_ids = [contact_options[label] for label in selected_contact_labels]
+        selected_contact_ids = [
+            contact_options[label] for label in selected_contact_labels
+        ]
         st.session_state["create_trip_contact_ids"] = selected_contact_ids
     else:
         st.warning("No company selected for this executive – cannot select contacts.")
         st.session_state["create_trip_contact_ids"] = []
 
-    # ---- Participants for this Trip ----
-    st.subheader("👥 Participants")
+    # ---- Delegation (travelling group) ----
+    st.subheader("👥 Delegation")
     if company_id:
-        if "create_trip_participants" not in st.session_state:
-            st.session_state["create_trip_participants"] = []
+        if "create_trip_delegation" not in st.session_state:
+            st.session_state["create_trip_delegation"] = []
 
-        if st.session_state["create_trip_participants"]:
-            for idx, p in enumerate(st.session_state["create_trip_participants"]):
+        if st.session_state["create_trip_delegation"]:
+            for idx, member in enumerate(st.session_state["create_trip_delegation"]):
                 col1, col2, col3 = st.columns([3, 2, 1])
                 with col1:
-                    st.write(f"**{p['name']}** ({p.get('role', '')})")
+                    st.write(f"**{member['name']}** ({member.get('role', '')})")
                 with col2:
-                    st.write(f"{p.get('email', '')} | {p.get('phone', '')}")
+                    st.write(f"{member.get('email', '')} | {member.get('phone', '')}")
                 with col3:
-                    if st.button("🗑️", key=f"create_del_participant_{idx}"):
-                        st.session_state["create_trip_participants"].pop(idx)
+                    if st.button("🗑️", key=f"create_del_delegation_{idx}"):
+                        st.session_state["create_trip_delegation"].pop(idx)
                         st.rerun()
         else:
-            st.caption("No participants added yet.")
+            st.caption("No delegation members added yet.")
 
-        with st.expander("➕ Add Participant"):
-            with st.form("add_participant_form"):
-                p_name = st.text_input("Name*", key="add_part_name")
-                p_email = st.text_input("Email", key="add_part_email")
-                p_role = st.text_input("Role", key="add_part_role")
-                p_phone = st.text_input("Phone", key="add_part_phone")
-                if st.form_submit_button("Add Participant"):
-                    if p_name:
-                        st.session_state["create_trip_participants"].append({
-                            "name": p_name,
-                            "email": p_email,
-                            "role": p_role,
-                            "phone": p_phone
-                        })
+        with st.expander("➕ Add Delegation Member"):
+            with st.form("add_delegation_form"):
+                d_name = st.text_input("Name*", key="add_delegation_name")
+                d_email = st.text_input("Email", key="add_delegation_email")
+                d_role = st.text_input("Role", key="add_delegation_role")
+                d_phone = st.text_input("Phone", key="add_delegation_phone")
+                if st.form_submit_button("Add Delegation Member"):
+                    if d_name:
+                        st.session_state["create_trip_delegation"].append(
+                            {
+                                "name": d_name,
+                                "email": d_email,
+                                "role": d_role,
+                                "phone": d_phone,
+                            }
+                        )
                         st.rerun()
                     else:
                         st.warning("Name is required.")
     else:
-        st.warning("No company selected – cannot add participants.")
+        st.warning("No company selected – cannot add delegation members.")
 
     # --- Itinerary Items (optional) ---
     if "create_trip_items" not in st.session_state:
@@ -1231,7 +1320,7 @@ with tab1:
     if st.session_state["create_trip_items"]:
         # Get display mode and exec timezone for formatting
         exec_tz = profile.get("timezone", "America/New_York")
-        display_mode = st.session_state.get("timezone_display_mode", "Executive Home")
+        display_mode = st.session_state.get("create_tz_display_mode", "Executive Home")
 
         for idx, item in enumerate(st.session_state["create_trip_items"]):
             # Format datetime
@@ -1243,9 +1332,13 @@ with tab1:
                 st.caption(f"🕐 {dt_display}")
             with col_i2:
                 st.write(f"{item.get('cost',0):.2f} {item.get('cost_currency','USD')}")
-                participants = item.get("participant_ids", [])
-                if participants and st.session_state.get("create_trip_participants"):
-                    names = [st.session_state["create_trip_participants"][i].get('name', '') for i in participants if i < len(st.session_state["create_trip_participants"])]
+                delegation = item.get("delegation_ids", [])
+                if delegation and st.session_state.get("create_trip_delegation"):
+                    names = [
+                        st.session_state["create_trip_delegation"][i].get("name", "")
+                        for i in delegation
+                        if i < len(st.session_state["create_trip_delegation"])
+                    ]
                     if names:
                         st.caption(f"👥 {', '.join(names)}")
             with col_i3:
@@ -1331,13 +1424,18 @@ with tab1:
                         )
                         # ---- Timezone dropdown (Phase 4) ----
                         tz_display_names, tz_map = get_timezone_dropdown_options()
-                        current_tz = item.get("timezone") or profile.get("timezone", "America/New_York")
-                        current_tz_display = next((n for n in tz_display_names if current_tz in n), tz_display_names[0])
+                        current_tz = item.get("timezone") or profile.get(
+                            "timezone", "America/New_York"
+                        )
+                        current_tz_display = next(
+                            (n for n in tz_display_names if current_tz in n),
+                            tz_display_names[0],
+                        )
                         e_timezone = st.selectbox(
                             "Time Zone",
                             options=tz_display_names,
                             index=tz_display_names.index(current_tz_display),
-                            key=f"create_e_timezone_{idx}"
+                            key=f"create_e_timezone_{idx}",
                         )
                         e_timezone_value = tz_map[e_timezone]
 
@@ -1354,20 +1452,33 @@ with tab1:
                             value=item.get("notes", ""),
                             key=f"create_e_notes_{idx}",
                         )
-                        # Participant assignment
-                        if company_id and st.session_state.get("create_trip_participants"):
-                            participant_options = {f"{p['name']} ({p.get('role', '')})": idx for idx, p in enumerate(st.session_state["create_trip_participants"])}
-                            current_participants = item.get("participant_ids", [])
-                            current_labels = [label for label, i in participant_options.items() if i in current_participants]
+                        # Delegation assignment
+                        if company_id and st.session_state.get(
+                            "create_trip_delegation"
+                        ):
+                            delegation_options = {
+                                f"{m['name']} ({m.get('role', '')})": idx
+                                for idx, m in enumerate(
+                                    st.session_state["create_trip_delegation"]
+                                )
+                            }
+                            current_delegation = item.get("delegation_ids", [])
+                            current_labels = [
+                                label
+                                for label, i in delegation_options.items()
+                                if i in current_delegation
+                            ]
                             selected_parts = st.multiselect(
-                                "Assign Participants",
-                                options=list(participant_options.keys()),
+                                "Assign Delegation Members",
+                                options=list(delegation_options.keys()),
                                 default=current_labels,
-                                key=f"create_e_participants_{idx}"
+                                key=f"create_e_delegation_{idx}",
                             )
-                            e_participant_ids = [participant_options[label] for label in selected_parts]
+                            e_delegation_ids = [
+                                delegation_options[label] for label in selected_parts
+                            ]
                         else:
-                            e_participant_ids = []
+                            e_delegation_ids = []
 
                         if st.form_submit_button("💾 Update Item"):
                             st.session_state["create_trip_items"][idx] = {
@@ -1382,7 +1493,7 @@ with tab1:
                                 "is_confirmed": 1 if e_confirmed else 0,
                                 "confirmation_code": item.get("confirmation_code", ""),
                                 "notes": e_notes,
-                                "participant_ids": e_participant_ids,
+                                "delegation_ids": e_delegation_ids,
                                 "timezone": e_timezone_value,
                             }
                             st.session_state[f"create_editing_item_{idx}"] = False
@@ -1439,14 +1550,17 @@ with tab1:
             # ---- Timezone dropdown (Phase 4) ----
             tz_display_names, tz_map = get_timezone_dropdown_options()
             if profile and profile.get("timezone"):
-                default_tz_display = next((n for n in tz_display_names if profile["timezone"] in n), tz_display_names[0])
+                default_tz_display = next(
+                    (n for n in tz_display_names if profile["timezone"] in n),
+                    tz_display_names[0],
+                )
             else:
                 default_tz_display = tz_display_names[0]
             n_timezone = st.selectbox(
                 "Time Zone (for this event)",
                 options=tz_display_names,
                 index=tz_display_names.index(default_tz_display),
-                key="create_n_timezone"
+                key="create_n_timezone",
             )
             n_timezone_value = tz_map[n_timezone]
 
@@ -1454,17 +1568,22 @@ with tab1:
             n_confirmed = st.checkbox("Confirmed", key="create_n_confirmed")
             n_notes = st.text_area("Notes", key="create_n_notes")
 
-            # Participant assignment
-            if company_id and st.session_state.get("create_trip_participants"):
-                participant_options = {f"{p['name']} ({p.get('role', '')})": idx for idx, p in enumerate(st.session_state["create_trip_participants"])}
-                selected_participants = st.multiselect(
-                    "Assign Participants",
-                    options=list(participant_options.keys()),
-                    key="create_item_participants"
+            # Delegation assignment
+            if company_id and st.session_state.get("create_trip_delegation"):
+                delegation_options = {
+                    f"{m['name']} ({m.get('role', '')})": idx
+                    for idx, m in enumerate(st.session_state["create_trip_delegation"])
+                }
+                selected_delegation = st.multiselect(
+                    "Assign Delegation Members",
+                    options=list(delegation_options.keys()),
+                    key="create_item_delegation",
                 )
-                selected_participant_ids = [participant_options[label] for label in selected_participants]
+                selected_delegation_ids = [
+                    delegation_options[label] for label in selected_delegation
+                ]
             else:
-                selected_participant_ids = []
+                selected_delegation_ids = []
 
             if st.form_submit_button("➕ Add Item"):
                 if n_desc and n_start:
@@ -1481,7 +1600,7 @@ with tab1:
                             "is_confirmed": 1 if n_confirmed else 0,
                             "confirmation_code": "",
                             "notes": n_notes,
-                            "participant_ids": selected_participant_ids,
+                            "delegation_ids": selected_delegation_ids,
                             "timezone": n_timezone_value,
                         }
                     )
@@ -1495,7 +1614,7 @@ with tab1:
         if st.button("🗑️ Clear Form", key="clear_create_form"):
             st.session_state["create_trip_stops"] = []
             st.session_state["create_trip_items"] = []
-            st.session_state["create_trip_participants"] = []
+            st.session_state["create_trip_delegation"] = []
             st.session_state["create_trip_contact_ids"] = []
             # Clear all text/number/select/date fields
             keys_to_clear = [
@@ -1540,24 +1659,30 @@ with tab1:
                 # Budget is already in base currency
                 budget_base = budget
 
-                # ---- Contacts and Participants ----
-                selected_contact_ids = st.session_state.get("create_trip_contact_ids", [])
+                # ---- Contacts and Delegation ----
+                selected_contact_ids = st.session_state.get(
+                    "create_trip_contact_ids", []
+                )
 
-                # Map participant indices to real IDs
-                participant_id_map = {}
-                for idx, p in enumerate(st.session_state.get("create_trip_participants", [])):
-                    dupes = db.find_duplicate_participants(company_id, name=p['name'])
+                # Map delegation indices to real IDs
+                delegation_id_map = {}
+                for idx, member in enumerate(
+                    st.session_state.get("create_trip_delegation", [])
+                ):
+                    dupes = db.find_duplicate_delegation_members(
+                        company_id, name=member["name"]
+                    )
                     if dupes:
-                        real_id = dupes[0]['id']
+                        real_id = dupes[0]["id"]
                     else:
-                        real_id = db.add_participant(
+                        real_id = db.add_delegation_member(
                             company_id=company_id,
-                            name=p['name'],
-                            email=p.get('email'),
-                            role=p.get('role'),
-                            phone=p.get('phone')
+                            name=member["name"],
+                            email=member.get("email"),
+                            role=member.get("role"),
+                            phone=member.get("phone"),
                         )
-                    participant_id_map[idx] = real_id
+                    delegation_id_map[idx] = real_id
 
                 # Create trip
                 trip_id = db.create_or_get_trip(
@@ -1569,7 +1694,7 @@ with tab1:
                     trip_base_currency,
                     trip_base_currency,
                     trip_status,
-                    trip_contacts=selected_contact_ids
+                    trip_contacts=selected_contact_ids,
                 )
                 db.update_trip_budget(trip_id, budget_base)
                 db.update_trip_departure_details(
@@ -1590,7 +1715,7 @@ with tab1:
                         stop.get("notes", ""),
                     )
 
-                # Add items with participant assignments
+                # Add items with delegation assignments
                 for item in st.session_state["create_trip_items"]:
                     item_id = db.add_itinerary_item(
                         trip_id,
@@ -1605,17 +1730,21 @@ with tab1:
                         item.get("is_confirmed", 0),
                         item["cost_currency"],
                         item.get("exchange_rate_snapshot", 1.0),
-                        timezone=item.get("timezone")  # Phase 4
+                        timezone=item.get("timezone"),  # Phase 4
                     )
-                    if item.get("participant_ids"):
-                        real_participant_ids = [participant_id_map[idx] for idx in item["participant_ids"] if idx in participant_id_map]
-                        if real_participant_ids:
-                            db.set_item_participants(item_id, real_participant_ids)
+                    if item.get("delegation_ids"):
+                        real_delegation_ids = [
+                            delegation_id_map[idx]
+                            for idx in item["delegation_ids"]
+                            if idx in delegation_id_map
+                        ]
+                        if real_delegation_ids:
+                            db.set_item_delegation_members(item_id, real_delegation_ids)
 
                 # Clear the form and session state
                 st.session_state["create_trip_stops"] = []
                 st.session_state["create_trip_items"] = []
-                st.session_state["create_trip_participants"] = []
+                st.session_state["create_trip_delegation"] = []
                 st.session_state["create_trip_contact_ids"] = []
 
                 keys_to_clear = [
@@ -1642,7 +1771,9 @@ with tab1:
 
                 col_save_template, col_continue = st.columns(2)
                 with col_save_template:
-                    if st.button("📋 Save as Template", key="save_template_after_create"):
+                    if st.button(
+                        "📋 Save as Template", key="save_template_after_create"
+                    ):
                         st.session_state["show_save_template_after_create"] = True
                 with col_continue:
                     if st.button("Continue", key="continue_after_create"):
@@ -1670,7 +1801,9 @@ with tab1:
                                 )
                                 if new_id:
                                     st.success(f"✅ Template '{template_name}' saved!")
-                                    st.session_state.pop("show_save_template_after_create", None)
+                                    st.session_state.pop(
+                                        "show_save_template_after_create", None
+                                    )
                                     st.session_state.pop("last_created_trip_id", None)
                                     st.session_state.pop("last_created_trip_name", None)
                                     st.rerun()
@@ -1680,36 +1813,14 @@ with tab1:
                                 st.warning("Template Name is required.")
                     with col_no:
                         if st.button("Cancel", key="cancel_save_after_create"):
-                            st.session_state.pop("show_save_template_after_create", None)
+                            st.session_state.pop(
+                                "show_save_template_after_create", None
+                            )
                             st.rerun()
 
             else:
                 st.warning("Enter a Trip Name and add at least one stop.")
 
-    # ---- Travel Pack Generation ----
-                if st.session_state.get(f"show_travel_pack_modal_{trip_id_modal}", False):
-                                st.info("Generate a self-contained HTML Travel Pack.")
-                                # Get exec timezone and display mode
-                                exec_profile_modal = db.get_executive_profile(trip_modal_data["exec_id"])
-                                exec_tz_modal = exec_profile_modal.get("timezone", "America/New_York") if exec_profile_modal else "America/New_York"
-                                display_mode_modal = st.session_state.get("timezone_display_mode", "Executive Home")
-                                html_content = doc_generator.generate_travel_pack_html(trip_id_modal, exec_tz_modal, display_mode_modal)
-                                if html_content:
-                                    col_yes, col_no = st.columns(2)
-                                    with col_yes:
-                                        st.download_button(
-                                            label="⬇️ Download HTML",
-                                            data=html_content,
-                                            file_name=f"TravelPack_{trip_modal_data.get('purpose', 'trip')}.html",
-                                            mime="text/html",
-                                            key=f"download_travel_pack_{trip_id_modal}"
-                                        )
-                                    with col_no:
-                                        if st.button("Close", key=f"close_travel_pack_{trip_id_modal}"):
-                                            st.session_state.pop(f"show_travel_pack_modal_{trip_id_modal}", None)
-                                            st.rerun()
-                                else:
-                                    st.error("Failed to generate travel pack.")
 
 # ------------------------------------------------------------------
 # TAB 2: TRIP TEMPLATES (unchanged)
@@ -1812,17 +1923,19 @@ with tab2:
 # ------------------------------------------------------------------
 with tab3:
     st.subheader("Filter & View Trips")
-    
+
     # ---- Search bar (Phase 8) ----
     search_trip = st.text_input(
         "🔍 Search Trips",
         placeholder="Destination, purpose, or executive name...",
-        key="dash_search"
+        key="dash_search",
     )
 
     col_dash1, col_dash2 = st.columns(2)
     with col_dash1:
-        exec_filter_options = ["All"] + [f"{name} (ID: {id})" for id, name, _ in executives]
+        exec_filter_options = ["All"] + [
+            f"{name} (ID: {id})" for id, name, _ in executives
+        ]
         exec_filter = st.selectbox(
             "Filter by Executive", exec_filter_options, key="dash_filter_tab"
         )
@@ -1846,7 +1959,8 @@ with tab3:
     if search_trip:
         search_lower = search_trip.lower()
         summary_data = [
-            trip for trip in summary_data
+            trip
+            for trip in summary_data
             if search_lower in trip.get("destination", "").lower()
             or search_lower in trip.get("purpose", "").lower()
             or search_lower in trip.get("executive_name", "").lower()
@@ -2101,22 +2215,67 @@ with tab3:
                                     disabled=is_locked,
                                 )
 
+                                # ---- Timezone Display for this Trip ----
+                                st.write("**Timezone Display**")
+                                if (
+                                    f"modal_tz_display_{trip_id_modal}"
+                                    not in st.session_state
+                                ):
+                                    st.session_state[
+                                        f"modal_tz_display_{trip_id_modal}"
+                                    ] = "Executive Home"
+                                modal_tz_display = st.radio(
+                                    "Show times in:",
+                                    options=["Executive Home", "Event Local"],
+                                    index=(
+                                        0
+                                        if st.session_state[
+                                            f"modal_tz_display_{trip_id_modal}"
+                                        ]
+                                        == "Executive Home"
+                                        else 1
+                                    ),
+                                    key=f"modal_tz_display_radio_{trip_id_modal}",
+                                )
+                                # No manual assignment – widget updates session state automatically
+
                                 # ---- Contacts for this trip ----
                                 st.write("**Contacts**")
-                                exec_profile_modal = db.get_executive_profile(trip_modal_data["exec_id"])
-                                company_id_modal = exec_profile_modal.get("company_id") if exec_profile_modal else None
+                                exec_profile_modal = db.get_executive_profile(
+                                    trip_modal_data["exec_id"]
+                                )
+                                company_id_modal = (
+                                    exec_profile_modal.get("company_id")
+                                    if exec_profile_modal
+                                    else None
+                                )
                                 if company_id_modal:
-                                    contact_options_modal = get_company_contact_options(company_id_modal)
-                                    existing_contact_ids = json.loads(trip_modal_data.get("trip_contacts", "[]")) if trip_modal_data.get("trip_contacts") else []
-                                    existing_labels = [label for label, cid in contact_options_modal.items() if cid in existing_contact_ids]
+                                    contact_options_modal = get_company_contact_options(
+                                        company_id_modal
+                                    )
+                                    existing_contact_ids = (
+                                        json.loads(
+                                            trip_modal_data.get("trip_contacts", "[]")
+                                        )
+                                        if trip_modal_data.get("trip_contacts")
+                                        else []
+                                    )
+                                    existing_labels = [
+                                        label
+                                        for label, cid in contact_options_modal.items()
+                                        if cid in existing_contact_ids
+                                    ]
                                     selected_contacts_modal = st.multiselect(
-                                        "Select contacts for this trip",
+                                        "Select local support contacts for this trip",
                                         options=list(contact_options_modal.keys()),
                                         default=existing_labels,
                                         key=f"modal_contacts_{trip_id_modal}",
-                                        disabled=is_locked
+                                        disabled=is_locked,
                                     )
-                                    selected_contact_ids_modal = [contact_options_modal[label] for label in selected_contacts_modal]
+                                    selected_contact_ids_modal = [
+                                        contact_options_modal[label]
+                                        for label in selected_contacts_modal
+                                    ]
                                 else:
                                     selected_contact_ids_modal = []
 
@@ -2142,7 +2301,9 @@ with tab3:
                                         )
                                         db.update_trip_status(trip_id_modal, new_status)
                                         # Save contacts
-                                        db.update_trip_contacts(trip_id_modal, selected_contact_ids_modal)
+                                        db.update_trip_contacts(
+                                            trip_id_modal, selected_contact_ids_modal
+                                        )
 
                                         db.delete_all_trip_stops(trip_id_modal)
                                         for idx, stop in enumerate(
@@ -2174,8 +2335,6 @@ with tab3:
                                         for item in st.session_state[
                                             f"modal_items_{trip_id_modal}"
                                         ]:
-                                            # Note: participant assignments need to be re-applied after re-adding.
-                                            # We'll handle this by storing participant_ids in the item dict.
                                             db.add_itinerary_item(
                                                 trip_id_modal,
                                                 item["item_type"],
@@ -2189,18 +2348,13 @@ with tab3:
                                                 item.get("is_confirmed", 0),
                                                 item["cost_currency"],
                                                 item.get("exchange_rate_snapshot", 1.0),
-                                                timezone=item.get("timezone")  # Phase 4
+                                                timezone=item.get("timezone"),
                                             )
-                                            # The item ID is not returned by add_itinerary_item in this loop,
-                                            # so we need to fetch the newly created item's ID to set participants.
-                                            # For simplicity, we'll re-fetch items and set participants later.
-                                        # After re-adding all items, we need to set participants.
-                                        # We'll re-fetch items and set participants.
-                                        # Since we stored participant_ids in the item dict, we need to map to new item IDs.
+                                        # Note: delegation assignments are not restored here.
+                                        # We will need to re-apply them after re-adding items.
+                                        # We'll handle this by storing delegation_ids in the item dict.
                                         # But add_itinerary_item returns the ID. We can capture it.
-                                        # Let's refactor to store item_id in the dict.
-                                        # For now, we'll skip participant restoration as it's complex.
-                                        # We'll advise that participants need to be re-assigned after bulk update.
+                                        # For now, we'll skip delegation restoration.
 
                                         st.success("✅ Trip updated successfully!")
                                         st.session_state.pop(
@@ -2334,12 +2488,20 @@ with tab3:
 
                             items = st.session_state[f"modal_items_{trip_id_modal}"]
                             # Get exec timezone for the modal
-                            exec_tz_modal = exec_profile_modal.get("timezone", "America/New_York") if exec_profile_modal else "America/New_York"
-                            display_mode_modal = st.session_state.get("timezone_display_mode", "Executive Home")
+                            exec_tz_modal = (
+                                exec_profile_modal.get("timezone", "America/New_York")
+                                if exec_profile_modal
+                                else "America/New_York"
+                            )
+                            display_mode_modal = st.session_state.get(
+                                f"modal_tz_display_{trip_id_modal}", "Executive Home"
+                            )
 
                             for idx, item in enumerate(items):
                                 # Format datetime
-                                dt_display = format_item_datetime(item, exec_tz_modal, display_mode_modal)
+                                dt_display = format_item_datetime(
+                                    item, exec_tz_modal, display_mode_modal
+                                )
 
                                 col_i1, col_i2, col_i3, col_i4 = st.columns(
                                     [3, 2, 1, 1]
@@ -2349,11 +2511,13 @@ with tab3:
                                         f"{item['description']} ({item['item_type']})"
                                     )
                                     st.caption(f"🕐 {dt_display}")
-                                    # Show participants if available
-                                    if item.get('participant_ids'):
-                                        p_names = get_participant_names(item['participant_ids'])
-                                        if p_names:
-                                            st.caption(f"👥 {p_names}")
+                                    # Show delegation if available
+                                    if item.get("delegation_ids"):
+                                        d_names = get_delegation_names(
+                                            item["delegation_ids"]
+                                        )
+                                        if d_names:
+                                            st.caption(f"👥 {d_names}")
                                 with col_i2:
                                     st.write(
                                         f"{item.get('cost',0):.2f} {item.get('cost_currency','USD')}"
@@ -2468,16 +2632,31 @@ with tab3:
                                                 key=f"modal_e_rate_{trip_id_modal}_{idx}",
                                             )
                                             # ---- Timezone dropdown (Phase 4) ----
-                                            tz_display_names, tz_map = get_timezone_dropdown_options()
-                                            current_tz_modal = item.get("timezone") or exec_tz_modal
-                                            current_tz_display_modal = next((n for n in tz_display_names if current_tz_modal in n), tz_display_names[0])
+                                            tz_display_names, tz_map = (
+                                                get_timezone_dropdown_options()
+                                            )
+                                            current_tz_modal = (
+                                                item.get("timezone") or exec_tz_modal
+                                            )
+                                            current_tz_display_modal = next(
+                                                (
+                                                    n
+                                                    for n in tz_display_names
+                                                    if current_tz_modal in n
+                                                ),
+                                                tz_display_names[0],
+                                            )
                                             e_timezone_modal = st.selectbox(
                                                 "Time Zone",
                                                 options=tz_display_names,
-                                                index=tz_display_names.index(current_tz_display_modal),
-                                                key=f"modal_e_timezone_{trip_id_modal}_{idx}"
+                                                index=tz_display_names.index(
+                                                    current_tz_display_modal
+                                                ),
+                                                key=f"modal_e_timezone_{trip_id_modal}_{idx}",
                                             )
-                                            e_timezone_value_modal = tz_map[e_timezone_modal]
+                                            e_timezone_value_modal = tz_map[
+                                                e_timezone_modal
+                                            ]
 
                                             st.caption(
                                                 "💡 [Check current rates on XE.com](https://www.xe.com)"
@@ -2492,20 +2671,35 @@ with tab3:
                                                 value=item.get("notes", ""),
                                                 key=f"modal_e_notes_{trip_id_modal}_{idx}",
                                             )
-                                            # Participant assignment
+                                            # Delegation assignment
                                             if company_id_modal:
-                                                participant_options_modal = get_company_participant_options(company_id_modal)
-                                                current_participant_ids = item.get('participant_ids', [])
-                                                current_labels = [label for label, pid in participant_options_modal.items() if pid in current_participant_ids]
-                                                selected_participants_modal = st.multiselect(
-                                                    "Assign Participants",
-                                                    options=list(participant_options_modal.keys()),
-                                                    default=current_labels,
-                                                    key=f"modal_item_participants_{trip_id_modal}_{idx}"
+                                                delegation_options_modal = (
+                                                    get_company_delegation_options(
+                                                        company_id_modal
+                                                    )
                                                 )
-                                                selected_participant_ids_modal = [participant_options_modal[label] for label in selected_participants_modal]
+                                                current_delegation_ids = item.get(
+                                                    "delegation_ids", []
+                                                )
+                                                current_labels = [
+                                                    label
+                                                    for label, did in delegation_options_modal.items()
+                                                    if did in current_delegation_ids
+                                                ]
+                                                selected_delegation_modal = st.multiselect(
+                                                    "Assign Delegation Members",
+                                                    options=list(
+                                                        delegation_options_modal.keys()
+                                                    ),
+                                                    default=current_labels,
+                                                    key=f"modal_item_delegation_{trip_id_modal}_{idx}",
+                                                )
+                                                selected_delegation_ids_modal = [
+                                                    delegation_options_modal[label]
+                                                    for label in selected_delegation_modal
+                                                ]
                                             else:
-                                                selected_participant_ids_modal = []
+                                                selected_delegation_ids_modal = []
 
                                             if st.form_submit_button("💾 Update Item"):
                                                 # Update the item in session state
@@ -2531,7 +2725,7 @@ with tab3:
                                                         "confirmation_code", ""
                                                     ),
                                                     "notes": e_notes,
-                                                    "participant_ids": selected_participant_ids_modal,
+                                                    "delegation_ids": selected_delegation_ids_modal,
                                                     "timezone": e_timezone_value_modal,
                                                 }
                                                 st.session_state[
@@ -2605,15 +2799,28 @@ with tab3:
                                         disabled=is_locked,
                                     )
                                     # ---- Timezone dropdown (Phase 4) ----
-                                    tz_display_names, tz_map = get_timezone_dropdown_options()
-                                    if exec_profile_modal and exec_profile_modal.get("timezone"):
-                                        default_tz_display_modal = next((n for n in tz_display_names if exec_profile_modal["timezone"] in n), tz_display_names[0])
+                                    tz_display_names, tz_map = (
+                                        get_timezone_dropdown_options()
+                                    )
+                                    if exec_profile_modal and exec_profile_modal.get(
+                                        "timezone"
+                                    ):
+                                        default_tz_display_modal = next(
+                                            (
+                                                n
+                                                for n in tz_display_names
+                                                if exec_profile_modal["timezone"] in n
+                                            ),
+                                            tz_display_names[0],
+                                        )
                                     else:
                                         default_tz_display_modal = tz_display_names[0]
                                     n_timezone_modal = st.selectbox(
                                         "Time Zone (for this event)",
                                         options=tz_display_names,
-                                        index=tz_display_names.index(default_tz_display_modal),
+                                        index=tz_display_names.index(
+                                            default_tz_display_modal
+                                        ),
                                         key=f"modal_n_timezone_{trip_id_modal}",
                                         disabled=is_locked,
                                     )
@@ -2632,17 +2839,26 @@ with tab3:
                                         key=f"modal_n_notes_{trip_id_modal}",
                                         disabled=is_locked,
                                     )
-                                    # Participant assignment
+                                    # Delegation assignment
                                     if not is_locked and company_id_modal:
-                                        participant_options_modal = get_company_participant_options(company_id_modal)
-                                        selected_participants_modal_new = st.multiselect(
-                                            "Assign Participants",
-                                            options=list(participant_options_modal.keys()),
-                                            key=f"modal_new_item_participants_{trip_id_modal}"
+                                        delegation_options_modal = (
+                                            get_company_delegation_options(
+                                                company_id_modal
+                                            )
                                         )
-                                        selected_participant_ids_modal_new = [participant_options_modal[label] for label in selected_participants_modal_new]
+                                        selected_delegation_modal_new = st.multiselect(
+                                            "Assign Delegation Members",
+                                            options=list(
+                                                delegation_options_modal.keys()
+                                            ),
+                                            key=f"modal_new_item_delegation_{trip_id_modal}",
+                                        )
+                                        selected_delegation_ids_modal_new = [
+                                            delegation_options_modal[label]
+                                            for label in selected_delegation_modal_new
+                                        ]
                                     else:
-                                        selected_participant_ids_modal_new = []
+                                        selected_delegation_ids_modal_new = []
 
                                     if not is_locked:
                                         if st.form_submit_button("➕ Add Item"):
@@ -2668,7 +2884,7 @@ with tab3:
                                                         ),
                                                         "confirmation_code": "",
                                                         "notes": n_notes,
-                                                        "participant_ids": selected_participant_ids_modal_new,
+                                                        "delegation_ids": selected_delegation_ids_modal_new,
                                                         "timezone": n_timezone_value_modal,
                                                     }
                                                 )
@@ -2678,42 +2894,72 @@ with tab3:
                                                     "Description and Start Time are required."
                                                 )
 
-                            # ---- Participants management for edit modal ----
-                            st.write("**👥 Participants**")
+                            # ---- Delegation management for edit modal ----
+                            st.write("**👥 Delegation**")
                             if company_id_modal:
-                                all_participants = db.get_participants(company_id_modal, active_only=True)
-                                if all_participants:
-                                    for p in all_participants:
+                                all_members = db.get_delegation_members(
+                                    company_id_modal, active_only=True
+                                )
+                                if all_members:
+                                    for member in all_members:
                                         col1, col2, col3 = st.columns([3, 2, 1])
                                         with col1:
-                                            st.write(f"**{p['name']}** ({p.get('role', '')})")
+                                            st.write(
+                                                f"**{member['name']}** ({member.get('role', '')})"
+                                            )
                                         with col2:
-                                            st.write(f"{p.get('email', '')} | {p.get('phone', '')}")
+                                            st.write(
+                                                f"{member.get('email', '')} | {member.get('phone', '')}"
+                                            )
                                         with col3:
                                             st.write("")
                                 else:
-                                    st.caption("No participants for this company.")
-                                with st.expander("➕ Add Participant"):
-                                    with st.form(key=f"add_participant_modal_{trip_id_modal}"):
-                                        p_name = st.text_input("Name*", key=f"modal_part_name_{trip_id_modal}")
-                                        p_email = st.text_input("Email", key=f"modal_part_email_{trip_id_modal}")
-                                        p_role = st.text_input("Role", key=f"modal_part_role_{trip_id_modal}")
-                                        p_phone = st.text_input("Phone", key=f"modal_part_phone_{trip_id_modal}")
-                                        if st.form_submit_button("Add Participant"):
-                                            if p_name:
-                                                dupes = db.find_duplicate_participants(company_id_modal, name=p_name)
+                                    st.caption(
+                                        "No delegation members for this company."
+                                    )
+                                with st.expander("➕ Add Delegation Member"):
+                                    with st.form(
+                                        key=f"add_delegation_modal_{trip_id_modal}"
+                                    ):
+                                        d_name = st.text_input(
+                                            "Name*",
+                                            key=f"modal_delegation_name_{trip_id_modal}",
+                                        )
+                                        d_email = st.text_input(
+                                            "Email",
+                                            key=f"modal_delegation_email_{trip_id_modal}",
+                                        )
+                                        d_role = st.text_input(
+                                            "Role",
+                                            key=f"modal_delegation_role_{trip_id_modal}",
+                                        )
+                                        d_phone = st.text_input(
+                                            "Phone",
+                                            key=f"modal_delegation_phone_{trip_id_modal}",
+                                        )
+                                        if st.form_submit_button(
+                                            "Add Delegation Member"
+                                        ):
+                                            if d_name:
+                                                dupes = db.find_duplicate_delegation_members(
+                                                    company_id_modal, name=d_name
+                                                )
                                                 if not dupes:
-                                                    db.add_participant(
+                                                    db.add_delegation_member(
                                                         company_id=company_id_modal,
-                                                        name=p_name,
-                                                        email=p_email,
-                                                        role=p_role,
-                                                        phone=p_phone
+                                                        name=d_name,
+                                                        email=d_email,
+                                                        role=d_role,
+                                                        phone=d_phone,
                                                     )
-                                                    st.success("Participant added!")
+                                                    st.success(
+                                                        "Delegation member added!"
+                                                    )
                                                     st.rerun()
                                                 else:
-                                                    st.warning("A participant with that name already exists.")
+                                                    st.warning(
+                                                        "A member with that name already exists."
+                                                    )
                                             else:
                                                 st.warning("Name is required.")
                             else:
@@ -2773,6 +3019,8 @@ with tab3:
                                     st.session_state[
                                         f"show_travel_pack_modal_{trip_id_modal}"
                                     ] = True
+
+                            # ---- Save as Template confirmation ----
                             if st.session_state.get(
                                 f"show_save_template_modal_{trip_id_modal}", False
                             ):
@@ -2822,6 +3070,38 @@ with tab3:
                                         )
                                         st.rerun()
 
+                            # ---- Travel Pack generation ----
+                            if st.session_state.get(
+                                f"show_travel_pack_modal_{trip_id_modal}", False
+                            ):
+                                st.info("Generate a self-contained HTML Travel Pack.")
+                                html_content = doc_generator.generate_travel_pack_html(
+                                    trip_id_modal, exec_tz_modal, display_mode_modal
+                                )
+                                if html_content:
+                                    col_yes, col_no = st.columns(2)
+                                    with col_yes:
+                                        st.download_button(
+                                            label="⬇️ Download HTML",
+                                            data=html_content,
+                                            file_name=f"TravelPack_{trip_modal_data.get('purpose', 'trip')}.html",
+                                            mime="text/html",
+                                            key=f"download_travel_pack_{trip_id_modal}",
+                                        )
+                                    with col_no:
+                                        if st.button(
+                                            "Close",
+                                            key=f"close_travel_pack_{trip_id_modal}",
+                                        ):
+                                            st.session_state.pop(
+                                                f"show_travel_pack_modal_{trip_id_modal}",
+                                                None,
+                                            )
+                                            st.rerun()
+                                else:
+                                    st.error("Failed to generate travel pack.")
+
+                            # ---- Delete confirmation ----
                             if st.session_state.get(
                                 f"confirm_del_modal_{trip_id_modal}", False
                             ):
@@ -2965,8 +3245,6 @@ with tab3:
 # TAB 4: COMPANIES (Management)
 # ------------------------------------------------------------------
 with tab4:
-    st.header("🏢 Company Management")
-
     # ---- Add new company form ----
     with st.expander("➕ Add New Company", expanded=False):
         with st.form("add_company_manager_form"):
@@ -2984,15 +3262,15 @@ with tab4:
     # ---- List of companies ----
     # ---- Search companies (Phase 8) ----
     search_company = st.text_input(
-        "🔍 Search Companies",
-        placeholder="Company name...",
-        key="company_search"
+        "🔍 Search Companies", placeholder="Company name...", key="company_search"
     )
 
     companies = db.get_all_companies()
     if search_company:
         search_lower = search_company.lower()
-        companies = [(id, name) for id, name in companies if search_lower in name.lower()]
+        companies = [
+            (id, name) for id, name in companies if search_lower in name.lower()
+        ]
 
     if not companies:
         st.info("No companies found matching your search.")
@@ -3002,13 +3280,15 @@ with tab4:
             comp = db.get_company(comp_id)
             with st.container():
                 # ---- Company header row ----
-                col1, col2, col3, col4, col5, col6 = st.columns([2, 1.5, 2, 0.8, 0.8, 1])
+                col1, col2, col3, col4, col5, col6 = st.columns(
+                    [2, 1.5, 2, 0.8, 0.8, 1]
+                )
                 with col1:
                     st.write(f"**{comp['name']}**")
                 with col2:
-                    st.write(comp.get('default_cost_center', '') or '—')
+                    st.write(comp.get("default_cost_center", "") or "—")
                 with col3:
-                    st.write(comp.get('policy_notes', '') or '—')
+                    st.write(comp.get("policy_notes", "") or "—")
                 with col4:
                     if st.button("✏️", key=f"edit_comp_{comp_id}"):
                         st.session_state[f"edit_company_{comp_id}"] = True
@@ -3023,14 +3303,30 @@ with tab4:
                 if st.session_state.get(f"edit_company_{comp_id}", False):
                     with st.popover("Edit Company", use_container_width=True):
                         with st.form(key=f"edit_comp_form_{comp_id}"):
-                            edit_name = st.text_input("Company Name*", value=comp['name'], key=f"edit_comp_name_{comp_id}")
-                            edit_cc = st.text_input("Default Cost Center (optional)", value=comp.get('default_cost_center', ''), key=f"edit_comp_cc_{comp_id}")
-                            edit_policy = st.text_area("Policy Notes (optional)", value=comp.get('policy_notes', ''), key=f"edit_comp_policy_{comp_id}")
+                            edit_name = st.text_input(
+                                "Company Name*",
+                                value=comp["name"],
+                                key=f"edit_comp_name_{comp_id}",
+                            )
+                            edit_cc = st.text_input(
+                                "Default Cost Center (optional)",
+                                value=comp.get("default_cost_center", ""),
+                                key=f"edit_comp_cc_{comp_id}",
+                            )
+                            edit_policy = st.text_area(
+                                "Policy Notes (optional)",
+                                value=comp.get("policy_notes", ""),
+                                key=f"edit_comp_policy_{comp_id}",
+                            )
                             if st.form_submit_button("💾 Save Changes"):
                                 if edit_name:
-                                    db.update_company(comp_id, edit_name, edit_cc, edit_policy)
+                                    db.update_company(
+                                        comp_id, edit_name, edit_cc, edit_policy
+                                    )
                                     st.success(f"Company '{edit_name}' updated!")
-                                    st.session_state.pop(f"edit_company_{comp_id}", None)
+                                    st.session_state.pop(
+                                        f"edit_company_{comp_id}", None
+                                    )
                                     st.rerun()
                                 else:
                                     st.warning("Company Name is required.")
@@ -3043,11 +3339,15 @@ with tab4:
                     st.warning(f"⚠️ Permanently delete company '{comp['name']}'?")
                     col_yes, col_no = st.columns(2)
                     with col_yes:
-                        if st.button("✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"):
+                        if st.button(
+                            "✅ Yes, Delete", key=f"confirm_del_comp_yes_{comp_id}"
+                        ):
                             success, msg = db.delete_company(comp_id)
                             if success:
                                 st.success(msg)
-                                st.session_state.pop(f"confirm_del_comp_{comp_id}", None)
+                                st.session_state.pop(
+                                    f"confirm_del_comp_{comp_id}", None
+                                )
                                 st.rerun()
                             else:
                                 st.error(msg)
@@ -3063,27 +3363,31 @@ with tab4:
                         col_html, col_word, col_excel = st.columns(3)
                         with col_html:
                             if st.button("🌐 HTML", key=f"export_html_{comp_id}"):
-                                html = doc_generator.generate_company_profile_html(comp_id)
+                                html = doc_generator.generate_company_profile_html(
+                                    comp_id
+                                )
                                 if html:
                                     st.download_button(
                                         label="⬇️ Download HTML",
                                         data=html,
                                         file_name=f"{comp['name']}_profile.html",
                                         mime="text/html",
-                                        key=f"download_html_{comp_id}"
+                                        key=f"download_html_{comp_id}",
                                     )
                                 else:
                                     st.error("Failed to generate HTML.")
                         with col_word:
                             if st.button("📄 Word", key=f"export_word_{comp_id}"):
-                                docx = doc_generator.generate_company_profile_docx(comp_id)
+                                docx = doc_generator.generate_company_profile_docx(
+                                    comp_id
+                                )
                                 if docx:
                                     st.download_button(
                                         label="⬇️ Download Word",
                                         data=docx,
                                         file_name=f"{comp['name']}_profile.docx",
                                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
-                                        key=f"download_word_{comp_id}"
+                                        key=f"download_word_{comp_id}",
                                     )
                                 else:
                                     st.error("Failed to generate Word.")
@@ -3096,7 +3400,7 @@ with tab4:
                                         data=excel,
                                         file_name=f"{comp['name']}_profile.xlsx",
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        key=f"download_excel_{comp_id}"
+                                        key=f"download_excel_{comp_id}",
                                     )
                                 else:
                                     st.error("Failed to generate Excel.")
@@ -3104,29 +3408,46 @@ with tab4:
                             st.session_state.pop(f"export_company_{comp_id}", None)
                             st.rerun()
 
-                # ---- Phase 7: Participants Management for this company ----
-                with st.expander(f"👥 Participants ({len(db.get_participants(comp_id, active_only=True))})", expanded=False):
-                    # ---- Add new participant ----
-                    with st.form(key=f"add_participant_comp_{comp_id}"):
+                # ---- Phase 7: Delegation Management for this company ----
+                with st.expander(
+                    f"👥 Delegation ({len(db.get_delegation_members(comp_id, active_only=True))})",
+                    expanded=False,
+                ):
+                    # ---- Add new delegation member ----
+                    with st.form(key=f"add_delegation_comp_{comp_id}"):
                         col_name, col_email, col_role, col_phone = st.columns(4)
                         with col_name:
-                            p_name = st.text_input("Name*", key=f"add_part_name_{comp_id}")
+                            d_name = st.text_input(
+                                "Name*", key=f"add_delegation_name_{comp_id}"
+                            )
                         with col_email:
-                            p_email = st.text_input("Email", key=f"add_part_email_{comp_id}")
+                            d_email = st.text_input(
+                                "Email", key=f"add_delegation_email_{comp_id}"
+                            )
                         with col_role:
-                            p_role = st.text_input("Role", key=f"add_part_role_{comp_id}")
+                            d_role = st.text_input(
+                                "Role", key=f"add_delegation_role_{comp_id}"
+                            )
                         with col_phone:
-                            p_phone = st.text_input("Phone", key=f"add_part_phone_{comp_id}")
-                        if st.form_submit_button("➕ Add Participant"):
-                            if p_name:
+                            d_phone = st.text_input(
+                                "Phone", key=f"add_delegation_phone_{comp_id}"
+                            )
+                        if st.form_submit_button("➕ Add Delegation Member"):
+                            if d_name:
                                 # Check duplicate
-                                dupes = db.find_duplicate_participants(comp_id, name=p_name)
+                                dupes = db.find_duplicate_delegation_members(
+                                    comp_id, name=d_name
+                                )
                                 if not dupes:
-                                    db.add_participant(comp_id, p_name, p_email, p_role, p_phone)
-                                    st.success(f"Participant '{p_name}' added!")
+                                    db.add_delegation_member(
+                                        comp_id, d_name, d_email, d_role, d_phone
+                                    )
+                                    st.success(f"Delegation member '{d_name}' added!")
                                     st.rerun()
                                 else:
-                                    st.warning("A participant with that name already exists.")
+                                    st.warning(
+                                        "A member with that name already exists."
+                                    )
                             else:
                                 st.warning("Name is required.")
 
@@ -3137,16 +3458,23 @@ with tab4:
                         uploaded_file = st.file_uploader(
                             "Import CSV",
                             type=["csv"],
-                            key=f"import_participants_{comp_id}",
-                            help="Columns: Name, Email, Role, Phone"
+                            key=f"import_delegation_{comp_id}",
+                            help="Columns: Name, Email, Role, Phone",
                         )
                         if uploaded_file is not None:
                             try:
-                                content = uploaded_file.getvalue().decode('utf-8').splitlines()
+                                content = (
+                                    uploaded_file.getvalue()
+                                    .decode("utf-8")
+                                    .splitlines()
+                                )
                                 reader = csv.DictReader(content)
                                 expected = ["Name", "Email", "Role", "Phone"]
                                 if all(h in reader.fieldnames for h in expected):
-                                    if st.button(f"Start Import", key=f"start_import_parts_{comp_id}"):
+                                    if st.button(
+                                        f"Start Import",
+                                        key=f"start_import_delegation_{comp_id}",
+                                    ):
                                         added = 0
                                         skipped = 0
                                         for row in reader:
@@ -3154,122 +3482,193 @@ with tab4:
                                             if not name:
                                                 continue
                                             # Check duplicate
-                                            dupes = db.find_duplicate_participants(comp_id, name=name)
-                                            if dupes and not st.checkbox(f"Duplicate '{name}' – add anyway?", key=f"force_import_part_{name}_{comp_id}"):
+                                            dupes = (
+                                                db.find_duplicate_delegation_members(
+                                                    comp_id, name=name
+                                                )
+                                            )
+                                            if dupes and not st.checkbox(
+                                                f"Duplicate '{name}' – add anyway?",
+                                                key=f"force_import_delegation_{name}_{comp_id}",
+                                            ):
                                                 skipped += 1
                                                 continue
-                                            db.add_participant(
+                                            db.add_delegation_member(
                                                 company_id=comp_id,
                                                 name=name,
-                                                email=row.get("Email", "").strip() or None,
-                                                role=row.get("Role", "").strip() or None,
-                                                phone=row.get("Phone", "").strip() or None
+                                                email=row.get("Email", "").strip()
+                                                or None,
+                                                role=row.get("Role", "").strip()
+                                                or None,
+                                                phone=row.get("Phone", "").strip()
+                                                or None,
                                             )
                                             added += 1
-                                        st.success(f"✅ Imported {added} participants. Skipped {skipped} duplicates.")
+                                        st.success(
+                                            f"✅ Imported {added} delegation members. Skipped {skipped} duplicates."
+                                        )
                                         st.rerun()
                                 else:
-                                    st.error(f"CSV must have columns: {', '.join(expected)}")
+                                    st.error(
+                                        f"CSV must have columns: {', '.join(expected)}"
+                                    )
                             except Exception as e:
                                 st.error(f"Import failed: {e}")
 
                     with col_exp:
                         # Export CSV button
-                        if st.button("📥 Export CSV", key=f"export_participants_{comp_id}"):
-                            participants = db.get_participants(comp_id, active_only=True)
+                        if st.button(
+                            "📥 Export CSV", key=f"export_delegation_{comp_id}"
+                        ):
+                            members = db.get_delegation_members(
+                                comp_id, active_only=True
+                            )
                             output = io.StringIO()
                             writer = csv.writer(output)
                             writer.writerow(["Name", "Email", "Role", "Phone"])
-                            for p in participants:
-                                writer.writerow([
-                                    p['name'],
-                                    p.get('email', ''),
-                                    p.get('role', ''),
-                                    p.get('phone', '')
-                                ])
+                            for m in members:
+                                writer.writerow(
+                                    [
+                                        m["name"],
+                                        m.get("email", ""),
+                                        m.get("role", ""),
+                                        m.get("phone", ""),
+                                    ]
+                                )
                             st.download_button(
                                 label="⬇️ Download CSV",
-                                data=output.getvalue().encode('utf-8'),
-                                file_name=f"participants_{comp['name']}_{datetime.now().strftime('%Y%m%d')}.csv",
+                                data=output.getvalue().encode("utf-8"),
+                                file_name=f"delegation_{comp['name']}_{datetime.now().strftime('%Y%m%d')}.csv",
                                 mime="text/csv",
-                                key=f"download_participants_{comp_id}"
+                                key=f"download_delegation_{comp_id}",
                             )
 
-                    # ---- List existing participants ----
-                    participants = db.get_participants(comp_id, active_only=True)
-                    if not participants:
-                        st.caption("No participants yet.")
+                    # ---- List existing delegation members ----
+                    members = db.get_delegation_members(comp_id, active_only=True)
+                    if not members:
+                        st.caption("No delegation members yet.")
                     else:
-                        st.write(f"**{len(participants)} active participants**")
-                        for p in participants:
+                        st.write(f"**{len(members)} active members**")
+                        for m in members:
                             col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
                             with col1:
-                                st.write(f"**{p['name']}**")
+                                st.write(f"**{m['name']}**")
                             with col2:
-                                st.write(p.get('email', ''))
+                                st.write(m.get("email", ""))
                             with col3:
-                                st.write(f"{p.get('role', '')} | {p.get('phone', '')}")
+                                st.write(f"{m.get('role', '')} | {m.get('phone', '')}")
                             with col4:
-                                if st.button("✏️", key=f"edit_part_{p['id']}_{comp_id}"):
-                                    st.session_state[f"editing_participant_{p['id']}"] = True
+                                if st.button(
+                                    "✏️", key=f"edit_delegation_{m['id']}_{comp_id}"
+                                ):
+                                    st.session_state[
+                                        f"editing_delegation_{m['id']}"
+                                    ] = True
                             with col5:
-                                if st.button("🗑️", key=f"del_part_{p['id']}_{comp_id}"):
-                                    st.session_state[f"delete_participant_{p['id']}"] = True
+                                if st.button(
+                                    "🗑️", key=f"del_delegation_{m['id']}_{comp_id}"
+                                ):
+                                    st.session_state[f"delete_delegation_{m['id']}"] = (
+                                        True
+                                    )
 
-                            # ---- Edit participant popover ----
-                            if st.session_state.get(f"editing_participant_{p['id']}", False):
-                                with st.popover(f"Edit {p['name']}", use_container_width=True):
-                                    with st.form(key=f"edit_part_form_{p['id']}"):
-                                        e_name = st.text_input("Name*", value=p['name'], key=f"edit_part_name_{p['id']}")
-                                        e_email = st.text_input("Email", value=p.get('email', ''), key=f"edit_part_email_{p['id']}")
-                                        e_role = st.text_input("Role", value=p.get('role', ''), key=f"edit_part_role_{p['id']}")
-                                        e_phone = st.text_input("Phone", value=p.get('phone', ''), key=f"edit_part_phone_{p['id']}")
+                            # ---- Edit delegation member popover ----
+                            if st.session_state.get(
+                                f"editing_delegation_{m['id']}", False
+                            ):
+                                with st.popover(
+                                    f"Edit {m['name']}", use_container_width=True
+                                ):
+                                    with st.form(key=f"edit_delegation_form_{m['id']}"):
+                                        e_name = st.text_input(
+                                            "Name*",
+                                            value=m["name"],
+                                            key=f"edit_delegation_name_{m['id']}",
+                                        )
+                                        e_email = st.text_input(
+                                            "Email",
+                                            value=m.get("email", ""),
+                                            key=f"edit_delegation_email_{m['id']}",
+                                        )
+                                        e_role = st.text_input(
+                                            "Role",
+                                            value=m.get("role", ""),
+                                            key=f"edit_delegation_role_{m['id']}",
+                                        )
+                                        e_phone = st.text_input(
+                                            "Phone",
+                                            value=m.get("phone", ""),
+                                            key=f"edit_delegation_phone_{m['id']}",
+                                        )
                                         if st.form_submit_button("💾 Save"):
                                             if e_name:
-                                                db.update_participant(
-                                                    p['id'],
+                                                db.update_delegation_member(
+                                                    m["id"],
                                                     name=e_name,
                                                     email=e_email,
                                                     role=e_role,
-                                                    phone=e_phone
+                                                    phone=e_phone,
                                                 )
-                                                st.session_state.pop(f"editing_participant_{p['id']}", None)
+                                                st.session_state.pop(
+                                                    f"editing_delegation_{m['id']}",
+                                                    None,
+                                                )
                                                 st.success("Updated!")
                                                 st.rerun()
                                             else:
                                                 st.warning("Name is required.")
                                         if st.form_submit_button("❌ Cancel"):
-                                            st.session_state.pop(f"editing_participant_{p['id']}", None)
+                                            st.session_state.pop(
+                                                f"editing_delegation_{m['id']}", None
+                                            )
                                             st.rerun()
 
                             # ---- Delete confirmation ----
-                            if st.session_state.get(f"delete_participant_{p['id']}", False):
-                                st.warning(f"⚠️ Permanently delete participant '{p['name']}'?")
+                            if st.session_state.get(
+                                f"delete_delegation_{m['id']}", False
+                            ):
+                                st.warning(
+                                    f"⚠️ Permanently delete delegation member '{m['name']}'?"
+                                )
                                 col_yes, col_no = st.columns(2)
                                 with col_yes:
-                                    if st.button("✅ Yes", key=f"confirm_del_part_{p['id']}"):
-                                        db.delete_participant(p['id'])
-                                        st.session_state.pop(f"delete_participant_{p['id']}", None)
+                                    if st.button(
+                                        "✅ Yes",
+                                        key=f"confirm_del_delegation_{m['id']}",
+                                    ):
+                                        db.delete_delegation_member(m["id"])
+                                        st.session_state.pop(
+                                            f"delete_delegation_{m['id']}", None
+                                        )
                                         st.success("Deleted.")
                                         st.rerun()
                                 with col_no:
-                                    if st.button("❌ Cancel", key=f"cancel_del_part_{p['id']}"):
-                                        st.session_state.pop(f"delete_participant_{p['id']}", None)
+                                    if st.button(
+                                        "❌ Cancel",
+                                        key=f"cancel_del_delegation_{m['id']}",
+                                    ):
+                                        st.session_state.pop(
+                                            f"delete_delegation_{m['id']}", None
+                                        )
                                         st.rerun()
                             st.divider()
 
                 st.divider()
 
 # ------------------------------------------------------------------
-# TAB 5: CONTACTS
+# TAB 5: CONTACTS (Local Support & More)
 # ------------------------------------------------------------------
 with tab5:
-    st.header("👥 Contacts")
+    st.caption(
+        "Manage contacts for local support (drivers, hotel concierge, local office, etc.), staff, partners, and other contacts. "
+        "These can be included in your travel packs."
+    )
 
+    # ---- Session state for company filter ----
     if "selected_company_id" not in st.session_state:
         st.session_state.selected_company_id = None
 
-    # ---- Company filter ----
+    # ---- Company filter (for viewing only) ----
     companies = db.get_all_companies()
     company_options = {name: id for id, name in companies}
     company_names = list(company_options.keys())
@@ -3277,97 +3676,140 @@ with tab5:
         "Filter by Company",
         options=["All Companies"] + company_names,
         index=0,
-        key="contact_filter_company"
+        key="contact_filter_company",
     )
     if selected_company_label == "All Companies":
-        selected_company_id = None
+        filter_company_id = None
     else:
-        selected_company_id = company_options[selected_company_label]
-        st.session_state.selected_company_id = selected_company_id
+        filter_company_id = company_options[selected_company_label]
 
     # ---- Search ----
-    search_term = st.text_input("🔍 Search Contacts", placeholder="Name, role, phone, email, country...", key="contact_search")
+    search_term = st.text_input(
+        "🔍 Search Contacts",
+        placeholder="Name, role, phone, email, country...",
+        key="contact_search",
+    )
 
-    # ---- Tag Filter (Phase 11) ----
-    # Gather all tags from visible contacts
-    all_contacts_for_tags = db.get_contacts(selected_company_id, active_only=True) if selected_company_id else db.get_contacts(active_only=True)
+    # ---- Type filter ----
+    type_options = ["All Types", "Local Support", "Staff", "Partner", "Other"]
+    selected_type = st.selectbox(
+        "Filter by Type", options=type_options, index=0, key="contact_type_filter"
+    )
+
+    # ---- Tag Filter ----
+    all_contacts_for_tags = (
+        db.get_contacts(filter_company_id, active_only=True)
+        if filter_company_id
+        else db.get_contacts(active_only=True)
+    )
     all_tags = set()
     for c in all_contacts_for_tags:
-        if c.get('tags'):
-            for tag in [t.strip() for t in c['tags'].split(',') if t.strip()]:
+        if c.get("tags"):
+            for tag in [t.strip() for t in c["tags"].split(",") if t.strip()]:
                 all_tags.add(tag)
     tag_options = sorted(list(all_tags))
     selected_tags = st.multiselect(
-        "🏷️ Filter by Tags",
-        options=tag_options,
-        key="contact_tag_filter"
+        "🏷️ Filter by Tags", options=tag_options, key="contact_tag_filter"
     )
 
-    # ---- Add Contact Form ----
+    # ---- Add Contact Form (with company dropdown) ----
     with st.expander("➕ Add New Contact", expanded=False):
         with st.form("add_contact_form"):
             col1, col2 = st.columns(2)
             with col1:
+                # Company dropdown (required) – independent of filter
+                if companies:
+                    add_company_label = st.selectbox(
+                        "Company*", options=company_names, key="add_contact_company"
+                    )
+                    add_company_id = company_options[add_company_label]
+                else:
+                    st.warning("No companies available. Please add a company first.")
+                    add_company_id = None
                 add_name = st.text_input("Name*", key="add_contact_name")
                 add_role = st.text_input("Role", key="add_contact_role")
                 add_phone = st.text_input("Phone", key="add_contact_phone")
             with col2:
                 add_email = st.text_input("Email", key="add_contact_email")
                 country_list = sorted([c.name for c in pycountry.countries])
-                add_country = st.selectbox("Country", options=[""] + country_list, key="add_contact_country")
+                add_country = st.selectbox(
+                    "Country", options=[""] + country_list, key="add_contact_country"
+                )
+                add_city = st.text_input("City", key="add_contact_city")
+                add_type = st.selectbox(
+                    "Type",
+                    options=["Local Support", "Staff", "Partner", "Other"],
+                    key="add_contact_type",
+                )
                 add_notes = st.text_area("Notes", key="add_contact_notes")
-                add_tags = st.text_input("Tags (comma-separated)", key="add_contact_tags")
+                add_tags = st.text_input(
+                    "Tags (comma-separated)", key="add_contact_tags"
+                )
 
             submitted = st.form_submit_button("➕ Add Contact")
             if submitted:
                 if not add_name:
                     st.warning("Name is required.")
-                elif selected_company_id is None:
-                    st.warning("Please select a company first.")
+                elif add_company_id is None:
+                    st.warning("Please select a company.")
                 else:
                     # Check duplicates
-                    dupes = db.find_duplicate_contacts(selected_company_id, name=add_name, email=add_email, phone=add_phone)
+                    dupes = db.find_duplicate_contacts(
+                        add_company_id, name=add_name, email=add_email, phone=add_phone
+                    )
                     if dupes:
-                        st.warning("⚠️ A contact with the same name, email, or phone already exists in this company:")
+                        st.warning(
+                            "⚠️ A contact with the same name, email, or phone already exists in this company:"
+                        )
                         for d in dupes:
                             st.write(f"- {d['name']} ({d.get('role','')})")
                         if not st.checkbox("Add anyway?", key="force_add_contact"):
                             st.stop()
                     db.add_contact(
-                        company_id=selected_company_id,
+                        company_id=add_company_id,
                         name=add_name,
                         role=add_role,
                         phone=add_phone,
                         email=add_email,
                         country=add_country,
                         notes=add_notes,
-                        tags=add_tags
+                        tags=add_tags,
+                        type=add_type,
                     )
                     st.success(f"✅ Contact '{add_name}' added!")
                     st.rerun()
 
-    # ---- Fetch contacts ----
-    all_contacts = db.get_contacts(selected_company_id, active_only=True) if selected_company_id else db.get_contacts(active_only=True)
+    # ---- Fetch contacts based on filter ----
+    all_contacts = (
+        db.get_contacts(filter_company_id, active_only=True)
+        if filter_company_id
+        else db.get_contacts(active_only=True)
+    )
 
     # Filter by search term
     if search_term:
         search_lower = search_term.lower()
         all_contacts = [
-            c for c in all_contacts
-            if search_lower in c['name'].lower()
-            or search_lower in (c.get('role') or '').lower()
-            or search_lower in (c.get('phone') or '').lower()
-            or search_lower in (c.get('email') or '').lower()
-            or search_lower in (c.get('country') or '').lower()
+            c
+            for c in all_contacts
+            if search_lower in c["name"].lower()
+            or search_lower in (c.get("role") or "").lower()
+            or search_lower in (c.get("phone") or "").lower()
+            or search_lower in (c.get("email") or "").lower()
+            or search_lower in (c.get("country") or "").lower()
         ]
 
-    # ---- Filter by tags (Phase 11) ----
+    # Filter by type
+    if selected_type != "All Types":
+        all_contacts = [c for c in all_contacts if c.get("type") == selected_type]
+
+    # Filter by tags
     if selected_tags:
         filtered = []
         for c in all_contacts:
-            if not c.get('tags'):
+            if not c.get("tags"):
                 continue
-            contact_tags = [t.strip() for t in c['tags'].split(',') if t.strip()]
+            contact_tags = [t.strip() for t in c["tags"].split(",") if t.strip()]
             if any(tag in contact_tags for tag in selected_tags):
                 filtered.append(c)
         all_contacts = filtered
@@ -3384,67 +3826,114 @@ with tab5:
             if st.button("📥 Export CSV", key="export_contacts_csv"):
                 output = io.StringIO()
                 writer = csv.writer(output)
-                writer.writerow(["Name", "Role", "Phone", "Email", "Country", "Notes", "Tags"])
+                writer.writerow(
+                    [
+                        "Company",
+                        "Name",
+                        "Role",
+                        "Phone",
+                        "Email",
+                        "Country",
+                        "City",
+                        "Type",
+                        "Notes",
+                        "Tags",
+                    ]
+                )
                 for c in all_contacts:
-                    writer.writerow([
-                        c['name'],
-                        c.get('role', ''),
-                        c.get('phone', ''),
-                        c.get('email', ''),
-                        c.get('country', ''),
-                        c.get('notes', ''),
-                        c.get('tags', '')
-                    ])
+                    company_name = (
+                        db.get_company(c["company_id"])["name"]
+                        if c.get("company_id")
+                        else ""
+                    )
+                    writer.writerow(
+                        [
+                            company_name,
+                            c["name"],
+                            c.get("role", ""),
+                            c.get("phone", ""),
+                            c.get("email", ""),
+                            c.get("country", ""),
+                            c.get("city", ""),
+                            c.get("type", "Local Support"),
+                            c.get("notes", ""),
+                            c.get("tags", ""),
+                        ]
+                    )
                 st.download_button(
                     label="⬇️ Download CSV",
-                    data=output.getvalue().encode('utf-8'),
+                    data=output.getvalue().encode("utf-8"),
                     file_name=f"contacts_{datetime.now().strftime('%Y%m%d')}.csv",
                     mime="text/csv",
-                    key="contact_csv_download"
+                    key="contact_csv_download",
                 )
 
         # ---- CSV Import ----
         with col_export2:
-            uploaded_file = st.file_uploader("📤 Import CSV", type=["csv"], key="contact_csv_upload", help="Columns: Name, Role, Phone, Email, Country, Notes, Tags")
+            uploaded_file = st.file_uploader(
+                "📤 Import CSV",
+                type=["csv"],
+                key="contact_csv_upload",
+                help="Columns: Company, Name, Role, Phone, Email, Country, Type, Notes, Tags",
+            )
             if uploaded_file is not None:
                 try:
-                    content = uploaded_file.getvalue().decode('utf-8').splitlines()
+                    content = uploaded_file.getvalue().decode("utf-8").splitlines()
                     reader = csv.DictReader(content)
-                    expected = ["Name", "Role", "Phone", "Email", "Country", "Notes", "Tags"]
+                    expected = [
+                        "Company",
+                        "Name",
+                        "Role",
+                        "Phone",
+                        "Email",
+                        "Country",
+                        "Type",
+                        "Notes",
+                        "Tags",
+                    ]
                     if all(h in reader.fieldnames for h in expected):
                         if st.button("Start Import", key="contact_import_btn"):
-                            if selected_company_id is None:
-                                st.warning("Please select a company first.")
-                            else:
-                                added = 0
-                                skipped = 0
-                                for row in reader:
-                                    name = row.get("Name", "").strip()
-                                    if not name:
-                                        continue
-                                    # Check duplicates
-                                    dupes = db.find_duplicate_contacts(
-                                        selected_company_id,
-                                        name=name,
-                                        email=row.get("Email", "").strip() or None,
-                                        phone=row.get("Phone", "").strip() or None
-                                    )
-                                    if dupes and not st.checkbox(f"Duplicate contact '{name}' – add anyway?", key=f"force_import_{name}"):
-                                        skipped += 1
-                                        continue
-                                    db.add_contact(
-                                        company_id=selected_company_id,
-                                        name=name,
-                                        role=row.get("Role", "").strip() or None,
-                                        phone=row.get("Phone", "").strip() or None,
-                                        email=row.get("Email", "").strip() or None,
-                                        country=row.get("Country", "").strip() or None,
-                                        notes=row.get("Notes", "").strip() or None,
-                                        tags=row.get("Tags", "").strip() or None
-                                    )
-                                    added += 1
-                                st.success(f"✅ Imported {added} contacts. Skipped {skipped} duplicates.")
-                                st.rerun()
+                            added = 0
+                            skipped = 0
+                            for row in reader:
+                                company_name = row.get("Company", "").strip()
+                                if not company_name:
+                                    continue
+                                # Find or create company
+                                company_id = db._find_or_create_company(company_name)
+                                name = row.get("Name", "").strip()
+                                if not name:
+                                    continue
+                                # Check duplicates
+                                dupes = db.find_duplicate_contacts(
+                                    company_id,
+                                    name=name,
+                                    email=row.get("Email", "").strip() or None,
+                                    phone=row.get("Phone", "").strip() or None,
+                                )
+                                if dupes and not st.checkbox(
+                                    f"Duplicate contact '{name}' – add anyway?",
+                                    key=f"force_import_{name}",
+                                ):
+                                    skipped += 1
+                                    continue
+                                db.add_contact(
+                                    company_id=company_id,
+                                    name=name,
+                                    role=row.get("Role", "").strip() or None,
+                                    phone=row.get("Phone", "").strip() or None,
+                                    email=row.get("Email", "").strip() or None,
+                                    country=row.get("Country", "").strip() or None,
+                                    notes=row.get("Notes", "").strip() or None,
+                                    tags=row.get("Tags", "").strip() or None,
+                                    type=row.get("Type", "Local Support").strip()
+                                    or "Local Support",
+                                )
+                                added += 1
+                            st.success(
+                                f"✅ Imported {added} contacts. Skipped {skipped} duplicates."
+                            )
+                            st.rerun()
                     else:
                         st.error(f"CSV must have columns: {', '.join(expected)}")
                 except Exception as e:
@@ -3452,31 +3941,66 @@ with tab5:
 
         # ---- List contacts with Edit/Delete ----
         for contact in all_contacts:
-            cid = contact['id']
-            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
+            cid = contact["id"]
+            # Get company name for display
+            comp_name = (
+                db.get_company(contact["company_id"])["name"]
+                if contact.get("company_id")
+                else "Unknown"
+            )
+            # Type badge color
+            type_colors = {
+                "Local Support": "#e2e8f0",
+                "Staff": "#93c5fd",
+                "Partner": "#fcd34d",
+                "Other": "#d1d5db",
+            }
+            contact_type = contact.get("type", "Local Support")
+            col1, col2, col3, col4, col5, col6 = st.columns(
+                [1.5, 1.5, 1.5, 1.5, 0.8, 0.8]
+            )
             with col1:
                 st.write(f"**{contact['name']}**")
-                if contact.get('role'):
+                if contact.get("role"):
                     st.caption(f"👤 {contact['role']}")
+                # Type badge
+                st.markdown(
+                    f"<span style='background:{type_colors.get(contact_type, '#e2e8f0')};"
+                    f"padding:2px 8px;border-radius:12px;font-size:11px;'>"
+                    f"{contact_type}</span>",
+                    unsafe_allow_html=True,
+                )
             with col2:
-                if contact.get('phone'):
-                    st.write(f"📞 {contact['phone']}")
-                if contact.get('email'):
-                    st.write(f"✉️ {contact['email']}")
+                st.write(f"🏢 {comp_name}")
             with col3:
-                if contact.get('country'):
-                    st.write(f"🌍 {contact['country']}")
-                # ---- Tags as badges (Phase 11) ----
-                if contact.get('tags'):
-                    tags_list = [t.strip() for t in contact['tags'].split(',') if t.strip()]
-                    if tags_list:
-                        # Use HTML spans for badges
-                        badge_html = " ".join([f"<span style='background:#e2e8f0;padding:2px 8px;border-radius:12px;font-size:12px;margin-right:4px;'>{t}</span>" for t in tags_list])
-                        st.markdown(f"<div style='margin-top:4px;'>{badge_html}</div>", unsafe_allow_html=True)
+                if contact.get("phone"):
+                    st.write(f"📞 {contact['phone']}")
+                if contact.get("email"):
+                    st.write(f"✉️ {contact['email']}")
             with col4:
+                if contact.get("country"):
+                    st.write(f"🌍 {contact['country']}")
+                if contact.get('city'):
+                    st.write(f"🏙️ {contact['city']}")
+                if contact.get("tags"):
+                    tags_list = [
+                        t.strip() for t in contact["tags"].split(",") if t.strip()
+                    ]
+                    if tags_list:
+                        badge_html = " ".join(
+                            [
+                                f"<span style='background:#e2e8f0;padding:2px 8px;border-radius:12px;font-size:12px;margin-right:4px;'>{t}</span>"
+                                for t in tags_list
+                            ]
+                        )
+                        st.markdown(
+                            f"<div style='margin-top:4px;'>{badge_html}</div>",
+                            unsafe_allow_html=True,
+                        )
+            with col5:
                 if st.button("✏️", key=f"edit_contact_{cid}"):
                     st.session_state[f"editing_contact_{cid}"] = True
-            with col5:
+            with col6:
                 if st.button("🗑️", key=f"del_contact_{cid}"):
                     st.session_state[f"delete_contact_{cid}"] = True
 
@@ -3484,20 +4008,80 @@ with tab5:
             if st.session_state.get(f"editing_contact_{cid}", False):
                 with st.expander(f"Edit {contact['name']}", expanded=True):
                     with st.form(key=f"edit_contact_form_{cid}"):
-                        edit_name = st.text_input("Name*", value=contact['name'], key=f"edit_name_{cid}")
-                        edit_role = st.text_input("Role", value=contact.get('role', ''), key=f"edit_role_{cid}")
-                        edit_phone = st.text_input("Phone", value=contact.get('phone', ''), key=f"edit_phone_{cid}")
-                        edit_email = st.text_input("Email", value=contact.get('email', ''), key=f"edit_email_{cid}")
+                        # Company dropdown (editable)
+                        edit_company_label = st.selectbox(
+                            "Company*",
+                            options=company_names,
+                            index=(
+                                company_names.index(comp_name)
+                                if comp_name in company_names
+                                else 0
+                            ),
+                            key=f"edit_contact_company_{cid}",
+                        )
+                        edit_company_id = company_options[edit_company_label]
+                        edit_city = st.text_input(
+                            "City",
+                            value=contact.get("city", ""),
+                            key=f"edit_city_{cid}",
+                        )
+                        edit_name = st.text_input(
+                            "Name*", value=contact["name"], key=f"edit_name_{cid}"
+                        )
+                        edit_role = st.text_input(
+                            "Role",
+                            value=contact.get("role", ""),
+                            key=f"edit_role_{cid}",
+                        )
+                        edit_phone = st.text_input(
+                            "Phone",
+                            value=contact.get("phone", ""),
+                            key=f"edit_phone_{cid}",
+                        )
+                        edit_email = st.text_input(
+                            "Email",
+                            value=contact.get("email", ""),
+                            key=f"edit_email_{cid}",
+                        )
                         country_list = sorted([c.name for c in pycountry.countries])
-                        edit_country = st.selectbox("Country", options=[""] + country_list, index=([""] + country_list).index(contact.get('country', '')) if contact.get('country', '') in country_list else 0, key=f"edit_country_{cid}")
-                        edit_notes = st.text_area("Notes", value=contact.get('notes', ''), key=f"edit_notes_{cid}")
-                        edit_tags = st.text_input("Tags", value=contact.get('tags', ''), key=f"edit_tags_{cid}")
-                        edit_active = st.checkbox("Active", value=contact.get('is_active', 1), key=f"edit_active_{cid}")
+                        edit_country = st.selectbox(
+                            "Country",
+                            options=[""] + country_list,
+                            index=(
+                                ([""] + country_list).index(contact.get("country", ""))
+                                if contact.get("country", "") in country_list
+                                else 0
+                            ),
+                            key=f"edit_country_{cid}",
+                        )
+                        edit_type = st.selectbox(
+                            "Type",
+                            options=["Local Support", "Staff", "Partner", "Other"],
+                            index=["Local Support", "Staff", "Partner", "Other"].index(
+                                contact.get("type", "Local Support")
+                            ),
+                            key=f"edit_contact_type_{cid}",
+                        )
+                        edit_notes = st.text_area(
+                            "Notes",
+                            value=contact.get("notes", ""),
+                            key=f"edit_notes_{cid}",
+                        )
+                        edit_tags = st.text_input(
+                            "Tags",
+                            value=contact.get("tags", ""),
+                            key=f"edit_tags_{cid}",
+                        )
+                        edit_active = st.checkbox(
+                            "Active",
+                            value=contact.get("is_active", 1),
+                            key=f"edit_active_{cid}",
+                        )
 
                         col_edit_save, col_edit_cancel = st.columns(2)
                         with col_edit_save:
                             if st.form_submit_button("💾 Save"):
-                                if edit_name:
+                                if edit_name and edit_company_id:
                                     db.update_contact(
                                         cid,
                                         name=edit_name,
@@ -3505,15 +4089,36 @@ with tab5:
                                         phone=edit_phone,
                                         email=edit_email,
                                         country=edit_country,
+                                        city=edit_city,
                                         notes=edit_notes,
                                         tags=edit_tags,
-                                        is_active=edit_active
+                                        is_active=edit_active,
                                     )
+                                    # Update company if changed
+                                    if edit_company_id != contact["company_id"]:
+                                        conn = sqlite3.connect(db.DB_PATH)
+                                        c = conn.cursor()
+                                        c.execute(
+                                            "UPDATE contacts SET company_id = ? WHERE id = ?",
+                                            (edit_company_id, cid),
+                                        )
+                                        conn.commit()
+                                        conn.close()
+                                    # Update type
+                                    if edit_type != contact.get("type"):
+                                        conn = sqlite3.connect(db.DB_PATH)
+                                        c = conn.cursor()
+                                        c.execute(
+                                            "UPDATE contacts SET type = ? WHERE id = ?",
+                                            (edit_type, cid),
+                                        )
+                                        conn.commit()
+                                        conn.close()
                                     st.session_state.pop(f"editing_contact_{cid}", None)
                                     st.success("Contact updated!")
                                     st.rerun()
                                 else:
-                                    st.warning("Name is required.")
+                                    st.warning("Name and Company are required.")
                         with col_edit_cancel:
                             if st.form_submit_button("❌ Cancel"):
                                 st.session_state.pop(f"editing_contact_{cid}", None)
@@ -3536,33 +4141,36 @@ with tab5:
             st.divider()
 
     # ---- Default Contacts section ----
-    if selected_company_id:
-        st.subheader("⭐ Default Contacts for This Company")
-        company = db.get_company(selected_company_id)
+    if filter_company_id:
+        st.subheader("⭐ Default Contacts")
+        company = db.get_company(filter_company_id)
         if company:
-            default_ids = db.get_company_default_contacts(selected_company_id)
-            all_company_contacts = db.get_contacts(selected_company_id, active_only=True)
+            default_ids = db.get_company_default_contacts(filter_company_id)
+            all_company_contacts = db.get_contacts(filter_company_id, active_only=True)
             if all_company_contacts:
-                contact_options = {f"{c['name']} ({c.get('role','')})": c['id'] for c in all_company_contacts}
-                selected_defaults = [f"{c['name']} ({c.get('role','')})" for c in all_company_contacts if c['id'] in default_ids]
+                contact_options = {
+                    f"{c['name']} ({c.get('role','')})": c["id"]
+                    for c in all_company_contacts
+                }
+                selected_defaults = [
+                    f"{c['name']} ({c.get('role','')})"
+                    for c in all_company_contacts
+                    if c["id"] in default_ids
+                ]
                 new_defaults = st.multiselect(
-                    "Select contacts to auto‑include in new trips",
+                    "Select contacts to auto‑include in new trips for this company",
                     options=list(contact_options.keys()),
                     default=selected_defaults,
-                    key="default_contact_selector"
+                    key="default_contact_selector",
                 )
                 if st.button("💾 Save Default Contacts", key="save_default_contacts"):
-                    db.set_company_default_contacts(selected_company_id, [contact_options[opt] for opt in new_defaults])
+                    db.set_company_default_contacts(
+                        filter_company_id,
+                        [contact_options[opt] for opt in new_defaults],
+                    )
                     st.success("Default contacts updated!")
                     st.rerun()
             else:
                 st.caption("No active contacts for this company yet.")
     else:
         st.info("Select a company above to set default contacts.")
-
-# ---- Conflict detection (Phase 4) ----
-# This is already called in utils.detect_conflicts where needed.
-# Ensure that anywhere you call it, you pass exec_tz.
-# For example, if you have a place where conflicts are shown, use:
-# exec_tz = profile.get("timezone", "America/New_York")
-# conflicts = utils.detect_conflicts(items, exec_tz)

@@ -1,7 +1,7 @@
 import io
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils import get_column_letter  # <-- added import
+from openpyxl.utils import get_column_letter
 import database as db
 from datetime import datetime
 
@@ -310,15 +310,18 @@ def export_spending_to_excel(summary_data, base_currency="USD"):
 
 
 def export_company_profile_to_excel(company_id):
-    """Export company profile to Excel with sheets: Company Info, Executives, Contacts, Participants."""
+    """
+    Export company profile to Excel with sheets: Company Info, Executives, Contacts, Delegation.
+    """
     company = db.get_company(company_id)
     if not company:
         return None
     executives = db.get_executives_by_company(company_id)
     contacts = db.get_contacts(company_id, active_only=True)
-    participants = db.get_participants(company_id, active_only=True)
+    delegation = db.get_delegation_members(company_id, active_only=True)
 
     wb = Workbook()
+
     # Sheet 1: Company Info
     ws1 = wb.active
     ws1.title = "Company Info"
@@ -365,9 +368,9 @@ def export_company_profile_to_excel(company_id):
     for col in range(1, len(headers) + 1):
         ws2.column_dimensions[get_column_letter(col)].width = 20
 
-    # Sheet 3: Contacts
+    # Sheet 3: Contacts (with Type)
     ws3 = wb.create_sheet("Contacts")
-    headers = ["Name", "Role", "Phone", "Email", "Country", "Notes", "Tags"]
+    headers = ["Name", "Role", "Phone", "Email", "Country", "Type", "Notes", "Tags"]
     for col_idx, header in enumerate(headers, 1):
         cell = ws3.cell(row=1, column=col_idx, value=header)
         cell.font = Font(bold=True)
@@ -377,22 +380,24 @@ def export_company_profile_to_excel(company_id):
         ws3.cell(row=row_idx, column=3, value=c.get("phone", ""))
         ws3.cell(row=row_idx, column=4, value=c.get("email", ""))
         ws3.cell(row=row_idx, column=5, value=c.get("country", ""))
-        ws3.cell(row=row_idx, column=6, value=c.get("notes", ""))
-        ws3.cell(row=row_idx, column=7, value=c.get("tags", ""))
+        ws3.cell(row=row_idx, column=6, value=c.get("city", ""))
+        ws3.cell(row=row_idx, column=7, value=c.get("type", "Local Support"))
+        ws3.cell(row=row_idx, column=8, value=c.get("notes", ""))
+        ws3.cell(row=row_idx, column=9, value=c.get("tags", ""))
     for col in range(1, len(headers) + 1):
         ws3.column_dimensions[get_column_letter(col)].width = 20
 
-    # Sheet 4: Participants
-    ws4 = wb.create_sheet("Participants")
+    # Sheet 4: Delegation Members (renamed from Participants)
+    ws4 = wb.create_sheet("Delegation")
     headers = ["Name", "Email", "Role", "Phone"]
     for col_idx, header in enumerate(headers, 1):
         cell = ws4.cell(row=1, column=col_idx, value=header)
         cell.font = Font(bold=True)
-    for row_idx, p in enumerate(participants, 2):
-        ws4.cell(row=row_idx, column=1, value=p.get("name", ""))
-        ws4.cell(row=row_idx, column=2, value=p.get("email", ""))
-        ws4.cell(row=row_idx, column=3, value=p.get("role", ""))
-        ws4.cell(row=row_idx, column=4, value=p.get("phone", ""))
+    for row_idx, m in enumerate(delegation, 2):
+        ws4.cell(row=row_idx, column=1, value=m.get("name", ""))
+        ws4.cell(row=row_idx, column=2, value=m.get("email", ""))
+        ws4.cell(row=row_idx, column=3, value=m.get("role", ""))
+        ws4.cell(row=row_idx, column=4, value=m.get("phone", ""))
     for col in range(1, len(headers) + 1):
         ws4.column_dimensions[get_column_letter(col)].width = 20
 

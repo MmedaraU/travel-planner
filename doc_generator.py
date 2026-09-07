@@ -4,6 +4,12 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 import io
 from datetime import datetime
+import json
+import os
+import base64
+from jinja2 import Environment, FileSystemLoader
+import pytz
+import database as db
 
 
 def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
@@ -334,18 +340,8 @@ def generate_all_executive_profiles_doc(profiles):
     file_stream.seek(0)
     return file_stream
 
-# Add at top if missing
-import json
-import os
-import base64
-from jinja2 import Environment, FileSystemLoader
-from datetime import datetime
-import pytz
-import database as db
 
-# ... other imports ...
-
-
+# ---- Travel Pack HTML ----
 def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Executive Home"):
     """
     Generate a self-contained HTML travel pack.
@@ -395,10 +391,10 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Executive Ho
         dt_display = dt_aware.astimezone(display_tz)
         formatted_time = dt_display.strftime("%d-%m-%Y %H:%M %Z")
 
-        # Get participants
-        participant_ids = db.get_item_participants(item["id"])
-        participant_names = (
-            [p["name"] for p in participant_ids] if participant_ids else []
+        # Get delegation members assigned to this item
+        delegation_members = db.get_item_delegation_members(item["id"])
+        delegation_names = (
+            [m["name"] for m in delegation_members] if delegation_members else []
         )
 
         # Create item dict for template
@@ -413,7 +409,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Executive Ho
             "notes": item.get("notes", ""),
             "is_confirmed": item.get("is_confirmed", 0),
             "formatted_time": formatted_time,
-            "participants": participant_names,
+            "participants": delegation_names,  # template expects 'participants' – keep for compatibility
         }
         formatted_items.append(item_dict)
 
@@ -423,7 +419,6 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Executive Ho
             with open(receipt_path, "rb") as f:
                 image_data = f.read()
                 b64 = base64.b64encode(image_data).decode("utf-8")
-                # Determine mime type from extension
                 ext = os.path.splitext(receipt_path)[1].lower()
                 mime = (
                     "image/png"
@@ -457,6 +452,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Executive Ho
     return html
 
 
+# ---- Company Profile HTML ----
 def generate_company_profile_html(company_id):
     """Generate a self‑contained HTML company profile."""
     company = db.get_company(company_id)
@@ -464,12 +460,13 @@ def generate_company_profile_html(company_id):
         return None
     executives = db.get_executives_by_company(company_id)
     contacts = db.get_contacts(company_id, active_only=True)
-    participants = db.get_participants(company_id, active_only=True)
+    delegation = db.get_delegation_members(company_id, active_only=True)
+
     context = {
         "company": company,
         "executives": executives,
         "contacts": contacts,
-        "participants": participants,
+        "participants": delegation,  # template uses 'participants'
         "now": datetime.now(),
     }
     env = Environment(loader=FileSystemLoader("templates"))
@@ -477,6 +474,7 @@ def generate_company_profile_html(company_id):
     return template.render(**context)
 
 
+# ---- Company Profile Word ----
 def generate_company_profile_docx(company_id):
     """Generate a Word document with company profile."""
     company = db.get_company(company_id)
@@ -484,7 +482,7 @@ def generate_company_profile_docx(company_id):
         return None
     executives = db.get_executives_by_company(company_id)
     contacts = db.get_contacts(company_id, active_only=True)
-    participants = db.get_participants(company_id, active_only=True)
+    delegation = db.get_delegation_members(company_id, active_only=True)
 
     doc = Document()
     doc.add_heading(f"Company Profile: {company['name']}", 0)
@@ -519,16 +517,18 @@ def generate_company_profile_docx(company_id):
             p.add_run(f"{c['name']}").bold = True
             if c.get("role"):
                 p.add_run(f" ({c['role']})")
+            if c.get("type"):
+                p.add_run(f" [{c['type']}]")
             p.add_run(
-                f"\n📞 {c.get('phone', '')}  ✉️ {c.get('email', '')}  🌍 {c.get('country', '')}"
+                f"\n📞 {c.get('phone', '')}  ✉️ {c.get('email', '')}  🌍 {c.get('country', '')} {('city', '')}"
             )
             if c.get("tags"):
                 p.add_run(f"\n🏷️ {c['tags']}")
     else:
         doc.add_paragraph("No contacts.")
 
-    doc.add_heading("Participants", level=1)
-    if participants:
+    doc.add_heading("Delegation Members", level=1)
+    if delegation:
         table = doc.add_table(rows=1, cols=4)
         table.style = "Table Grid"
         hdr = table.rows[0].cells
@@ -536,14 +536,14 @@ def generate_company_profile_docx(company_id):
         hdr[1].text = "Email"
         hdr[2].text = "Role"
         hdr[3].text = "Phone"
-        for p in participants:
+        for m in delegation:
             row = table.add_row().cells
-            row[0].text = p.get("name", "")
-            row[1].text = p.get("email", "")
-            row[2].text = p.get("role", "")
-            row[3].text = p.get("phone", "")
+            row[0].text = m.get("name", "")
+            row[1].text = m.get("email", "")
+            row[2].text = m.get("role", "")
+            row[3].text = m.get("phone", "")
     else:
-        doc.add_paragraph("No participants.")
+        doc.add_paragraph("No delegation members.")
 
     doc.add_paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     file_stream = io.BytesIO()
