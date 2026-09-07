@@ -1812,11 +1812,17 @@ with tab2:
 # ------------------------------------------------------------------
 with tab3:
     st.subheader("Filter & View Trips")
+    
+    # ---- Search bar (Phase 8) ----
+    search_trip = st.text_input(
+        "🔍 Search Trips",
+        placeholder="Destination, purpose, or executive name...",
+        key="dash_search"
+    )
+
     col_dash1, col_dash2 = st.columns(2)
     with col_dash1:
-        exec_filter_options = ["All"] + [
-            f"{name} (ID: {id})" for id, name, _ in executives
-        ]
+        exec_filter_options = ["All"] + [f"{name} (ID: {id})" for id, name, _ in executives]
         exec_filter = st.selectbox(
             "Filter by Executive", exec_filter_options, key="dash_filter_tab"
         )
@@ -1835,6 +1841,16 @@ with tab3:
     summary_data = db.get_spending_summary(
         exec_id=exec_id_filter, start_date=start_filter, end_date=end_filter
     )
+
+    # ---- Apply search filter ----
+    if search_trip:
+        search_lower = search_trip.lower()
+        summary_data = [
+            trip for trip in summary_data
+            if search_lower in trip.get("destination", "").lower()
+            or search_lower in trip.get("purpose", "").lower()
+            or search_lower in trip.get("executive_name", "").lower()
+        ]
 
     if "selected_trip_ids" not in st.session_state:
         st.session_state.selected_trip_ids = set()
@@ -2966,11 +2982,22 @@ with tab4:
                     st.warning("Company Name is required.")
 
     # ---- List of companies ----
+    # ---- Search companies (Phase 8) ----
+    search_company = st.text_input(
+        "🔍 Search Companies",
+        placeholder="Company name...",
+        key="company_search"
+    )
+
     companies = db.get_all_companies()
+    if search_company:
+        search_lower = search_company.lower()
+        companies = [(id, name) for id, name in companies if search_lower in name.lower()]
+
     if not companies:
-        st.info("No companies yet. Add one using the expander above.")
+        st.info("No companies found matching your search.")
     else:
-        st.write("**Existing Companies**")
+        st.write(f"**{len(companies)} company(ies) found**")
         for comp_id, comp_name in companies:
             comp = db.get_company(comp_id)
             with st.container():
