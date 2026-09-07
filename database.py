@@ -1,8 +1,14 @@
 import sqlite3
 import os
+import json
 from datetime import date, datetime
 
 DB_PATH = "travel_planner.db"
+
+
+# =========================================================
+# MIGRATION
+# =========================================================
 
 
 def migrate_db():
@@ -26,6 +32,8 @@ def migrate_db():
         c.execute("ALTER TABLE trips ADD COLUMN base_currency TEXT DEFAULT 'USD'")
     if "display_currency" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN display_currency TEXT DEFAULT 'USD'")
+    if "trip_contacts" not in existing_trips:
+        c.execute("ALTER TABLE trips ADD COLUMN trip_contacts TEXT")  # JSON array
 
     # --- Columns for 'itinerary_items' table ---
     c.execute("PRAGMA table_info(itinerary_items)")
@@ -45,6 +53,8 @@ def migrate_db():
         c.execute(
             "ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0"
         )
+    if "timezone" not in existing_items:
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN timezone TEXT")
 
     # --- Columns for 'executives' table ---
     c.execute("PRAGMA table_info(executives)")
@@ -60,7 +70,7 @@ def migrate_db():
         if col_name not in existing_execs:
             c.execute(f"ALTER TABLE executives ADD COLUMN {col_name} {col_type}")
 
-    # --- Add columns to executive_memberships ---
+    # --- Columns for 'executive_memberships' ---
     c.execute("PRAGMA table_info(executive_memberships)")
     existing_membership_cols = [row[1] for row in c.fetchall()]
     new_membership_cols = [
@@ -75,7 +85,7 @@ def migrate_db():
                 f"ALTER TABLE executive_memberships ADD COLUMN {col_name} {col_type}"
             )
 
-    # --- Create executive_passports table ---
+    # --- Create tables if they don't exist ---
     c.execute("""CREATE TABLE IF NOT EXISTS executive_passports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         exec_id INTEGER NOT NULL,
@@ -87,7 +97,6 @@ def migrate_db():
         FOREIGN KEY (exec_id) REFERENCES executives(id) ON DELETE CASCADE
     )""")
 
-    # --- Ensure other tables exist (with all columns) ---
     c.execute("""CREATE TABLE IF NOT EXISTS executive_memberships (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         exec_id INTEGER NOT NULL,
@@ -139,6 +148,57 @@ def migrate_db():
         items_json TEXT
     )""")
 
+    # --- Phase 1 New Tables ---
+    c.execute("""CREATE TABLE IF NOT EXISTS contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        role TEXT,
+        phone TEXT,
+        email TEXT,
+        country TEXT,
+        notes TEXT,
+        is_active INTEGER DEFAULT 1,
+        tags TEXT,
+        FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS company_participants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        company_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        email TEXT,
+        role TEXT,
+        phone TEXT,
+        is_active INTEGER DEFAULT 1,
+        FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS item_participants (
+        item_id INTEGER NOT NULL,
+        participant_id INTEGER NOT NULL,
+        PRIMARY KEY (item_id, participant_id),
+        FOREIGN KEY (item_id) REFERENCES itinerary_items(id) ON DELETE CASCADE,
+        FOREIGN KEY (participant_id) REFERENCES company_participants(id) ON DELETE CASCADE
+    )""")
+
+    # --- Add default_contact_ids to companies if missing ---
+    c.execute("PRAGMA table_info(companies)")
+    existing_company_cols = [row[1] for row in c.fetchall()]
+    if "default_contact_ids" not in existing_company_cols:
+        c.execute("ALTER TABLE companies ADD COLUMN default_contact_ids TEXT")
+
+    # --- Indexes for performance ---
+    c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_country ON contacts(country)")
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_participants_company ON company_participants(company_id)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_item_participants_item ON item_participants(item_id)"
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trip_contacts ON trips(trip_contacts)")
+
     conn.commit()
     conn.close()
 
@@ -152,7 +212,8 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         default_cost_center TEXT,
-        policy_notes TEXT
+        policy_notes TEXT,
+        default_contact_ids TEXT
     )""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS executives (
@@ -187,6 +248,7 @@ def init_db():
         departure_country TEXT,
         base_currency TEXT DEFAULT 'USD',
         display_currency TEXT DEFAULT 'USD',
+        trip_contacts TEXT,
         FOREIGN KEY (exec_id) REFERENCES executives(id)
     )""")
 
@@ -205,6 +267,7 @@ def init_db():
         receipt_path TEXT,
         cost_currency TEXT DEFAULT 'USD',
         exchange_rate_snapshot REAL DEFAULT 1.0,
+        timezone TEXT,
         FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
     )""")
 
@@ -216,6 +279,8 @@ def init_db():
 # =========================================================
 # COMPANY MANAGEMENT
 # =========================================================
+
+
 def add_company(name, default_cost_center=None, policy_notes=None):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -248,21 +313,26 @@ def get_company(company_id):
     return dict(row) if row else None
 
 
-def update_company(company_id, name, default_cost_center=None, policy_notes=None):
+def update_company(
+    company_id,
+    name,
+    default_cost_center=None,
+    policy_notes=None,
+    default_contact_ids=None,
+):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
         """UPDATE companies 
-           SET name = ?, default_cost_center = ?, policy_notes = ? 
+           SET name = ?, default_cost_center = ?, policy_notes = ?, default_contact_ids = ?
            WHERE id = ?""",
-        (name, default_cost_center, policy_notes, company_id),
+        (name, default_cost_center, policy_notes, default_contact_ids, company_id),
     )
     conn.commit()
     conn.close()
 
 
 def delete_company(company_id):
-    # Check if any executive is still using this company
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT COUNT(*) FROM executives WHERE company_id = ?", (company_id,))
@@ -280,8 +350,391 @@ def delete_company(company_id):
 
 
 # =========================================================
-# EXECUTIVE MANAGEMENT
+# CONTACTS (NEW)
 # =========================================================
+
+
+def add_contact(
+    company_id,
+    name,
+    role=None,
+    phone=None,
+    email=None,
+    country=None,
+    notes=None,
+    tags=None,
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO contacts (company_id, name, role, phone, email, country, notes, tags)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (company_id, name, role, phone, email, country, notes, tags),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_contacts(company_id=None, active_only=True):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if company_id is not None:
+        if active_only:
+            c.execute(
+                "SELECT * FROM contacts WHERE company_id = ? AND is_active = 1 ORDER BY name",
+                (company_id,),
+            )
+        else:
+            c.execute(
+                "SELECT * FROM contacts WHERE company_id = ? ORDER BY name",
+                (company_id,),
+            )
+    else:
+        if active_only:
+            c.execute(
+                "SELECT * FROM contacts WHERE is_active = 1 ORDER BY company_id, name"
+            )
+        else:
+            c.execute("SELECT * FROM contacts ORDER BY company_id, name")
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_contact(contact_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_contact(
+    contact_id,
+    name,
+    role=None,
+    phone=None,
+    email=None,
+    country=None,
+    notes=None,
+    tags=None,
+    is_active=None,
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    if name is not None:
+        fields.append("name = ?")
+        params.append(name)
+    if role is not None:
+        fields.append("role = ?")
+        params.append(role)
+    if phone is not None:
+        fields.append("phone = ?")
+        params.append(phone)
+    if email is not None:
+        fields.append("email = ?")
+        params.append(email)
+    if country is not None:
+        fields.append("country = ?")
+        params.append(country)
+    if notes is not None:
+        fields.append("notes = ?")
+        params.append(notes)
+    if tags is not None:
+        fields.append("tags = ?")
+        params.append(tags)
+    if is_active is not None:
+        fields.append("is_active = ?")
+        params.append(1 if is_active else 0)
+    params.append(contact_id)
+    if fields:
+        sql = f"UPDATE contacts SET {', '.join(fields)} WHERE id = ?"
+        c.execute(sql, params)
+        conn.commit()
+    conn.close()
+
+
+def delete_contact(contact_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
+    conn.commit()
+    conn.close()
+
+
+def find_duplicate_contacts(company_id, name=None, email=None, phone=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    query = "SELECT * FROM contacts WHERE company_id = ? AND is_active = 1 AND ("
+    conditions = []
+    params = [company_id]
+    if name:
+        conditions.append("name = ?")
+        params.append(name)
+    if email:
+        conditions.append("email = ?")
+        params.append(email)
+    if phone:
+        conditions.append("phone = ?")
+        params.append(phone)
+    if not conditions:
+        conn.close()
+        return []
+    query += " OR ".join(conditions) + ")"
+    conn.row_factory = sqlite3.Row
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+# =========================================================
+# COMPANY PARTICIPANTS (NEW)
+# =========================================================
+
+
+def add_participant(company_id, name, email=None, role=None, phone=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO company_participants (company_id, name, email, role, phone)
+           VALUES (?, ?, ?, ?, ?)""",
+        (company_id, name, email, role, phone),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_participants(company_id=None, active_only=True):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if company_id is not None:
+        if active_only:
+            c.execute(
+                "SELECT * FROM company_participants WHERE company_id = ? AND is_active = 1 ORDER BY name",
+                (company_id,),
+            )
+        else:
+            c.execute(
+                "SELECT * FROM company_participants WHERE company_id = ? ORDER BY name",
+                (company_id,),
+            )
+    else:
+        if active_only:
+            c.execute(
+                "SELECT * FROM company_participants WHERE is_active = 1 ORDER BY company_id, name"
+            )
+        else:
+            c.execute("SELECT * FROM company_participants ORDER BY company_id, name")
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_participant(participant_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM company_participants WHERE id = ?", (participant_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_participant(
+    participant_id, name=None, email=None, role=None, phone=None, is_active=None
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    if name is not None:
+        fields.append("name = ?")
+        params.append(name)
+    if email is not None:
+        fields.append("email = ?")
+        params.append(email)
+    if role is not None:
+        fields.append("role = ?")
+        params.append(role)
+    if phone is not None:
+        fields.append("phone = ?")
+        params.append(phone)
+    if is_active is not None:
+        fields.append("is_active = ?")
+        params.append(1 if is_active else 0)
+    params.append(participant_id)
+    if fields:
+        sql = f"UPDATE company_participants SET {', '.join(fields)} WHERE id = ?"
+        c.execute(sql, params)
+        conn.commit()
+    conn.close()
+
+
+def delete_participant(participant_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM company_participants WHERE id = ?", (participant_id,))
+    conn.commit()
+    conn.close()
+
+
+def find_duplicate_participants(company_id, name=None, email=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    query = "SELECT * FROM company_participants WHERE company_id = ? AND is_active = 1 AND ("
+    conditions = []
+    params = [company_id]
+    if name:
+        conditions.append("name = ?")
+        params.append(name)
+    if email:
+        conditions.append("email = ?")
+        params.append(email)
+    if not conditions:
+        conn.close()
+        return []
+    query += " OR ".join(conditions) + ")"
+    conn.row_factory = sqlite3.Row
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+# =========================================================
+# ITEM-PARTICIPANT ASSOCIATIONS (NEW)
+# =========================================================
+
+
+def add_item_participant(item_id, participant_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR IGNORE INTO item_participants (item_id, participant_id) VALUES (?, ?)",
+        (item_id, participant_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_item_participant(item_id, participant_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "DELETE FROM item_participants WHERE item_id = ? AND participant_id = ?",
+        (item_id, participant_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_item_participants(item_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT p.* FROM company_participants p
+        JOIN item_participants ip ON p.id = ip.participant_id
+        WHERE ip.item_id = ?
+        ORDER BY p.name
+    """,
+        (item_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def set_item_participants(item_id, participant_ids):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM item_participants WHERE item_id = ?", (item_id,))
+    for pid in participant_ids:
+        c.execute(
+            "INSERT OR IGNORE INTO item_participants (item_id, participant_id) VALUES (?, ?)",
+            (item_id, pid),
+        )
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# TRIP CONTACTS (NEW)
+# =========================================================
+
+
+def get_trip_contacts(trip_id):
+    trip = get_trip(trip_id)
+    if not trip or not trip.get("trip_contacts"):
+        return []
+    try:
+        contact_ids = json.loads(trip["trip_contacts"])
+    except:
+        return []
+    if not contact_ids:
+        return []
+    placeholders = ",".join(["?"] * len(contact_ids))
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        f"SELECT * FROM contacts WHERE id IN ({placeholders}) AND is_active = 1",
+        contact_ids,
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def update_trip_contacts(trip_id, contact_ids):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trips SET trip_contacts = ? WHERE id = ?",
+        (json.dumps(contact_ids), trip_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_company_default_contacts(company_id):
+    comp = get_company(company_id)
+    if not comp or not comp.get("default_contact_ids"):
+        return []
+    try:
+        return json.loads(comp["default_contact_ids"])
+    except:
+        return []
+
+
+def set_company_default_contacts(company_id, contact_ids):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE companies SET default_contact_ids = ? WHERE id = ?",
+        (json.dumps(contact_ids), company_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# EXECUTIVE MANAGEMENT (Existing)
+# =========================================================
+
+
 def add_executive(
     company_id,
     name,
@@ -381,19 +834,20 @@ def get_full_executive_profile(exec_id):
 
 
 def get_all_executive_profiles():
-    """Return a list of full profile dictionaries for all executives."""
     all_execs = get_all_executives()
     profiles = []
     for e_id, name, company in all_execs:
         profile = get_full_executive_profile(e_id)
         if profile:
-            # Add memberships
             mems = get_memberships(e_id)
-            mem_str = "; ".join([f"{m['program_name']}: {m['membership_number']}" for m in mems])
+            mem_str = "; ".join(
+                [f"{m['program_name']}: {m['membership_number']}" for m in mems]
+            )
             profile["Memberships"] = mem_str
             profile["ID"] = e_id
             profiles.append(profile)
     return profiles
+
 
 def update_executive(
     exec_id,
@@ -450,8 +904,10 @@ def update_executive(
 
 
 # =========================================================
-# EXECUTIVE PASSPORTS
+# EXECUTIVE PASSPORTS (Existing)
 # =========================================================
+
+
 def add_passport(
     exec_id, country, passport_number, expiry_date=None, issued_date=None, notes=None
 ):
@@ -490,9 +946,31 @@ def delete_passport(passport_id):
     conn.close()
 
 
+def update_passport(
+    passport_id,
+    country,
+    passport_number,
+    expiry_date=None,
+    issued_date=None,
+    notes=None,
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """UPDATE executive_passports 
+           SET country = ?, passport_number = ?, expiry_date = ?, issued_date = ?, notes = ?
+           WHERE id = ?""",
+        (country, passport_number, expiry_date, issued_date, notes, passport_id),
+    )
+    conn.commit()
+    conn.close()
+
+
 # =========================================================
-# EXECUTIVE MEMBERSHIPS
+# EXECUTIVE MEMBERSHIPS (Existing)
 # =========================================================
+
+
 def add_membership(
     exec_id,
     category,
@@ -568,9 +1046,7 @@ def delete_all_memberships(exec_id):
     conn.commit()
     conn.close()
 
-# =========================================================
-# EXECUTIVE MEMBERSHIPS (extended)
-# =========================================================
+
 def update_membership(
     membership_id,
     category,
@@ -588,30 +1064,26 @@ def update_membership(
            SET category = ?, program_name = ?, membership_number = ?, 
                tier = ?, alliance = ?, airport_code = ?, notes = ?
            WHERE id = ?""",
-        (category, program_name, membership_number, tier, alliance, airport_code, notes, membership_id),
+        (
+            category,
+            program_name,
+            membership_number,
+            tier,
+            alliance,
+            airport_code,
+            notes,
+            membership_id,
+        ),
     )
     conn.commit()
     conn.close()
 
 
 # =========================================================
-# EXECUTIVE PASSPORTS (extended)
+# CATEGORY MANAGEMENT (Existing)
 # =========================================================
-def update_passport(passport_id, country, passport_number, expiry_date=None, issued_date=None, notes=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        """UPDATE executive_passports 
-           SET country = ?, passport_number = ?, expiry_date = ?, issued_date = ?, notes = ?
-           WHERE id = ?""",
-        (country, passport_number, expiry_date, issued_date, notes, passport_id),
-    )
-    conn.commit()
-    conn.close()
-    
-# =========================================================
-# CATEGORY MANAGEMENT
-# =========================================================
+
+
 def add_category(name):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -644,8 +1116,10 @@ def delete_category(category_id):
 
 
 # =========================================================
-# TRIP MANAGEMENT
+# TRIP MANAGEMENT (Updated for trip_contacts and timezone)
 # =========================================================
+
+
 def create_or_get_trip(
     exec_id,
     destination_summary,
@@ -655,6 +1129,7 @@ def create_or_get_trip(
     display_currency="USD",
     base_currency="USD",
     status="draft",
+    trip_contacts=None,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -670,11 +1145,12 @@ def create_or_get_trip(
     if row:
         trip_id = row[0]
     else:
+        contacts_json = json.dumps(trip_contacts) if trip_contacts else None
         c.execute(
             """
             INSERT INTO trips (exec_id, destination, start_date, end_date, purpose, status,
-                               display_currency, base_currency)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                               display_currency, base_currency, trip_contacts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 exec_id,
@@ -685,6 +1161,7 @@ def create_or_get_trip(
                 status,
                 display_currency,
                 base_currency,
+                contacts_json,
             ),
         )
         trip_id = c.lastrowid
@@ -794,7 +1271,6 @@ def delete_trip(trip_id):
 
 
 def delete_trips(trip_ids):
-    """Delete multiple trips by their IDs."""
     if not trip_ids:
         return
     conn = sqlite3.connect(DB_PATH)
@@ -822,8 +1298,8 @@ def duplicate_trip(trip_id, exec_id):
         """
         INSERT INTO trips (exec_id, destination, start_date, end_date, purpose, status,
                            created_at, budget, departure_city, departure_region, departure_country,
-                           base_currency, display_currency)
-        VALUES (?, ?, ?, ?, ?, 'draft', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
+                           base_currency, display_currency, trip_contacts)
+        VALUES (?, ?, ?, ?, ?, 'draft', CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             exec_id,
@@ -837,6 +1313,7 @@ def duplicate_trip(trip_id, exec_id):
             original.get("departure_country", ""),
             original.get("base_currency", "USD"),
             original.get("display_currency", "USD"),
+            original.get("trip_contacts"),
         ),
     )
     new_trip_id = c.lastrowid
@@ -871,14 +1348,17 @@ def duplicate_trip(trip_id, exec_id):
             item.get("is_confirmed", 0),
             item.get("cost_currency", "USD"),
             item.get("exchange_rate_snapshot", 1.0),
+            item.get("timezone"),
         )
 
     return new_trip_id
 
 
 # =========================================================
-# TRIP STOPS
+# TRIP STOPS (Existing)
 # =========================================================
+
+
 def add_trip_stop(
     trip_id, stop_order, city, country, region, start_date, end_date, notes=None
 ):
@@ -946,8 +1426,10 @@ def delete_all_trip_stops(trip_id):
 
 
 # =========================================================
-# ITINERARY ITEMS
+# ITINERARY ITEMS (Updated for timezone)
 # =========================================================
+
+
 def add_itinerary_item(
     trip_id,
     item_type,
@@ -961,6 +1443,7 @@ def add_itinerary_item(
     is_confirmed=0,
     cost_currency="USD",
     exchange_rate_snapshot=1.0,
+    timezone=None,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -968,8 +1451,8 @@ def add_itinerary_item(
         """
         INSERT INTO itinerary_items 
         (trip_id, item_type, description, datetime_start, datetime_end, location,
-         cost, confirmation_code, notes, is_confirmed, cost_currency, exchange_rate_snapshot)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         cost, confirmation_code, notes, is_confirmed, cost_currency, exchange_rate_snapshot, timezone)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             trip_id,
@@ -984,10 +1467,13 @@ def add_itinerary_item(
             is_confirmed,
             cost_currency,
             exchange_rate_snapshot,
+            timezone,
         ),
     )
     conn.commit()
+    new_id = c.lastrowid
     conn.close()
+    return new_id
 
 
 def get_items_for_trip(trip_id):
@@ -1020,6 +1506,7 @@ def update_itinerary_item(
     is_confirmed,
     cost_currency="USD",
     exchange_rate_snapshot=1.0,
+    timezone=None,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1036,7 +1523,8 @@ def update_itinerary_item(
             notes = ?,
             is_confirmed = ?,
             cost_currency = ?,
-            exchange_rate_snapshot = ?
+            exchange_rate_snapshot = ?,
+            timezone = ?
         WHERE id = ?
     """,
         (
@@ -1051,6 +1539,7 @@ def update_itinerary_item(
             is_confirmed,
             cost_currency,
             exchange_rate_snapshot,
+            timezone,
             item_id,
         ),
     )
@@ -1079,6 +1568,8 @@ def update_receipt_path(item_id, file_path):
 # =========================================================
 # BUDGET & SPENDING FUNCTIONS
 # =========================================================
+
+
 def get_trip_spending(trip_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1109,10 +1600,6 @@ def get_trip_spending(trip_id):
 
 
 def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_date=None):
-    """
-    Returns spending summary for trips, with all cost figures converted to the trip's base currency
-    using the exchange_rate_snapshot stored per item.
-    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
@@ -1164,6 +1651,8 @@ def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_dat
 # =========================================================
 # EXECUTIVE DELETION FUNCTIONS
 # =========================================================
+
+
 def get_executive_trip_count(exec_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1227,6 +1716,8 @@ def delete_executive(exec_id, force=False):
 # =========================================================
 # IMPORT / MERGE FUNCTIONS
 # =========================================================
+
+
 def _find_or_create_company(name):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1319,8 +1810,8 @@ def merge_database_data(data):
             INSERT INTO trips 
             (exec_id, destination, start_date, end_date, purpose, status,
              budget, departure_city, departure_region, departure_country,
-             display_currency, base_currency)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             display_currency, base_currency, trip_contacts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 exec_id,
@@ -1335,6 +1826,7 @@ def merge_database_data(data):
                 trip_data.get("departure_country"),
                 trip_data.get("display_currency", "USD"),
                 trip_data.get("base_currency", "USD"),
+                None,  # trip_contacts not imported from JSON
             ),
         )
         trip_id = c.lastrowid
@@ -1368,8 +1860,8 @@ def merge_database_data(data):
                 INSERT INTO itinerary_items 
                 (trip_id, item_type, description, datetime_start, datetime_end,
                  location, cost, cost_currency, is_confirmed, confirmation_code, notes,
-                 exchange_rate_snapshot)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 exchange_rate_snapshot, timezone)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     trip_id,
@@ -1384,6 +1876,7 @@ def merge_database_data(data):
                     item.get("confirmation_code"),
                     item.get("notes"),
                     1.0,
+                    None,
                 ),
             )
             added_items += 1
@@ -1446,8 +1939,10 @@ def import_executives_from_csv(reader):
 
 
 # =========================================================
-# TRIP TEMPLATES
+# TRIP TEMPLATES (Existing)
 # =========================================================
+
+
 def save_trip_as_template(trip_id, template_name, description=None):
     import json
 
@@ -1563,7 +2058,6 @@ def delete_trip_template(template_id):
 def apply_trip_template(
     template_id, exec_id, new_purpose, start_date, end_date, budget=0
 ):
-    """Apply a template to create a new draft trip. Returns the new trip ID."""
     template = get_trip_template(template_id)
     if not template:
         return None
@@ -1623,6 +2117,7 @@ def apply_trip_template(
             0,
             item.get("cost_currency", "USD"),
             1.0,
+            None,
         )
 
     return trip_id
