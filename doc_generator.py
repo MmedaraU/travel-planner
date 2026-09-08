@@ -10,6 +10,7 @@ import base64
 from jinja2 import Environment, FileSystemLoader
 import pytz
 import database as db
+from weasyprint import HTML
 
 
 def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
@@ -551,6 +552,149 @@ def generate_company_profile_docx(company_id):
         doc.add_paragraph("No delegation members.")
 
     doc.add_paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    file_stream = io.BytesIO()
+    doc.save(file_stream)
+    file_stream.seek(0)
+    return file_stream
+
+
+def generate_travel_pack_pdf(trip_id, exec_timezone, display_mode="Executive Home"):
+    """
+    Generate a PDF version of the travel pack using WeasyPrint.
+    Returns a BytesIO stream.
+    """
+    html_str = generate_travel_pack_html(trip_id, exec_timezone, display_mode)
+    if not html_str:
+        return None
+    pdf_bytes = HTML(string=html_str).write_pdf()
+    return io.BytesIO(pdf_bytes)
+
+
+def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Executive Home"):
+    """
+    Generate a Word (.docx) version of the travel pack.
+    """
+    trip = db.get_trip(trip_id)
+    if not trip:
+        return None
+    executive = db.get_executive_profile(trip["exec_id"])
+    stops = db.get_trip_stops(trip_id)
+    items = db.get_items_for_trip(trip_id)
+    contacts = db.get_trip_contacts(trip_id)
+    delegation = db.get_delegation_members(
+        executive["company_id"] if executive else None, active_only=True
+    )
+
+    doc = Document()
+    doc.add_heading(trip.get("purpose", "Travel Pack"), 0)
+
+    # Trip overview
+    doc.add_heading("Trip Overview", level=1)
+    doc.add_paragraph(
+        f"From: {trip.get('departure_city', 'N/A')} {trip.get('departure_region', '')} {trip.get('departure_country', '')}"
+    )
+    doc.add_paragraph(f"Dates: {trip['start_date'][:10]} – {trip['end_date'][:10]}")
+    doc.add_paragraph(
+        f"Budget: {trip.get('budget', 0):.2f} {trip.get('base_currency', 'USD')}"
+    )
+
+    # Delegation
+    doc.add_heading("Delegation", level=1)
+    for member in delegation:
+        p = doc.add_paragraph()
+        p.add_run(f"{member['name']}").bold = True
+        if member.get("role"):
+            p.add_run(f" ({member['role']})")
+        if member.get("email"):
+            p.add_run(f"\nEmail: {member['email']}")
+        if member.get("phone"):
+            p.add_run(f"\nPhone: {member['phone']}")
+
+    # Stops
+    if stops:
+        doc.add_heading("Route", level=1)
+        for stop in stops:
+            loc = stop["city"]
+            if stop.get("country"):
+                loc += f", {stop['country']}"
+            doc.add_paragraph(
+                f"{loc}: {stop['start_date'][:10]} to {stop['end_date'][:10]}",
+                style="List Bullet",
+            )
+
+    # Itinerary (flights, transport, hotels)
+    itinerary_items = [
+        item for item in items if item["item_type"] in ["Flight", "Transport", "Hotel"]
+    ]
+    if itinerary_items:
+        doc.add_heading("Itinerary", level=1)
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        hdr[0].text = "Date/Time"
+        hdr[1].text = "Type"
+        hdr[2].text = "Description"
+        hdr[3].text = "Location"
+        hdr[4].text = "Cost"
+        for item in itinerary_items:
+            row = table.add_row().cells
+            row[0].text = item["datetime_start"][:16]
+            row[1].text = item["item_type"]
+            row[2].text = item["description"]
+            row[3].text = item.get("location", "")
+            row[4].text = (
+                f"{item.get('cost', 0):.2f} {item.get('cost_currency', 'USD')}"
+            )
+
+    # Agenda (meetings, conferences, dinners, site visits)
+    agenda_items = [
+        item
+        for item in items
+        if item["item_type"] in ["Meeting", "Conference", "Dinner", "Site Visit"]
+    ]
+    if agenda_items:
+        doc.add_heading("Agenda", level=1)
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        hdr[0].text = "Date/Time"
+        hdr[1].text = "Type"
+        hdr[2].text = "Description"
+        hdr[3].text = "Location"
+        hdr[4].text = "Attendees"
+        for item in agenda_items:
+            row = table.add_row().cells
+            row[0].text = item["datetime_start"][:16]
+            row[1].text = item["item_type"]
+            row[2].text = item["description"]
+            row[3].text = item.get("location", "")
+            # Get attendees from delegation (if any)
+            attendees = db.get_item_delegation_members(item["id"])
+            attendee_names = ", ".join([a["name"] for a in attendees])
+            row[4].text = attendee_names or "—"
+
+    # Contacts
+    if contacts:
+        doc.add_heading("Local Support", level=1)
+        for c in contacts:
+            p = doc.add_paragraph()
+            p.add_run(c["name"]).bold = True
+            if c.get("role"):
+                p.add_run(f" ({c['role']})")
+            p.add_run(
+                f"\n📞 {c.get('phone', '')}  ✉️ {c.get('email', '')}  🌍 {c.get('country', '')}"
+            )
+
+    # Receipts – embed images if possible
+    for item in items:
+        if item.get("receipt_path") and os.path.exists(item["receipt_path"]):
+            doc.add_heading("Receipts", level=1)
+            try:
+                doc.add_picture(item["receipt_path"], width=Inches(2))
+                doc.add_paragraph(item["description"])
+            except:
+                pass
+
     file_stream = io.BytesIO()
     doc.save(file_stream)
     file_stream.seek(0)

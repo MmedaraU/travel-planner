@@ -3317,37 +3317,53 @@ with tab3:
                                         )
                                         st.rerun()
 
-                            # ---- Travel Pack generation ----
-                            if st.session_state.get(
-                                f"show_travel_pack_modal_{trip_id_modal}", False
-                            ):
-                                st.info("Generate a self-contained HTML Travel Pack.")
+                                                        # ---- Travel Pack generation ----
+                            if st.session_state.get(f"show_travel_pack_modal_{trip_id_modal}", False):
+                                st.info("Generate a self-contained Travel Pack in your preferred format.")
                                 html_content = doc_generator.generate_travel_pack_html(
                                     trip_id_modal, exec_tz_modal, display_mode_modal
                                 )
                                 if html_content:
-                                    col_yes, col_no = st.columns(2)
-                                    with col_yes:
+                                    col_html, col_pdf, col_word = st.columns(3)
+                                    with col_html:
                                         st.download_button(
-                                            label="⬇️ Download HTML",
+                                            label="🌐 HTML",
                                             data=html_content,
                                             file_name=f"TravelPack_{trip_modal_data.get('purpose', 'trip')}.html",
                                             mime="text/html",
-                                            key=f"download_travel_pack_{trip_id_modal}",
+                                            key=f"download_travel_pack_html_{trip_id_modal}"
                                         )
-                                    with col_no:
-                                        if st.button(
-                                            "Close",
-                                            key=f"close_travel_pack_{trip_id_modal}",
-                                        ):
-                                            st.session_state.pop(
-                                                f"show_travel_pack_modal_{trip_id_modal}",
-                                                None,
+                                    with col_pdf:
+                                        pdf_stream = doc_generator.generate_travel_pack_pdf(
+                                            trip_id_modal, exec_tz_modal, display_mode_modal
+                                        )
+                                        if pdf_stream:
+                                            st.download_button(
+                                                label="📄 PDF",
+                                                data=pdf_stream,
+                                                file_name=f"TravelPack_{trip_modal_data.get('purpose', 'trip')}.pdf",
+                                                mime="application/pdf",
+                                                key=f"download_travel_pack_pdf_{trip_id_modal}"
                                             )
-                                            st.rerun()
+                                    with col_word:
+                                        docx_stream = doc_generator.generate_travel_pack_docx(
+                                            trip_id_modal, exec_tz_modal, display_mode_modal
+                                        )
+                                        if docx_stream:
+                                            st.download_button(
+                                                label="📄 Word",
+                                                data=docx_stream,
+                                                file_name=f"TravelPack_{trip_modal_data.get('purpose', 'trip')}.docx",
+                                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml",
+                                                key=f"download_travel_pack_docx_{trip_id_modal}"
+                                            )
+                                    if st.button("Close", key=f"close_travel_pack_{trip_id_modal}"):
+                                        st.session_state.pop(f"show_travel_pack_modal_{trip_id_modal}", None)
+                                        st.rerun()
                                 else:
                                     st.error("Failed to generate travel pack.")
 
+                                    
                             # ---- Delete confirmation ----
                             if st.session_state.get(
                                 f"confirm_del_modal_{trip_id_modal}", False
