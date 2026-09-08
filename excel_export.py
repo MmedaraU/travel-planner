@@ -73,7 +73,7 @@ def export_profile_to_excel(exec_id, currency_symbol="$"):
     else:
         ws.append(["No memberships recorded."])
 
-    # Auto-fit columns – fixed
+    # Auto-fit columns
     for col in ws.columns:
         max_length = 0
         col_letter = get_column_letter(col[0].column)
@@ -95,6 +95,7 @@ def export_profile_to_excel(exec_id, currency_symbol="$"):
 def export_itinerary_to_excel(items, trip_data, currency_symbol, base_currency="USD"):
     """
     Export itinerary items to an Excel file.
+    Includes contacts column.
     """
     wb = Workbook()
     ws = wb.active
@@ -103,7 +104,7 @@ def export_itinerary_to_excel(items, trip_data, currency_symbol, base_currency="
     # Title
     ws["A1"] = f"Itinerary: {trip_data.get('purpose', 'Trip')}"
     ws["A1"].font = Font(size=14, bold=True)
-    ws.merge_cells("A1:F1")
+    ws.merge_cells("A1:G1")
 
     # Headers
     headers = [
@@ -111,6 +112,7 @@ def export_itinerary_to_excel(items, trip_data, currency_symbol, base_currency="
         "Type",
         "Description",
         "Location",
+        "Contacts",
         "Cost (Original)",
         "Confirmed",
     ]
@@ -125,18 +127,21 @@ def export_itinerary_to_excel(items, trip_data, currency_symbol, base_currency="
             else None
         )
         date_str = start_dt.strftime("%Y-%m-%d %H:%M") if start_dt else ""
+        contacts = db.get_item_contacts(item["id"])
+        contact_str = ", ".join([c["name"] for c in contacts]) if contacts else ""
         ws.append(
             [
                 date_str,
                 item.get("item_type", ""),
                 item.get("description", ""),
                 item.get("location", ""),
+                contact_str,
                 f"{item.get('cost', 0):.2f} {item.get('cost_currency', 'USD')}",
                 "Yes" if item.get("is_confirmed", 0) else "No",
             ]
         )
 
-    # Auto-fit columns – fixed
+    # Auto-fit columns
     for col in ws.columns:
         max_length = 0
         col_letter = get_column_letter(col[0].column)
@@ -158,7 +163,7 @@ def export_itinerary_to_excel(items, trip_data, currency_symbol, base_currency="
 def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="USD"):
     """
     Export expense report to Excel.
-    Similar to itinerary but with summary.
+    Includes contacts column.
     """
     wb = Workbook()
     ws = wb.active
@@ -167,7 +172,7 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
     # Title
     ws["A1"] = f"Expense Report: {trip_data.get('purpose', 'Trip')}"
     ws["A1"].font = Font(size=14, bold=True)
-    ws.merge_cells("A1:G1")
+    ws.merge_cells("A1:H1")
 
     # Summary
     total_spent = sum(item.get("cost", 0) for item in items)
@@ -195,6 +200,7 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
         "Type",
         "Description",
         "Location",
+        "Contacts",
         "Cost (Original)",
         "Confirmed",
     ]
@@ -209,18 +215,21 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
             else None
         )
         date_str = start_dt.strftime("%Y-%m-%d %H:%M") if start_dt else ""
+        contacts = db.get_item_contacts(item["id"])
+        contact_str = ", ".join([c["name"] for c in contacts]) if contacts else ""
         ws.append(
             [
                 date_str,
                 item.get("item_type", ""),
                 item.get("description", ""),
                 item.get("location", ""),
+                contact_str,
                 f"{item.get('cost', 0):.2f} {item.get('cost_currency', 'USD')}",
                 "Yes" if item.get("is_confirmed", 0) else "No",
             ]
         )
 
-    # Auto-fit columns – fixed
+    # Auto-fit columns
     for col in ws.columns:
         max_length = 0
         col_letter = get_column_letter(col[0].column)
@@ -242,20 +251,15 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
 def export_spending_to_excel(summary_data, base_currency="USD"):
     """
     Export spending summary to Excel.
-    Columns: Executive, Company, Destination, Budget, Total Spent, Confirmed, Estimated, Status, Currency.
-    Amounts are numeric without symbols; the Currency column indicates the trip's base currency.
-    Headers indicate amounts are in base currency.
     """
     wb = Workbook()
     ws = wb.active
     ws.title = "Spending Summary"
 
-    # Title
     ws["A1"] = "Spending Summary"
     ws["A1"].font = Font(size=14, bold=True)
     ws.merge_cells("A1:I1")
 
-    # Headers
     headers = [
         "Executive",
         "Company",
@@ -274,7 +278,6 @@ def export_spending_to_excel(summary_data, base_currency="USD"):
     def safe_float(value):
         return float(value) if value is not None else 0.0
 
-    # Data rows
     for trip in summary_data:
         ws.append(
             [
@@ -290,7 +293,6 @@ def export_spending_to_excel(summary_data, base_currency="USD"):
             ]
         )
 
-    # Auto-fit columns – fixed
     for col in ws.columns:
         max_length = 0
         col_letter = get_column_letter(col[0].column)
@@ -311,7 +313,8 @@ def export_spending_to_excel(summary_data, base_currency="USD"):
 
 def export_company_profile_to_excel(company_id):
     """
-    Export company profile to Excel with sheets: Company Info, Executives, Contacts, Delegation.
+    Export company profile with sheets: Company Info, Executives, Contacts, Delegation.
+    Contacts include city and type.
     """
     company = db.get_company(company_id)
     if not company:
@@ -368,9 +371,19 @@ def export_company_profile_to_excel(company_id):
     for col in range(1, len(headers) + 1):
         ws2.column_dimensions[get_column_letter(col)].width = 20
 
-    # Sheet 3: Contacts (with Type)
+    # Sheet 3: Contacts (with city and type)
     ws3 = wb.create_sheet("Contacts")
-    headers = ["Name", "Role", "Phone", "Email", "Country", "Type", "Notes", "Tags"]
+    headers = [
+        "Name",
+        "Role",
+        "Phone",
+        "Email",
+        "Country",
+        "City",
+        "Type",
+        "Notes",
+        "Tags",
+    ]
     for col_idx, header in enumerate(headers, 1):
         cell = ws3.cell(row=1, column=col_idx, value=header)
         cell.font = Font(bold=True)
@@ -387,7 +400,7 @@ def export_company_profile_to_excel(company_id):
     for col in range(1, len(headers) + 1):
         ws3.column_dimensions[get_column_letter(col)].width = 20
 
-    # Sheet 4: Delegation Members (renamed from Participants)
+    # Sheet 4: Delegation
     ws4 = wb.create_sheet("Delegation")
     headers = ["Name", "Email", "Role", "Phone"]
     for col_idx, header in enumerate(headers, 1):
