@@ -1153,14 +1153,15 @@ tab_names = [
     "📋 All Trips",
     "🏢 Companies",
     "👥 Contacts",
-    "🏢 Venues",       # <-- NEW
+    "🏢 Venues",
+    "📚 Library",       # <-- NEW
 ]
 default_tab = st.session_state.get("active_tab", "✈️ Trip Planner")
 default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
 if "active_tab" in st.session_state:
     del st.session_state["active_tab"]
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(tab_names)
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(tab_names)
 
 
 # ------------------------------------------------------------------
@@ -4857,3 +4858,724 @@ with tab6:
                         st.session_state.pop(f"confirm_del_venue_{vid}", None)
                         st.rerun()
             st.divider()
+
+
+# ------------------------------------------------------------------
+# TAB 7: LIBRARY (Reusable Content)
+# ------------------------------------------------------------------
+with tab7:
+    st.header("📚 Travel Library")
+    st.caption(
+        "Reusable content that powers trip briefings: destination guides, visa rules, "
+        "and reusable checklists and packing templates."
+    )
+
+    lib_tab1, lib_tab2, lib_tab3, lib_tab4 = st.tabs(
+        [
+            "🌍 Destination Guides",
+            "🛂 Visa Rules",
+            "✅ Checklist Templates",
+            "🎒 Packing Templates",
+        ]
+    )
+
+    # ==============================================================
+    # SUB-TAB 1: Destination Guides
+    # ==============================================================
+    with lib_tab1:
+        st.subheader("🌍 Destination Guides")
+        st.caption(
+            "One guide per country – culture, phrases, emergency numbers, packing, connectivity."
+        )
+
+        # ---- Add new guide ----
+        with st.expander("➕ Add New Destination Guide", expanded=False):
+            with st.form("add_destination_guide_form"):
+                country_list = sorted([c.name for c in pycountry.countries])
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    dg_country = st.selectbox(
+                        "Country*", options=country_list, key="dg_country"
+                    )
+                    dg_language = st.text_input("Primary Language", key="dg_language")
+                with col2:
+                    dg_currency = st.text_input(
+                        "Local Currency", key="dg_currency", placeholder="e.g., JPY"
+                    )
+                    dg_apps = st.text_input(
+                        "Recommended Apps (comma-separated)", key="dg_apps"
+                    )
+                with col3:
+                    dg_police = st.text_input("Police Number", key="dg_police")
+                    dg_ambulance = st.text_input("Ambulance Number", key="dg_ambulance")
+                    dg_fire = st.text_input("Fire Number", key="dg_fire")
+
+                dg_etiquette = st.text_area(
+                    "Etiquette Notes (one per line)", key="dg_etiquette", height=100
+                )
+                dg_phrases = st.text_area(
+                    "Common Phrases (one per line, e.g., 'Hello – Konnichiwa')",
+                    key="dg_phrases",
+                    height=100,
+                )
+                dg_packing = st.text_area(
+                    "Packing Tips (seasonal or climate)", key="dg_packing", height=100
+                )
+                dg_connectivity = st.text_area(
+                    "Connectivity Notes (SIM / eSIM / WiFi)",
+                    key="dg_connectivity",
+                    height=80,
+                )
+                dg_notes = st.text_area("Additional Note", key="dg_notes", height=80)
+
+                if st.form_submit_button("➕ Add Guide"):
+                    if not dg_country:
+                        st.warning("Country is required.")
+                    elif db.get_destination_guide_by_country(dg_country):
+                        st.error(f"A guide for {dg_country} already exists.")
+                    else:
+                        db.add_destination_guide(
+                            country=dg_country,
+                            language=dg_language or None,
+                            currency=dg_currency or None,
+                            emergency_police=dg_police or None,
+                            emergency_ambulance=dg_ambulance or None,
+                            emergency_fire=dg_fire or None,
+                            etiquette_notes=dg_etiquette or None,
+                            phrases=dg_phrases or None,
+                            packing_tips=dg_packing or None,
+                            connectivity_notes=dg_connectivity or None,
+                            recommended_apps=dg_apps or None,
+                            notes=dg_notes or None,
+                        )
+                        st.success(f"✅ Guide for '{dg_country}' added!")
+                        st.rerun()
+
+        # ---- List guides ----
+        guides = db.get_destination_guides(active_only=False)
+        if not guides:
+            st.info("No destination guides yet.")
+        else:
+            st.write(f"**{len(guides)} guide(s)**")
+            for g in guides:
+                gid = g["id"]
+                col1, col2, col3 = st.columns([3, 2, 1.5])
+                with col1:
+                    st.write(f"**{g['country']}**")
+                    if g.get("language"):
+                        st.caption(
+                            f"🗣️ {g['language']} · 💰 {g.get('currency') or '—'}"
+                        )
+                with col2:
+                    if g.get("emergency_police") or g.get("emergency_ambulance"):
+                        st.caption(
+                            f"🚨 Police: {g.get('emergency_police') or '—'} · "
+                            f"Ambulance: {g.get('emergency_ambulance') or '—'}"
+                        )
+                    if g.get("recommended_apps"):
+                        st.caption(f"📱 {g['recommended_apps']}")
+                with col3:
+                    if st.button("✏️", key=f"edit_dg_{gid}"):
+                        st.session_state[f"editing_dg_{gid}"] = True
+
+                if not g.get("is_active", 1):
+                    st.caption("⚠️ Inactive")
+
+                # ---- Edit form ----
+                if st.session_state.get(f"editing_dg_{gid}", False):
+                    with st.expander(f"Edit Guide: {g['country']}", expanded=True):
+                        with st.form(key=f"edit_dg_form_{gid}"):
+                            country_list = sorted([c.name for c in pycountry.countries])
+                            e_country = st.selectbox(
+                                "Country*",
+                                options=country_list,
+                                index=(
+                                    country_list.index(g["country"])
+                                    if g["country"] in country_list
+                                    else 0
+                                ),
+                                key=f"e_dg_country_{gid}",
+                            )
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                e_language = st.text_input(
+                                    "Language",
+                                    value=g.get("language") or "",
+                                    key=f"e_dg_lang_{gid}",
+                                )
+                                e_police = st.text_input(
+                                    "Police",
+                                    value=g.get("emergency_police") or "",
+                                    key=f"e_dg_pol_{gid}",
+                                )
+                            with col2:
+                                e_currency = st.text_input(
+                                    "Currency",
+                                    value=g.get("currency") or "",
+                                    key=f"e_dg_cur_{gid}",
+                                )
+                                e_ambulance = st.text_input(
+                                    "Ambulance",
+                                    value=g.get("emergency_ambulance") or "",
+                                    key=f"e_dg_amb_{gid}",
+                                )
+                            with col3:
+                                e_apps = st.text_input(
+                                    "Recommended Apps",
+                                    value=g.get("recommended_apps") or "",
+                                    key=f"e_dg_apps_{gid}",
+                                )
+                                e_fire = st.text_input(
+                                    "Fire",
+                                    value=g.get("emergency_fire") or "",
+                                    key=f"e_dg_fire_{gid}",
+                                )
+
+                            e_etiquette = st.text_area(
+                                "Etiquette Notes",
+                                value=g.get("etiquette_notes") or "",
+                                key=f"e_dg_etiq_{gid}",
+                                height=100,
+                            )
+                            e_phrases = st.text_area(
+                                "Common Phrases",
+                                value=g.get("phrases") or "",
+                                key=f"e_dg_phr_{gid}",
+                                height=100,
+                            )
+                            e_packing = st.text_area(
+                                "Packing Tips",
+                                value=g.get("packing_tips") or "",
+                                key=f"e_dg_pack_{gid}",
+                                height=100,
+                            )
+                            e_conn = st.text_area(
+                                "Connectivity Notes",
+                                value=g.get("connectivity_notes") or "",
+                                key=f"e_dg_conn_{gid}",
+                                height=80,
+                            )
+                            e_notes = st.text_area(
+                                "Note",
+                                value=g.get("notes") or "",
+                                key=f"e_dg_notes_{gid}",
+                                height=80,
+                            )
+                            e_active = st.checkbox(
+                                "Active",
+                                value=bool(g.get("is_active", 1)),
+                                key=f"e_dg_act_{gid}",
+                            )
+
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                if st.form_submit_button("💾 Save"):
+                                    db.update_destination_guide(
+                                        gid,
+                                        country=e_country,
+                                        language=e_language,
+                                        currency=e_currency,
+                                        emergency_police=e_police,
+                                        emergency_ambulance=e_ambulance,
+                                        emergency_fire=e_fire,
+                                        etiquette_notes=e_etiquette,
+                                        phrases=e_phrases,
+                                        packing_tips=e_packing,
+                                        connectivity_notes=e_conn,
+                                        recommended_apps=e_apps,
+                                        notes=e_notes,
+                                        is_active=1 if e_active else 0,
+                                    )
+                                    st.session_state.pop(f"editing_dg_{gid}", None)
+                                    st.success("Guide updated!")
+                                    st.rerun()
+                            with c2:
+                                if st.form_submit_button("🗑️ Delete"):
+                                    st.session_state[f"confirm_del_dg_{gid}"] = True
+                            with c3:
+                                if st.form_submit_button("❌ Cancel"):
+                                    st.session_state.pop(f"editing_dg_{gid}", None)
+                                    st.rerun()
+
+                if st.session_state.get(f"confirm_del_dg_{gid}", False):
+                    st.warning(f"⚠️ Permanently delete guide for '{g['country']}'?")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ Yes, Delete", key=f"confirm_del_dg_yes_{gid}"):
+                            db.delete_destination_guide(gid)
+                            st.session_state.pop(f"confirm_del_dg_{gid}", None)
+                            st.session_state.pop(f"editing_dg_{gid}", None)
+                            st.success("Guide deleted.")
+                            st.rerun()
+                    with c2:
+                        if st.button("❌ Cancel", key=f"confirm_del_dg_no_{gid}"):
+                            st.session_state.pop(f"confirm_del_dg_{gid}", None)
+                            st.rerun()
+                st.divider()
+
+    # ==============================================================
+    # SUB-TAB 2: Visa Rules
+    # ==============================================================
+    with lib_tab2:
+        st.subheader("🛂 Visa Rules")
+        st.caption(
+            "One rule per passport nationality + destination country combination."
+        )
+
+        with st.expander("➕ Add New Visa Rule", expanded=False):
+            with st.form("add_visa_rule_form"):
+                country_list = sorted([c.name for c in pycountry.countries])
+                col1, col2 = st.columns(2)
+                with col1:
+                    vr_passport = st.selectbox(
+                        "Passport Nationality*", options=country_list, key="vr_passport"
+                    )
+                    vr_max_stay = st.number_input(
+                        "Max Stay (days)", min_value=0, value=0, key="vr_max_stay"
+                    )
+                with col2:
+                    vr_dest = st.selectbox(
+                        "Destination Country*", options=country_list, key="vr_dest"
+                    )
+                    vr_processing = st.text_input(
+                        "Processing Time",
+                        key="vr_processing",
+                        placeholder="e.g., 5-7 working days",
+                    )
+                vr_required = st.checkbox(
+                    "Visa Required", value=True, key="vr_required"
+                )
+                vr_fee = st.text_input(
+                    "Fee", key="vr_fee", placeholder="e.g., Free / ¥3000"
+                )
+                vr_notes = st.text_area(
+                    "Notes (documents, sponsor letters, etc.)",
+                    key="vr_notes",
+                    height=100,
+                )
+
+                if st.form_submit_button("➕ Add Visa Rule"):
+                    if not vr_passport or not vr_dest:
+                        st.warning("Passport nationality and destination are required.")
+                    elif db.get_visa_rule_for_pair(vr_passport, vr_dest):
+                        st.error(
+                            f"A rule for {vr_passport} → {vr_dest} already exists."
+                        )
+                    else:
+                        db.add_visa_rule(
+                            passport_nationality=vr_passport,
+                            destination_country=vr_dest,
+                            visa_required=1 if vr_required else 0,
+                            max_stay_days=vr_max_stay or None,
+                            processing_time=vr_processing or None,
+                            fee=vr_fee or None,
+                            notes=vr_notes or None,
+                        )
+                        st.success("✅ Visa rule added!")
+                        st.rerun()
+
+        rules = db.get_visa_rules(active_only=False)
+        if not rules:
+            st.info("No visa rules yet.")
+        else:
+            st.write(f"**{len(rules)} rule(s)**")
+            for r in rules:
+                rid = r["id"]
+                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                with col1:
+                    st.write(
+                        f"**{r['passport_nationality']}** → **{r['destination_country']}**"
+                    )
+                with col2:
+                    st.write(
+                        "✅ Visa Required"
+                        if r["visa_required"]
+                        else "❌ Visa Not Required"
+                    )
+                with col3:
+                    parts = []
+                    if r.get("max_stay_days"):
+                        parts.append(f"Max stay: {r['max_stay_days']} days")
+                    if r.get("processing_time"):
+                        parts.append(f"Processing: {r['processing_time']}")
+                    if r.get("fee"):
+                        parts.append(f"Fee: {r['fee']}")
+                    st.caption(" · ".join(parts) if parts else "—")
+                with col4:
+                    if st.button("✏️", key=f"edit_vr_{rid}"):
+                        st.session_state[f"editing_vr_{rid}"] = True
+
+                if not r.get("is_active", 1):
+                    st.caption("⚠️ Inactive")
+
+                if st.session_state.get(f"editing_vr_{rid}", False):
+                    with st.expander(
+                        f"Edit Rule: {r['passport_nationality']} → {r['destination_country']}",
+                        expanded=True,
+                    ):
+                        with st.form(key=f"edit_vr_form_{rid}"):
+                            country_list = sorted([c.name for c in pycountry.countries])
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                e_passport = st.selectbox(
+                                    "Passport Nationality",
+                                    options=country_list,
+                                    index=(
+                                        country_list.index(r["passport_nationality"])
+                                        if r["passport_nationality"] in country_list
+                                        else 0
+                                    ),
+                                    key=f"e_vr_pass_{rid}",
+                                )
+                                e_max_stay = st.number_input(
+                                    "Max Stay (days)",
+                                    min_value=0,
+                                    value=int(r.get("max_stay_days") or 0),
+                                    key=f"e_vr_ms_{rid}",
+                                )
+                            with col2:
+                                e_dest = st.selectbox(
+                                    "Destination Country",
+                                    options=country_list,
+                                    index=(
+                                        country_list.index(r["destination_country"])
+                                        if r["destination_country"] in country_list
+                                        else 0
+                                    ),
+                                    key=f"e_vr_dest_{rid}",
+                                )
+                                e_processing = st.text_input(
+                                    "Processing Time",
+                                    value=r.get("processing_time") or "",
+                                    key=f"e_vr_proc_{rid}",
+                                )
+                            e_required = st.checkbox(
+                                "Visa Required",
+                                value=bool(r["visa_required"]),
+                                key=f"e_vr_req_{rid}",
+                            )
+                            e_fee = st.text_input(
+                                "Fee", value=r.get("fee") or "", key=f"e_vr_fee_{rid}"
+                            )
+                            e_notes = st.text_area(
+                                "Notes",
+                                value=r.get("notes") or "",
+                                key=f"e_vr_notes_{rid}",
+                                height=100,
+                            )
+                            e_active = st.checkbox(
+                                "Active",
+                                value=bool(r.get("is_active", 1)),
+                                key=f"e_vr_act_{rid}",
+                            )
+
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                if st.form_submit_button("💾 Save"):
+                                    db.update_visa_rule(
+                                        rid,
+                                        passport_nationality=e_passport,
+                                        destination_country=e_dest,
+                                        visa_required=1 if e_required else 0,
+                                        max_stay_days=e_max_stay or None,
+                                        processing_time=e_processing or None,
+                                        fee=e_fee or None,
+                                        notes=e_notes or None,
+                                        is_active=1 if e_active else 0,
+                                    )
+                                    st.session_state.pop(f"editing_vr_{rid}", None)
+                                    st.success("Visa rule updated!")
+                                    st.rerun()
+                            with c2:
+                                if st.form_submit_button("🗑️ Delete"):
+                                    st.session_state[f"confirm_del_vr_{rid}"] = True
+                            with c3:
+                                if st.form_submit_button("❌ Cancel"):
+                                    st.session_state.pop(f"editing_vr_{rid}", None)
+                                    st.rerun()
+
+                if st.session_state.get(f"confirm_del_vr_{rid}", False):
+                    st.warning("⚠️ Permanently delete this visa rule?")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ Yes, Delete", key=f"confirm_del_vr_yes_{rid}"):
+                            db.delete_visa_rule(rid)
+                            st.session_state.pop(f"confirm_del_vr_{rid}", None)
+                            st.session_state.pop(f"editing_vr_{rid}", None)
+                            st.success("Visa rule deleted.")
+                            st.rerun()
+                    with c2:
+                        if st.button("❌ Cancel", key=f"confirm_del_vr_no_{rid}"):
+                            st.session_state.pop(f"confirm_del_vr_{rid}", None)
+                            st.rerun()
+                st.divider()
+
+    # ==============================================================
+    # SUB-TAB 3: Checklist Templates
+    # ==============================================================
+    with lib_tab3:
+        st.subheader("✅ Checklist Templates")
+        st.caption(
+            "Reusable task lists for pre-departure, arrival, or general trip preparation."
+        )
+
+        with st.expander("➕ Add New Checklist Template", expanded=False):
+            with st.form("add_checklist_tpl_form"):
+                ct_name = st.text_input("Template Name*", key="ct_name")
+                ct_desc = st.text_input("Description (optional)", key="ct_desc")
+                ct_items = st.text_area(
+                    "Items (one per line)*",
+                    key="ct_items",
+                    height=150,
+                    placeholder="Confirm passport validity\nBook flights\nArrange visa\nPrint hotel confirmations",
+                )
+                if st.form_submit_button("➕ Add Template"):
+                    if not ct_name or not ct_items.strip():
+                        st.warning("Name and at least one item are required.")
+                    else:
+                        items_list = [
+                            line.strip()
+                            for line in ct_items.splitlines()
+                            if line.strip()
+                        ]
+                        db.add_checklist_template(
+                            name=ct_name,
+                            description=ct_desc or None,
+                            items_json=json.dumps(items_list),
+                        )
+                        st.success(f"✅ Checklist template '{ct_name}' added!")
+                        st.rerun()
+
+        templates = db.get_checklist_templates(active_only=False)
+        if not templates:
+            st.info("No checklist templates yet.")
+        else:
+            st.write(f"**{len(templates)} template(s)**")
+            for t in templates:
+                tid = t["id"]
+                try:
+                    items_list = json.loads(t.get("items_json") or "[]")
+                except Exception:
+                    items_list = []
+
+                col1, col2, col3 = st.columns([3, 2, 1])
+                with col1:
+                    st.write(f"**{t['name']}**")
+                    if t.get("description"):
+                        st.caption(t["description"])
+                with col2:
+                    st.caption(f"📋 {len(items_list)} item(s)")
+                with col3:
+                    if st.button("✏️", key=f"edit_ct_{tid}"):
+                        st.session_state[f"editing_ct_{tid}"] = True
+
+                if st.session_state.get(f"editing_ct_{tid}", False):
+                    with st.expander(f"Edit Template: {t['name']}", expanded=True):
+                        with st.form(key=f"edit_ct_form_{tid}"):
+                            e_name = st.text_input(
+                                "Name*", value=t["name"], key=f"e_ct_name_{tid}"
+                            )
+                            e_desc = st.text_input(
+                                "Description",
+                                value=t.get("description") or "",
+                                key=f"e_ct_desc_{tid}",
+                            )
+                            e_items = st.text_area(
+                                "Items (one per line)",
+                                value="\n".join(items_list),
+                                height=200,
+                                key=f"e_ct_items_{tid}",
+                            )
+                            e_active = st.checkbox(
+                                "Active",
+                                value=bool(t.get("is_active", 1)),
+                                key=f"e_ct_act_{tid}",
+                            )
+
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                if st.form_submit_button("💾 Save"):
+                                    new_items = [
+                                        line.strip()
+                                        for line in e_items.splitlines()
+                                        if line.strip()
+                                    ]
+                                    db.update_checklist_template(
+                                        tid,
+                                        name=e_name,
+                                        description=e_desc or None,
+                                        items_json=json.dumps(new_items),
+                                        is_active=1 if e_active else 0,
+                                    )
+                                    st.session_state.pop(f"editing_ct_{tid}", None)
+                                    st.success("Template updated!")
+                                    st.rerun()
+                            with c2:
+                                if st.form_submit_button("🗑️ Delete"):
+                                    st.session_state[f"confirm_del_ct_{tid}"] = True
+                            with c3:
+                                if st.form_submit_button("❌ Cancel"):
+                                    st.session_state.pop(f"editing_ct_{tid}", None)
+                                    st.rerun()
+
+                if st.session_state.get(f"confirm_del_ct_{tid}", False):
+                    st.warning("⚠️ Permanently delete this checklist template?")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ Yes, Delete", key=f"confirm_del_ct_yes_{tid}"):
+                            db.delete_checklist_template(tid)
+                            st.session_state.pop(f"confirm_del_ct_{tid}", None)
+                            st.session_state.pop(f"editing_ct_{tid}", None)
+                            st.success("Checklist template deleted.")
+                            st.rerun()
+                    with c2:
+                        if st.button("❌ Cancel", key=f"confirm_del_ct_no_{tid}"):
+                            st.session_state.pop(f"confirm_del_ct_{tid}", None)
+                            st.rerun()
+                st.divider()
+
+    # ==============================================================
+    # SUB-TAB 4: Packing Templates
+    # ==============================================================
+    with lib_tab4:
+        st.subheader("🎒 Packing Templates")
+        st.caption(
+            "Reusable packing lists by trip type. Items are grouped by category."
+        )
+
+        PACKING_CATEGORIES = [
+            "Documents & Badges",
+            "Devices & Chargers",
+            "Clothing",
+            "Formalwear",
+            "Presentation Materials",
+            "Toiletries",
+            "Personal",
+            "Other",
+        ]
+
+        with st.expander("➕ Add New Packing Template", expanded=False):
+            with st.form("add_packing_tpl_form"):
+                pt_name = st.text_input(
+                    "Template Name*",
+                    key="pt_name",
+                    placeholder="e.g., Conference Trip (5 days)",
+                )
+                pt_cat = st.selectbox(
+                    "Category", options=PACKING_CATEGORIES, key="pt_cat"
+                )
+                pt_items = st.text_area(
+                    "Items (one per line)*",
+                    key="pt_items",
+                    height=150,
+                    placeholder="Laptop + charger\nPhone + adapter\nBusiness suits (Days 2-4)\nPassport",
+                )
+                if st.form_submit_button("➕ Add Template"):
+                    if not pt_name or not pt_items.strip():
+                        st.warning("Name and at least one item are required.")
+                    else:
+                        items_list = [
+                            line.strip()
+                            for line in pt_items.splitlines()
+                            if line.strip()
+                        ]
+                        db.add_packing_template(
+                            name=pt_name,
+                            category=pt_cat,
+                            items_json=json.dumps(items_list),
+                        )
+                        st.success(f"✅ Packing template '{pt_name}' added!")
+                        st.rerun()
+
+        pack_templates = db.get_packing_templates(active_only=False)
+        if not pack_templates:
+            st.info("No packing templates yet.")
+        else:
+            st.write(f"**{len(pack_templates)} template(s)**")
+            for t in pack_templates:
+                tid = t["id"]
+                try:
+                    items_list = json.loads(t.get("items_json") or "[]")
+                except Exception:
+                    items_list = []
+
+                col1, col2, col3 = st.columns([3, 2, 1])
+                with col1:
+                    st.write(f"**{t['name']}**")
+                    if t.get("category"):
+                        st.caption(f"📁 {t['category']}")
+                with col2:
+                    st.caption(f"📦 {len(items_list)} item(s)")
+                with col3:
+                    if st.button("✏️", key=f"edit_pt_{tid}"):
+                        st.session_state[f"editing_pt_{tid}"] = True
+
+                if st.session_state.get(f"editing_pt_{tid}", False):
+                    with st.expander(f"Edit Template: {t['name']}", expanded=True):
+                        with st.form(key=f"edit_pt_form_{tid}"):
+                            e_name = st.text_input(
+                                "Name*", value=t["name"], key=f"e_pt_name_{tid}"
+                            )
+                            e_cat = st.selectbox(
+                                "Category",
+                                options=PACKING_CATEGORIES,
+                                index=(
+                                    PACKING_CATEGORIES.index(t["category"])
+                                    if t.get("category") in PACKING_CATEGORIES
+                                    else 0
+                                ),
+                                key=f"e_pt_cat_{tid}",
+                            )
+                            e_items = st.text_area(
+                                "Items (one per line)",
+                                value="\n".join(items_list),
+                                height=200,
+                                key=f"e_pt_items_{tid}",
+                            )
+                            e_active = st.checkbox(
+                                "Active",
+                                value=bool(t.get("is_active", 1)),
+                                key=f"e_pt_act_{tid}",
+                            )
+
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                if st.form_submit_button("💾 Save"):
+                                    new_items = [
+                                        line.strip()
+                                        for line in e_items.splitlines()
+                                        if line.strip()
+                                    ]
+                                    db.update_packing_template(
+                                        tid,
+                                        name=e_name,
+                                        category=e_cat,
+                                        items_json=json.dumps(new_items),
+                                        is_active=1 if e_active else 0,
+                                    )
+                                    st.session_state.pop(f"editing_pt_{tid}", None)
+                                    st.success("Packing template updated!")
+                                    st.rerun()
+                            with c2:
+                                if st.form_submit_button("🗑️ Delete"):
+                                    st.session_state[f"confirm_del_pt_{tid}"] = True
+                            with c3:
+                                if st.form_submit_button("❌ Cancel"):
+                                    st.session_state.pop(f"editing_pt_{tid}", None)
+                                    st.rerun()
+
+                if st.session_state.get(f"confirm_del_pt_{tid}", False):
+                    st.warning("⚠️ Permanently delete this packing template?")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ Yes, Delete", key=f"confirm_del_pt_yes_{tid}"):
+                            db.delete_packing_template(tid)
+                            st.session_state.pop(f"confirm_del_pt_{tid}", None)
+                            st.session_state.pop(f"editing_pt_{tid}", None)
+                            st.success("Packing template deleted.")
+                            st.rerun()
+                    with c2:
+                        if st.button("❌ Cancel", key=f"confirm_del_pt_no_{tid}"):
+                            st.session_state.pop(f"confirm_del_pt_{tid}", None)
+                            st.rerun()
+                st.divider()

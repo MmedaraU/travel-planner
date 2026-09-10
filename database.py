@@ -359,6 +359,69 @@ def migrate_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_venues_country ON venues(country)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_items_venue ON itinerary_items(venue_id)")
 
+    # =========================================================
+    # PHASE 2 – Reusable Content Infrastructure
+    # =========================================================
+
+    # --- Destination Guides (one per country) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS destination_guides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        country TEXT NOT NULL,
+        language TEXT,
+        currency TEXT,
+        emergency_police TEXT,
+        emergency_ambulance TEXT,
+        emergency_fire TEXT,
+        etiquette_notes TEXT,
+        phrases TEXT,
+        packing_tips TEXT,
+        connectivity_notes TEXT,
+        recommended_apps TEXT,
+        notes TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_dest_country ON destination_guides(country)"
+    )
+
+    # --- Visa Rules (one per passport+destination pair) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS visa_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        passport_nationality TEXT NOT NULL,
+        destination_country TEXT NOT NULL,
+        visa_required INTEGER DEFAULT 1,
+        max_stay_days INTEGER,
+        processing_time TEXT,
+        fee TEXT,
+        notes TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_visa_pair ON visa_rules(passport_nationality, destination_country)"
+    )
+
+    # --- Checklist Templates ---
+    c.execute("""CREATE TABLE IF NOT EXISTS checklist_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        items_json TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+
+    # --- Packing Templates ---
+    c.execute("""CREATE TABLE IF NOT EXISTS packing_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        category TEXT,
+        items_json TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+
 def init_db():
     """Create all tables if they don't exist, then run migrations."""
     conn = sqlite3.connect(DB_PATH)
@@ -2591,3 +2654,347 @@ def find_duplicate_venues(name=None, address=None):
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+# =========================================================
+# DESTINATION GUIDES
+# =========================================================
+
+
+def add_destination_guide(
+    country,
+    language=None,
+    currency=None,
+    emergency_police=None,
+    emergency_ambulance=None,
+    emergency_fire=None,
+    etiquette_notes=None,
+    phrases=None,
+    packing_tips=None,
+    connectivity_notes=None,
+    recommended_apps=None,
+    notes=None,
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO destination_guides
+                 (country, language, currency, emergency_police, emergency_ambulance,
+                  emergency_fire, etiquette_notes, phrases, packing_tips,
+                  connectivity_notes, recommended_apps, notes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            country,
+            language,
+            currency,
+            emergency_police,
+            emergency_ambulance,
+            emergency_fire,
+            etiquette_notes,
+            phrases,
+            packing_tips,
+            connectivity_notes,
+            recommended_apps,
+            notes,
+        ),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_destination_guides(active_only=True):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    q = "SELECT * FROM destination_guides"
+    if active_only:
+        q += " WHERE is_active = 1"
+    q += " ORDER BY country"
+    c.execute(q)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_destination_guide(guide_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM destination_guides WHERE id = ?", (guide_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_destination_guide_by_country(country):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        "SELECT * FROM destination_guides WHERE country = ? AND is_active = 1",
+        (country,),
+    )
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_destination_guide(guide_id, **kwargs):
+    if not kwargs:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    for k, v in kwargs.items():
+        fields.append(f"{k} = ?")
+        params.append(v)
+    params.append(guide_id)
+    c.execute(f"UPDATE destination_guides SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def delete_destination_guide(guide_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM destination_guides WHERE id = ?", (guide_id,))
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# VISA RULES
+# =========================================================
+
+
+def add_visa_rule(
+    passport_nationality,
+    destination_country,
+    visa_required=1,
+    max_stay_days=None,
+    processing_time=None,
+    fee=None,
+    notes=None,
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO visa_rules
+                 (passport_nationality, destination_country, visa_required,
+                  max_stay_days, processing_time, fee, notes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            passport_nationality,
+            destination_country,
+            visa_required,
+            max_stay_days,
+            processing_time,
+            fee,
+            notes,
+        ),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_visa_rules(active_only=True):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    q = "SELECT * FROM visa_rules"
+    if active_only:
+        q += " WHERE is_active = 1"
+    q += " ORDER BY passport_nationality, destination_country"
+    c.execute(q)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_visa_rule(rule_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM visa_rules WHERE id = ?", (rule_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_visa_rule_for_pair(passport_nationality, destination_country):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT * FROM visa_rules
+                 WHERE passport_nationality = ? AND destination_country = ? AND is_active = 1""",
+        (passport_nationality, destination_country),
+    )
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_visa_rule(rule_id, **kwargs):
+    if not kwargs:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    for k, v in kwargs.items():
+        fields.append(f"{k} = ?")
+        params.append(v)
+    params.append(rule_id)
+    c.execute(f"UPDATE visa_rules SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def delete_visa_rule(rule_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM visa_rules WHERE id = ?", (rule_id,))
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# CHECKLIST TEMPLATES
+# =========================================================
+
+
+def add_checklist_template(name, description=None, items_json="[]"):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO checklist_templates (name, description, items_json)
+                 VALUES (?, ?, ?)""",
+        (name, description, items_json),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_checklist_templates(active_only=True):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    q = "SELECT * FROM checklist_templates"
+    if active_only:
+        q += " WHERE is_active = 1"
+    q += " ORDER BY name"
+    c.execute(q)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_checklist_template(template_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM checklist_templates WHERE id = ?", (template_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_checklist_template(template_id, **kwargs):
+    if not kwargs:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    for k, v in kwargs.items():
+        fields.append(f"{k} = ?")
+        params.append(v)
+    params.append(template_id)
+    c.execute(
+        f"UPDATE checklist_templates SET {', '.join(fields)} WHERE id = ?", params
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_checklist_template(template_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM checklist_templates WHERE id = ?", (template_id,))
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# PACKING TEMPLATES
+# =========================================================
+
+
+def add_packing_template(name, category=None, items_json="[]"):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO packing_templates (name, category, items_json)
+                 VALUES (?, ?, ?)""",
+        (name, category, items_json),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_packing_templates(active_only=True):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    q = "SELECT * FROM packing_templates"
+    if active_only:
+        q += " WHERE is_active = 1"
+    q += " ORDER BY name"
+    c.execute(q)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_packing_template(template_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM packing_templates WHERE id = ?", (template_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_packing_template(template_id, **kwargs):
+    if not kwargs:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    for k, v in kwargs.items():
+        fields.append(f"{k} = ?")
+        params.append(v)
+    params.append(template_id)
+    c.execute(f"UPDATE packing_templates SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def delete_packing_template(template_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM packing_templates WHERE id = ?", (template_id,))
+    conn.commit()
+    conn.close()
