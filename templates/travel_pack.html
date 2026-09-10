@@ -555,6 +555,69 @@
     </div>
     {% endif %}
 
+    <!-- Packing Lists (per traveler) -->
+    {% if packing_lists %}
+    <div class="card">
+      <h2>🎒 Packing Lists</h2>
+      {% for pl in packing_lists %}
+      <div class="venue-block">
+        <h3 style="margin-bottom: 6px;">
+          {{ pl.member_name }}
+          <span class="text-muted" style="font-weight: normal; font-size: 0.9rem;">
+            ({{ pl.packed_count }} of {{ pl.total_count }} packed)
+          </span>
+        </h3>
+        {% if pl.items %}
+        {% set ns = namespace(current_cat=None) %}
+        {% for it in pl.items %}
+        {% if it.category and it.category != ns.current_cat %}
+        {% set ns.current_cat = it.category %}
+        <div style="margin-top: 12px; font-weight: 600; color: #475569;">{{ it.category }}</div>
+        {% endif %}
+        <div style="padding: 2px 0 2px 16px;">
+          {% if it.packed %}
+          <span style="color:#94a3b8;">☑ <s>{{ it.item_name }}</s></span>
+          {% else %}
+          <span>☐ {{ it.item_name }}</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Trip Checklists -->
+    {% if trip_checklists %}
+    <div class="card">
+      <h2>✅ Checklists</h2>
+      {% for cl in trip_checklists %}
+      <div class="venue-block">
+        <h3 style="margin-bottom: 6px;">
+          {{ cl.name }}
+          <span class="text-muted" style="font-weight: normal; font-size: 0.9rem;">
+            ({{ cl.done_count }} of {{ cl.total_count }} done)
+          </span>
+        </h3>
+        {% if cl.description %}
+        <div class="text-muted" style="margin-bottom: 8px;">{{ cl.description }}</div>
+        {% endif %}
+        {% for it in cl.items %}
+        <div style="padding: 2px 0 2px 16px;">
+          {% if it.is_done %}
+          <span style="color:#16a34a;">☑ <s>{{ it.item_text }}</s></span>
+          {% else %}
+          <span>☐ {{ it.item_text }}</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+
     <!-- ============================================================
          RECEIPTS
          ============================================================ -->

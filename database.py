@@ -551,6 +551,62 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_expenses_trip ON expenses(trip_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_expenses_member ON expenses(member_id)")
 
+
+    # =========================================================
+    # PHASE 4 – Packing Lists & Trip Checklists
+    # =========================================================
+
+    # --- Packing Lists (one per trip + member) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS packing_lists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trip_id INTEGER NOT NULL,
+        member_id INTEGER NOT NULL,
+        template_id INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(trip_id, member_id),
+        FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES delegation_members(id) ON DELETE CASCADE,
+        FOREIGN KEY (template_id) REFERENCES packing_templates(id) ON DELETE SET NULL
+    )""")
+
+    # --- Packing Items ---
+    c.execute("""CREATE TABLE IF NOT EXISTS packing_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        list_id INTEGER NOT NULL,
+        category TEXT,
+        item_name TEXT NOT NULL,
+        packed INTEGER DEFAULT 0,
+        sort_order INTEGER DEFAULT 0,
+        FOREIGN KEY (list_id) REFERENCES packing_lists(id) ON DELETE CASCADE
+    )""")
+
+    # --- Trip Checklists (one per trip + template, or ad-hoc) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS trip_checklists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trip_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        template_id INTEGER,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+        FOREIGN KEY (template_id) REFERENCES checklist_templates(id) ON DELETE SET NULL
+    )""")
+
+    # --- Trip Checklist Items ---
+    c.execute("""CREATE TABLE IF NOT EXISTS trip_checklist_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        checklist_id INTEGER NOT NULL,
+        item_text TEXT NOT NULL,
+        is_done INTEGER DEFAULT 0,
+        sort_order INTEGER DEFAULT 0,
+        FOREIGN KEY (checklist_id) REFERENCES trip_checklists(id) ON DELETE CASCADE
+    )""")
+
+    c.execute("CREATE INDEX IF NOT EXISTS idx_packing_lists_trip ON packing_lists(trip_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_packing_items_list ON packing_items(list_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trip_checklists_trip ON trip_checklists(trip_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_trip_checklist_items ON trip_checklist_items(checklist_id)")
+
 # =========================================================
 # COMPANY MANAGEMENT
 # =========================================================
@@ -2447,6 +2503,10 @@ def export_all_data():
         "executive_passports",
         "item_delegation",
         "item_contacts",
+        "packing_lists",
+        "packing_items",
+        "trip_checklists",
+        "trip_checklist_items",
     ]
     data = {}
     for table in tables:
@@ -3252,4 +3312,285 @@ def get_trip_delegation_members(trip_id):
     conn.close()
     return [dict(row) for row in rows]
 
-    
+
+# =========================================================
+# PACKING LISTS
+# =========================================================
+
+
+def create_packing_list(trip_id, member_id, template_id=None):
+    """Create a packing list for a trip member. Returns list_id (existing if already present)."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT id FROM packing_lists WHERE trip_id = ? AND member_id = ?",
+        (trip_id, member_id),
+    )
+    row = c.fetchone()
+    if row:
+        conn.close()
+        return row[0]
+    c.execute(
+        """INSERT INTO packing_lists (trip_id, member_id, template_id)
+                 VALUES (?, ?, ?)""",
+        (trip_id, member_id, template_id),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_packing_list(trip_id, member_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT * FROM packing_lists
+                 WHERE trip_id = ? AND member_id = ?""",
+        (trip_id, member_id),
+    )
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_packing_lists_for_trip(trip_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""SELECT * FROM packing_lists WHERE trip_id = ?""", (trip_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def delete_packing_list(list_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM packing_lists WHERE id = ?", (list_id,))
+    conn.commit()
+    conn.close()
+
+
+def add_packing_item(list_id, item_name, category=None, sort_order=0):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO packing_items (list_id, category, item_name, sort_order)
+                 VALUES (?, ?, ?, ?)""",
+        (list_id, category, item_name, sort_order),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_packing_items(list_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT * FROM packing_items
+                 WHERE list_id = ?
+                 ORDER BY sort_order ASC, id ASC""",
+        (list_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def toggle_packing_item(item_id, packed):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE packing_items SET packed = ? WHERE id = ?",
+        (1 if packed else 0, item_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_packing_item(item_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM packing_items WHERE id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+
+
+def apply_packing_template(trip_id, member_id, template_id):
+    """
+    Apply a packing template to a member's packing list.
+    Creates the list if needed, then adds items from the template.
+    Existing items with the same name are skipped.
+    """
+    tpl = get_packing_template(template_id)
+    if not tpl:
+        return 0
+    list_id = create_packing_list(trip_id, member_id, template_id)
+    try:
+        items_to_add = json.loads(tpl.get("items_json") or "[]")
+    except Exception:
+        items_to_add = []
+
+    existing = {item["item_name"].lower() for item in get_packing_items(list_id)}
+
+    added = 0
+    for i, name in enumerate(items_to_add):
+        if name.lower() in existing:
+            continue
+        add_packing_item(
+            list_id,
+            item_name=name,
+            category=tpl.get("category"),
+            sort_order=i,
+        )
+        added += 1
+    return added
+
+
+# =========================================================
+# TRIP CHECKLISTS
+# =========================================================
+
+
+def create_trip_checklist(trip_id, name, description=None, template_id=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO trip_checklists (trip_id, name, description, template_id)
+                 VALUES (?, ?, ?, ?)""",
+        (trip_id, name, description, template_id),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_trip_checklists(trip_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT * FROM trip_checklists
+                 WHERE trip_id = ?
+                 ORDER BY created_at ASC""",
+        (trip_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_trip_checklist(checklist_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM trip_checklists WHERE id = ?", (checklist_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_trip_checklist(checklist_id, name=None, description=None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    if name is not None:
+        fields.append("name = ?")
+        params.append(name)
+    if description is not None:
+        fields.append("description = ?")
+        params.append(description)
+    if not fields:
+        conn.close()
+        return
+    params.append(checklist_id)
+    c.execute(f"UPDATE trip_checklists SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def delete_trip_checklist(checklist_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM trip_checklists WHERE id = ?", (checklist_id,))
+    conn.commit()
+    conn.close()
+
+
+def add_checklist_item(checklist_id, item_text, sort_order=0):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO trip_checklist_items
+                 (checklist_id, item_text, sort_order)
+                 VALUES (?, ?, ?)""",
+        (checklist_id, item_text, sort_order),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_checklist_items(checklist_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT * FROM trip_checklist_items
+                 WHERE checklist_id = ?
+                 ORDER BY sort_order ASC, id ASC""",
+        (checklist_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def toggle_checklist_item(item_id, is_done):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trip_checklist_items SET is_done = ? WHERE id = ?",
+        (1 if is_done else 0, item_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_checklist_item(item_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM trip_checklist_items WHERE id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+
+
+def apply_checklist_template(trip_id, template_id):
+    """
+    Create a new trip checklist from a template and seed it with items.
+    Returns the new checklist_id.
+    """
+    tpl = get_checklist_template(template_id)
+    if not tpl:
+        return None
+    checklist_id = create_trip_checklist(
+        trip_id,
+        name=tpl["name"],
+        description=tpl.get("description"),
+        template_id=template_id,
+    )
+    try:
+        items = json.loads(tpl.get("items_json") or "[]")
+    except Exception:
+        items = []
+    for i, text in enumerate(items):
+        add_checklist_item(checklist_id, text, sort_order=i)
+    return checklist_id

@@ -3628,6 +3628,316 @@ with tab3:
                                 else:
                                     st.caption("No expenses recorded yet.")
 
+                            # =========================================================
+                            # PACKING LISTS (per traveler)
+                            # =========================================================
+                            st.write("**🎒 Packing Lists**")
+                            trip_members_for_packing = db.get_trip_delegation_members(
+                                trip_id_modal
+                            )
+                            if not trip_members_for_packing:
+                                st.caption(
+                                    "No delegation members assigned to items on this trip yet."
+                                )
+                            else:
+                                # ---- Apply template from library ----
+                                with st.expander(
+                                    "⚙️ Apply Packing Template to All Travelers",
+                                    expanded=False,
+                                ):
+                                    packing_tpls = db.get_packing_templates(
+                                        active_only=True
+                                    )
+                                    if packing_tpls:
+                                        tpl_labels = {
+                                            f"{t['name']}"
+                                            + (
+                                                f" ({t['category']})"
+                                                if t.get("category")
+                                                else ""
+                                            ): t["id"]
+                                            for t in packing_tpls
+                                        }
+                                        selected_tpl_label = st.selectbox(
+                                            "Select Packing Template",
+                                            options=list(tpl_labels.keys()),
+                                            key=f"packing_tpl_apply_{trip_id_modal}",
+                                        )
+                                        if not is_locked:
+                                            if st.button(
+                                                "Apply to All Travelers",
+                                                key=f"apply_packing_all_{trip_id_modal}",
+                                            ):
+                                                tpl_id = tpl_labels[selected_tpl_label]
+                                                total_added = 0
+                                                for member in trip_members_for_packing:
+                                                    added = db.apply_packing_template(
+                                                        trip_id_modal,
+                                                        member["id"],
+                                                        tpl_id,
+                                                    )
+                                                    total_added += added
+                                                st.success(
+                                                    f"Added {total_added} item(s) across all travelers."
+                                                )
+                                                st.rerun()
+                                    else:
+                                        st.caption(
+                                            "No packing templates available. Create one in the Library tab."
+                                        )
+
+                                # ---- Per-traveler packing list ----
+                                for member in trip_members_for_packing:
+                                    # Get or create list
+                                    plist = db.get_packing_list(
+                                        trip_id_modal, member["id"]
+                                    )
+                                    if not plist:
+                                        if not is_locked:
+                                            if st.button(
+                                                f"➕ Create packing list for {member['name']}",
+                                                key=f"create_packing_{trip_id_modal}_{member['id']}",
+                                            ):
+                                                db.create_packing_list(
+                                                    trip_id_modal, member["id"]
+                                                )
+                                                st.rerun()
+                                        else:
+                                            st.caption(
+                                                f"No packing list for {member['name']}."
+                                            )
+                                        continue
+
+                                    list_id = plist["id"]
+                                    items = db.get_packing_items(list_id)
+                                    total = len(items)
+                                    packed = sum(1 for it in items if it["packed"])
+
+                                    with st.expander(
+                                        f"🎒 {member['name']} ({packed} of {total} packed)",
+                                        expanded=False,
+                                    ):
+                                        # Progress bar
+                                        progress_val = packed / total if total else 0
+                                        st.progress(progress_val)
+
+                                        # Group by category
+                                        categories = {}
+                                        for it in items:
+                                            cat = it.get("category") or "Other"
+                                            categories.setdefault(cat, []).append(it)
+
+                                        for cat_name, cat_items in categories.items():
+                                            st.caption(f"**{cat_name}**")
+                                            for it in cat_items:
+                                                col_cb, col_name, col_del = st.columns(
+                                                    [0.5, 6, 1]
+                                                )
+                                                with col_cb:
+                                                    checked = st.checkbox(
+                                                        "",
+                                                        value=bool(it["packed"]),
+                                                        key=f"pack_chk_{trip_id_modal}_{list_id}_{it['id']}",
+                                                        disabled=is_locked,
+                                                    )
+                                                    if (
+                                                        checked != bool(it["packed"])
+                                                        and not is_locked
+                                                    ):
+                                                        db.toggle_packing_item(
+                                                            it["id"], checked
+                                                        )
+                                                        st.rerun()
+                                                with col_name:
+                                                    if it["packed"]:
+                                                        st.markdown(
+                                                            f"~~{it['item_name']}~~"
+                                                        )
+                                                    else:
+                                                        st.write(it["item_name"])
+                                                with col_del:
+                                                    if not is_locked:
+                                                        if st.button(
+                                                            "🗑️",
+                                                            key=f"pack_del_{trip_id_modal}_{list_id}_{it['id']}",
+                                                        ):
+                                                            db.delete_packing_item(
+                                                                it["id"]
+                                                            )
+                                                            st.rerun()
+
+                                        # ---- Add item ----
+                                        if not is_locked:
+                                            with st.form(
+                                                key=f"add_packing_item_{trip_id_modal}_{list_id}"
+                                            ):
+                                                col_a, col_b = st.columns([3, 2])
+                                                with col_a:
+                                                    new_pi_name = st.text_input(
+                                                        "Add item",
+                                                        key=f"new_pi_name_{trip_id_modal}_{list_id}",
+                                                    )
+                                                with col_b:
+                                                    new_pi_cat = st.selectbox(
+                                                        "Category",
+                                                        options=[
+                                                            "Documents & Badges",
+                                                            "Devices & Chargers",
+                                                            "Clothing",
+                                                            "Formalwear",
+                                                            "Presentation Materials",
+                                                            "Toiletries",
+                                                            "Personal",
+                                                            "Other",
+                                                        ],
+                                                        key=f"new_pi_cat_{trip_id_modal}_{list_id}",
+                                                    )
+                                                if st.form_submit_button("➕ Add Item"):
+                                                    if new_pi_name:
+                                                        db.add_packing_item(
+                                                            list_id,
+                                                            new_pi_name,
+                                                            category=new_pi_cat,
+                                                        )
+                                                        st.rerun()
+                                                    else:
+                                                        st.warning(
+                                                            "Item name required."
+                                                        )
+
+                                        # ---- Delete list ----
+                                        if not is_locked:
+                                            if st.button(
+                                                "🗑️ Delete Entire List",
+                                                key=f"pack_del_list_{trip_id_modal}_{list_id}",
+                                            ):
+                                                db.delete_packing_list(list_id)
+                                                st.rerun()
+
+                            # =========================================================
+                            # TRIP CHECKLISTS
+                            # =========================================================
+                            st.write("**✅ Trip Checklists**")
+                            trip_checklists = db.get_trip_checklists(trip_id_modal)
+
+                            # ---- Apply template ----
+                            with st.expander(
+                                "⚙️ Apply Checklist Template", expanded=False
+                            ):
+                                cl_tpls = db.get_checklist_templates(active_only=True)
+                                if cl_tpls:
+                                    cl_tpl_labels = {
+                                        t["name"]: t["id"] for t in cl_tpls
+                                    }
+                                    selected_cl_tpl = st.selectbox(
+                                        "Select Checklist Template",
+                                        options=list(cl_tpl_labels.keys()),
+                                        key=f"cl_tpl_apply_{trip_id_modal}",
+                                    )
+                                    if not is_locked:
+                                        if st.button(
+                                            "Apply Template",
+                                            key=f"apply_cl_tpl_{trip_id_modal}",
+                                        ):
+                                            new_cl_id = db.apply_checklist_template(
+                                                trip_id_modal,
+                                                cl_tpl_labels[selected_cl_tpl],
+                                            )
+                                            if new_cl_id:
+                                                st.success("Checklist added.")
+                                                st.rerun()
+                                else:
+                                    st.caption(
+                                        "No checklist templates available. Create one in the Library tab."
+                                    )
+
+                            # ---- List checklists ----
+                            if trip_checklists:
+                                for cl in trip_checklists:
+                                    cl_id = cl["id"]
+                                    cl_items = db.get_checklist_items(cl_id)
+                                    cl_total = len(cl_items)
+                                    cl_done = sum(1 for it in cl_items if it["is_done"])
+
+                                    with st.expander(
+                                        f"✅ {cl['name']} ({cl_done} of {cl_total} done)",
+                                        expanded=False,
+                                    ):
+                                        if cl.get("description"):
+                                            st.caption(cl["description"])
+
+                                        # Progress bar
+                                        p_val = cl_done / cl_total if cl_total else 0
+                                        st.progress(p_val)
+
+                                        for it in cl_items:
+                                            col_cb, col_text, col_del = st.columns(
+                                                [0.5, 6, 1]
+                                            )
+                                            with col_cb:
+                                                is_checked = st.checkbox(
+                                                    "",
+                                                    value=bool(it["is_done"]),
+                                                    key=f"cl_chk_{trip_id_modal}_{cl_id}_{it['id']}",
+                                                    disabled=is_locked,
+                                                )
+                                                if (
+                                                    is_checked != bool(it["is_done"])
+                                                    and not is_locked
+                                                ):
+                                                    db.toggle_checklist_item(
+                                                        it["id"], is_checked
+                                                    )
+                                                    st.rerun()
+                                            with col_text:
+                                                if it["is_done"]:
+                                                    st.markdown(
+                                                        f"~~{it['item_text']}~~"
+                                                    )
+                                                else:
+                                                    st.write(it["item_text"])
+                                            with col_del:
+                                                if not is_locked:
+                                                    if st.button(
+                                                        "🗑️",
+                                                        key=f"cl_del_{trip_id_modal}_{cl_id}_{it['id']}",
+                                                    ):
+                                                        db.delete_checklist_item(
+                                                            it["id"]
+                                                        )
+                                                        st.rerun()
+
+                                        # ---- Add item ----
+                                        if not is_locked:
+                                            with st.form(
+                                                key=f"add_cl_item_{trip_id_modal}_{cl_id}"
+                                            ):
+                                                new_cl_text = st.text_input(
+                                                    "Add checklist item",
+                                                    key=f"new_cl_text_{trip_id_modal}_{cl_id}",
+                                                )
+                                                if st.form_submit_button("➕ Add"):
+                                                    if new_cl_text:
+                                                        db.add_checklist_item(
+                                                            cl_id, new_cl_text
+                                                        )
+                                                        st.rerun()
+                                                    else:
+                                                        st.warning(
+                                                            "Item text required."
+                                                        )
+
+                                        # ---- Delete checklist ----
+                                        if not is_locked:
+                                            if st.button(
+                                                "🗑️ Delete Checklist",
+                                                key=f"del_cl_{trip_id_modal}_{cl_id}",
+                                            ):
+                                                db.delete_trip_checklist(cl_id)
+                                                st.rerun()
+                            else:
+                                st.caption("No checklists on this trip yet.")
+
                             # ---- Additional actions ----
                             st.divider()
                             (

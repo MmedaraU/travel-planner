@@ -364,6 +364,36 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
 
     trip_venues = db.get_venues_for_trip(trip_id)
     expense_summary = db.get_expense_summary(trip_id)
+        # ---- Packing lists (per member) ----
+    packing_lists = []
+    for member in db.get_trip_delegation_members(trip_id):
+        plist = db.get_packing_list(trip_id, member["id"])
+        if not plist:
+            continue
+        items = db.get_packing_items(plist["id"])
+        if not items:
+            continue
+        packing_lists.append({
+            "member_name": member["name"],
+            "role": member.get("role", ""),
+            "total_count": len(items),
+            "packed_count": sum(1 for it in items if it["packed"]),
+            "items": items,
+        })
+
+    # ---- Trip checklists ----
+    trip_checklists = []
+    for cl in db.get_trip_checklists(trip_id):
+        items = db.get_checklist_items(cl["id"])
+        if not items:
+            continue
+        trip_checklists.append({
+            "name": cl["name"],
+            "description": cl.get("description", ""),
+            "total_count": len(items),
+            "done_count": sum(1 for it in items if it["is_done"]),
+            "items": items,
+        })
     total_allowance = sum(s["allowance"] for s in expense_summary)
     total_spent_expenses = sum(s["spent"] for s in expense_summary)
     stops = db.get_trip_stops(trip_id)
@@ -485,6 +515,8 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         "expense_summary": expense_summary,
         "total_allowance": total_allowance,
         "total_spent_expenses": total_spent_expenses,
+        "packing_lists": packing_lists,
+        "trip_checklists": trip_checklists,
     }
 
     env = Environment(loader=FileSystemLoader("templates"))
@@ -870,6 +902,52 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
             row[4].text = f"{s['spent']:.2f}"
             row[5].text = f"{s['remaining']:.2f}"
 
+
+    # ---- Packing Lists (per traveler) ----
+    packing_lists_docx = []
+    for member in db.get_trip_delegation_members(trip_id):
+        plist = db.get_packing_list(trip_id, member["id"])
+        if not plist:
+            continue
+        items = db.get_packing_items(plist["id"])
+        if not items:
+            continue
+        packing_lists_docx.append((member, items))
+
+    if packing_lists_docx:
+        doc.add_heading("Packing Lists", level=1)
+        for member, items in packing_lists_docx:
+            packed_count = sum(1 for it in items if it["packed"])
+            doc.add_heading(f"{member['name']} ({packed_count} of {len(items)} packed)", level=2)
+            current_cat = None
+            for it in items:
+                if it.get("category") and it["category"] != current_cat:
+                    current_cat = it["category"]
+                    p = doc.add_paragraph()
+                    r = p.add_run(current_cat)
+                    r.bold = True
+                prefix = "☑ " if it["packed"] else "☐ "
+                doc.add_paragraph(f"{prefix}{it['item_name']}", style="List Bullet")
+
+    # ---- Trip Checklists ----
+    checklists_docx = []
+    for cl in db.get_trip_checklists(trip_id):
+        items = db.get_checklist_items(cl["id"])
+        if not items:
+            continue
+        checklists_docx.append((cl, items))
+
+    if checklists_docx:
+        doc.add_heading("Checklists", level=1)
+        for cl, items in checklists_docx:
+            done_count = sum(1 for it in items if it["is_done"])
+            doc.add_heading(f"{cl['name']} ({done_count} of {len(items)} done)", level=2)
+            if cl.get("description"):
+                doc.add_paragraph(cl["description"])
+            for it in items:
+                prefix = "☑ " if it["is_done"] else "☐ "
+                doc.add_paragraph(f"{prefix}{it['item_text']}", style="List Bullet")
+                
     # ---- Receipts ----
     receipt_items = [
         item for item in items
