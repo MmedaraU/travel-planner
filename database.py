@@ -511,6 +511,45 @@ def init_db():
     conn.close()
     migrate_db()
 
+    # =========================================================
+    # PHASE 3 – Expenses & Per Diem
+    # =========================================================
+
+    # --- Per Diem (one per trip + member) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS per_diem (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trip_id INTEGER NOT NULL,
+        member_id INTEGER NOT NULL,
+        daily_rate REAL DEFAULT 0,
+        days INTEGER DEFAULT 0,
+        currency TEXT DEFAULT 'USD',
+        notes TEXT,
+        UNIQUE(trip_id, member_id),
+        FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES delegation_members(id) ON DELETE CASCADE
+    )""")
+
+    # --- Expenses ---
+    c.execute("""CREATE TABLE IF NOT EXISTS expenses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trip_id INTEGER NOT NULL,
+        member_id INTEGER,
+        expense_date TEXT NOT NULL,
+        category TEXT,
+        description TEXT,
+        amount REAL DEFAULT 0,
+        currency TEXT DEFAULT 'USD',
+        receipt_path TEXT,
+        notes TEXT,
+        is_reimbursable INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+        FOREIGN KEY (member_id) REFERENCES delegation_members(id) ON DELETE SET NULL
+    )""")
+
+    c.execute("CREATE INDEX IF NOT EXISTS idx_per_diem_trip ON per_diem(trip_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_expenses_trip ON expenses(trip_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_expenses_member ON expenses(member_id)")
 
 # =========================================================
 # COMPANY MANAGEMENT
@@ -2998,3 +3037,219 @@ def delete_packing_template(template_id):
     c.execute("DELETE FROM packing_templates WHERE id = ?", (template_id,))
     conn.commit()
     conn.close()
+
+# =========================================================
+# PER DIEM
+# =========================================================
+
+def set_per_diem(trip_id, member_id, daily_rate, days, currency="USD", notes=None):
+    """Upsert per-diem settings for a trip member."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id FROM per_diem WHERE trip_id = ? AND member_id = ?",
+              (trip_id, member_id))
+    row = c.fetchone()
+    if row:
+        c.execute("""UPDATE per_diem
+                     SET daily_rate = ?, days = ?, currency = ?, notes = ?
+                     WHERE id = ?""",
+                  (daily_rate, days, currency, notes, row[0]))
+    else:
+        c.execute("""INSERT INTO per_diem
+                     (trip_id, member_id, daily_rate, days, currency, notes)
+                     VALUES (?, ?, ?, ?, ?, ?)""",
+                  (trip_id, member_id, daily_rate, days, currency, notes))
+    conn.commit()
+    conn.close()
+
+
+def get_per_diem(trip_id, member_id=None):
+    """Get per-diem rows for a trip (optionally a specific member)."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if member_id:
+        c.execute("SELECT * FROM per_diem WHERE trip_id = ? AND member_id = ?",
+                  (trip_id, member_id))
+        row = c.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    c.execute("SELECT * FROM per_diem WHERE trip_id = ? ORDER BY member_id",
+              (trip_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def delete_per_diem(per_diem_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM per_diem WHERE id = ?", (per_diem_id,))
+    conn.commit()
+    conn.close()
+
+
+# =========================================================
+# EXPENSES
+# =========================================================
+
+def add_expense(trip_id, member_id, expense_date, category=None,
+                description=None, amount=0, currency="USD",
+                receipt_path=None, notes=None, is_reimbursable=1):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""INSERT INTO expenses
+                 (trip_id, member_id, expense_date, category, description,
+                  amount, currency, receipt_path, notes, is_reimbursable)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              (trip_id, member_id, expense_date, category, description,
+               amount, currency, receipt_path, notes, is_reimbursable))
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_expenses(trip_id, member_id=None):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if member_id:
+        c.execute("""SELECT * FROM expenses
+                     WHERE trip_id = ? AND member_id = ?
+                     ORDER BY expense_date DESC, id DESC""",
+                  (trip_id, member_id))
+    else:
+        c.execute("""SELECT * FROM expenses
+                     WHERE trip_id = ?
+                     ORDER BY expense_date DESC, id DESC""",
+                  (trip_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_expense(expense_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM expenses WHERE id = ?", (expense_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_expense(expense_id, **kwargs):
+    if not kwargs:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    for k, v in kwargs.items():
+        fields.append(f"{k} = ?")
+        params.append(v)
+    params.append(expense_id)
+    c.execute(f"UPDATE expenses SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def delete_expense(expense_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_expense_summary(trip_id):
+    """
+    Return per-member totals combining per-diem allowance and actual expenses.
+
+    Output:
+    [
+        {
+            "member_id": 1,
+            "name": "Adaeze Okonkwo",
+            "role": "CEO",
+            "daily_rate": 180,
+            "days": 6,
+            "currency": "USD",
+            "allowance": 1080,
+            "spent": 750,
+            "remaining": 330,
+            "entry_count": 5,
+        },
+        ...
+    ]
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+
+    # Get all members referenced by per_diem OR expenses
+    c.execute("""
+        SELECT DISTINCT m.id, m.name, m.role
+        FROM delegation_members m
+        WHERE m.id IN (
+            SELECT member_id FROM per_diem WHERE trip_id = ?
+            UNION
+            SELECT member_id FROM expenses WHERE trip_id = ? AND member_id IS NOT NULL
+        )
+    """, (trip_id, trip_id))
+    members = c.fetchall()
+
+    summary = []
+    for m in members:
+        # Per diem
+        c.execute("SELECT daily_rate, days, currency FROM per_diem WHERE trip_id = ? AND member_id = ?",
+                  (trip_id, m["id"]))
+        pd_row = c.fetchone()
+        daily_rate = pd_row["daily_rate"] if pd_row else 0
+        days = pd_row["days"] if pd_row else 0
+        currency = pd_row["currency"] if pd_row else "USD"
+        allowance = (daily_rate or 0) * (days or 0)
+
+        # Expenses
+        c.execute("SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as cnt FROM expenses WHERE trip_id = ? AND member_id = ?",
+                  (trip_id, m["id"]))
+        exp_row = c.fetchone()
+        spent = exp_row["total"] or 0
+        entry_count = exp_row["cnt"] or 0
+
+        summary.append({
+            "member_id": m["id"],
+            "name": m["name"],
+            "role": m["role"],
+            "daily_rate": daily_rate,
+            "days": days,
+            "currency": currency,
+            "allowance": allowance,
+            "spent": spent,
+            "remaining": allowance - spent,
+            "entry_count": entry_count,
+        })
+
+    conn.close()
+    return summary
+
+
+def get_trip_delegation_members(trip_id):
+    """Return delegation members assigned to this trip's items."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT DISTINCT m.*
+        FROM delegation_members m
+        JOIN item_delegation id ON m.id = id.member_id
+        JOIN itinerary_items i ON i.id = id.item_id
+        WHERE i.trip_id = ?
+        ORDER BY m.name
+    """, (trip_id,))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+    

@@ -363,6 +363,9 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         executive = {}
 
     trip_venues = db.get_venues_for_trip(trip_id)
+    expense_summary = db.get_expense_summary(trip_id)
+    total_allowance = sum(s["allowance"] for s in expense_summary)
+    total_spent_expenses = sum(s["spent"] for s in expense_summary)
     stops = db.get_trip_stops(trip_id)
     items = db.get_items_for_trip(trip_id)
     contacts = db.get_trip_contacts(trip_id)
@@ -479,6 +482,9 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         "receipts": receipts,
         "trip_venues": trip_venues,
         "now": datetime.now(),
+        "expense_summary": expense_summary,
+        "total_allowance": total_allowance,
+        "total_spent_expenses": total_spent_expenses,
     }
 
     env = Environment(loader=FileSystemLoader("templates"))
@@ -818,7 +824,6 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
                 p.add_run(f"\nNotes: {v['notes']}")
             doc.add_paragraph()  # spacing
 
-
     # ---- Local Support Contacts ----
     if contacts:
         doc.add_heading("Local Support", level=1)
@@ -837,6 +842,33 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
             row[2].text = c.get("phone", "")
             row[3].text = c.get("email", "")
             row[4].text = c.get("country", "")
+
+    # ---- Expenses & Per Diem ----
+    expense_summary = db.get_expense_summary(trip_id)
+    if expense_summary:
+        doc.add_heading("Expenses & Per Diem", level=1)
+        total_allowance = sum(s["allowance"] for s in expense_summary)
+        total_spent_expenses = sum(s["spent"] for s in expense_summary)
+        doc.add_paragraph(
+            f"Delegation Allowance: {total_allowance:,.2f} {trip.get('base_currency', 'USD')}  ·  "
+            f"Total Spent: {total_spent_expenses:,.2f} {trip.get('base_currency', 'USD')}  ·  "
+            f"Remaining: {(total_allowance - total_spent_expenses):,.2f} {trip.get('base_currency', 'USD')}"
+        )
+        table = doc.add_table(rows=1, cols=6)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        headers = ["Traveler", "Daily Rate", "Days", "Allowance", "Spent", "Remaining"]
+        for i, h in enumerate(headers):
+            hdr[i].text = h
+            hdr[i].paragraphs[0].runs[0].bold = True
+        for s in expense_summary:
+            row = table.add_row().cells
+            row[0].text = s["name"]
+            row[1].text = f"{s['daily_rate']:.2f}"
+            row[2].text = str(s["days"])
+            row[3].text = f"{s['allowance']:.2f}"
+            row[4].text = f"{s['spent']:.2f}"
+            row[5].text = f"{s['remaining']:.2f}"
 
     # ---- Receipts ----
     receipt_items = [

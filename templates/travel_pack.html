@@ -285,10 +285,14 @@
         <span class="label">Status:</span> {{ trip.status | title }}
       </div>
       <div class="row">
-        <div class="col"><span class="label">Budget:</span> {{ "%.2f"|format(trip.budget or 0) }} {{ trip.base_currency }}</div>
-        <div class="col"><span class="label">Total Spent:</span> {{ "%.2f"|format(total_spent) }} {{ trip.base_currency }}</div>
-        <div class="col"><span class="label">Confirmed:</span> {{ "%.2f"|format(confirmed_spent) }} {{ trip.base_currency }}</div>
-        <div class="col"><span class="label">Estimated:</span> {{ "%.2f"|format(estimated_spent) }} {{ trip.base_currency }}</div>
+        <div class="col"><span class="label">Budget:</span> {{ "%.2f"|format(trip.budget or 0) }} {{ trip.base_currency
+          }}</div>
+        <div class="col"><span class="label">Total Spent:</span> {{ "%.2f"|format(total_spent) }} {{ trip.base_currency
+          }}</div>
+        <div class="col"><span class="label">Confirmed:</span> {{ "%.2f"|format(confirmed_spent) }} {{
+          trip.base_currency }}</div>
+        <div class="col"><span class="label">Estimated:</span> {{ "%.2f"|format(estimated_spent) }} {{
+          trip.base_currency }}</div>
       </div>
     </div>
 
@@ -400,7 +404,8 @@
          AGENDA (Meetings, Conferences, Dinners, Site Visits, Tours, Activities)
          Now includes a Venue column.
          ============================================================ -->
-    {% set agenda_items = items | selectattr('item_type', 'in', ['Meeting', 'Conference', 'Dinner', 'Site Visit', 'Tour', 'Activity']) | list %}
+    {% set agenda_items = items | selectattr('item_type', 'in', ['Meeting', 'Conference', 'Dinner', 'Site Visit',
+    'Tour', 'Activity']) | list %}
     {% if agenda_items %}
     <div class="card">
       <h2>📋 Agenda</h2>
@@ -491,6 +496,62 @@
         </div>
         {% endfor %}
       </div>
+    </div>
+    {% endif %}
+
+    <!-- Expenses & Per Diem -->
+    {% if expense_summary %}
+    <div class="card">
+      <h2>💰 Expenses & Per Diem</h2>
+
+      <div class="row">
+        <div class="col">
+          <span class="label">Delegation Allowance:</span>
+          {{ "%.2f"|format(total_allowance) }} {{ trip.base_currency }}
+        </div>
+        <div class="col">
+          <span class="label">Total Spent:</span>
+          {{ "%.2f"|format(total_spent_expenses) }} {{ trip.base_currency }}
+        </div>
+        <div class="col">
+          <span class="label">Remaining:</span>
+          {{ "%.2f"|format(total_allowance - total_spent_expenses) }} {{ trip.base_currency }}
+        </div>
+      </div>
+
+      <table style="margin-top: 16px;">
+        <thead>
+          <tr>
+            <th>Traveler</th>
+            <th>Daily Rate</th>
+            <th>Days</th>
+            <th>Allowance</th>
+            <th>Spent</th>
+            <th>Remaining</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in expense_summary %}
+          <tr>
+            <td>
+              <strong>{{ s.name }}</strong>
+              {% if s.role %}<br><small class="text-muted">{{ s.role }}</small>{% endif %}
+            </td>
+            <td>{{ "%.2f"|format(s.daily_rate) }}</td>
+            <td>{{ s.days }}</td>
+            <td>{{ "%.2f"|format(s.allowance) }}</td>
+            <td>{{ "%.2f"|format(s.spent) }}</td>
+            <td>
+              {% if s.remaining >= 0 %}
+              <span style="color:#16a34a;">{{ "%.2f"|format(s.remaining) }}</span>
+              {% else %}
+              <span style="color:#dc2626;">{{ "%.2f"|format(s.remaining) }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
     {% endif %}
 

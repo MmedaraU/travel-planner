@@ -3342,6 +3342,292 @@ with tab3:
                             else:
                                 st.warning("No company associated with this trip.")
 
+                            # ---- Per Diem & Expenses ----
+                            st.write("**💰 Per Diem & Expenses**")
+                            trip_members_for_expenses = db.get_trip_delegation_members(
+                                trip_id_modal
+                            )
+                            if not trip_members_for_expenses:
+                                st.caption(
+                                    "No delegation members assigned to items on this trip yet."
+                                )
+                            else:
+                                # ===== PER DIEM SETTINGS =====
+                                with st.expander(
+                                    "⚙️ Per Diem Settings", expanded=False
+                                ):
+                                    for member in trip_members_for_expenses:
+                                        existing_pd = db.get_per_diem(
+                                            trip_id_modal, member["id"]
+                                        )
+                                        col_a, col_b, col_c, col_d = st.columns(
+                                            [2, 1, 1, 1]
+                                        )
+                                        with col_a:
+                                            st.write(
+                                                f"**{member['name']}** ({member.get('role', '')})"
+                                            )
+                                        with col_b:
+                                            rate_key = f"pd_rate_{trip_id_modal}_{member['id']}"
+                                            rate_val = (
+                                                float(existing_pd["daily_rate"])
+                                                if existing_pd
+                                                else 0.0
+                                            )
+                                            new_rate = st.number_input(
+                                                "Daily Rate",
+                                                min_value=0.0,
+                                                step=10.0,
+                                                value=rate_val,
+                                                key=rate_key,
+                                                disabled=is_locked,
+                                            )
+                                        with col_c:
+                                            days_key = f"pd_days_{trip_id_modal}_{member['id']}"
+                                            days_val = (
+                                                int(existing_pd["days"])
+                                                if existing_pd
+                                                else 0
+                                            )
+                                            new_days = st.number_input(
+                                                "Days",
+                                                min_value=0,
+                                                step=1,
+                                                value=days_val,
+                                                key=days_key,
+                                                disabled=is_locked,
+                                            )
+                                        with col_d:
+                                            st.write("")
+                                            st.write("")
+                                            if not is_locked:
+                                                if st.button(
+                                                    "💾 Save",
+                                                    key=f"pd_save_{trip_id_modal}_{member['id']}",
+                                                ):
+                                                    db.set_per_diem(
+                                                        trip_id_modal,
+                                                        member["id"],
+                                                        new_rate,
+                                                        new_days,
+                                                        currency=trip_modal_data.get(
+                                                            "base_currency", "USD"
+                                                        ),
+                                                    )
+                                                    st.success(
+                                                        f"Per diem saved for {member['name']}."
+                                                    )
+                                                    st.rerun()
+
+                                # ===== ADD EXPENSE =====
+                                base_cur_modal_exp = trip_modal_data.get(
+                                    "base_currency", "USD"
+                                )
+                                with st.expander("➕ Add Expense", expanded=False):
+                                    with st.form(
+                                        key=f"add_expense_form_{trip_id_modal}"
+                                    ):
+                                        col1, col2, col3 = st.columns(3)
+                                        with col1:
+                                            member_options_exp = {
+                                                m["name"]: m["id"]
+                                                for m in trip_members_for_expenses
+                                            }
+                                            exp_member_label = st.selectbox(
+                                                "Traveler*",
+                                                options=list(member_options_exp.keys()),
+                                                key=f"exp_member_{trip_id_modal}",
+                                            )
+                                            exp_member_id = member_options_exp[
+                                                exp_member_label
+                                            ]
+                                        with col2:
+                                            exp_date = st.date_input(
+                                                "Date*",
+                                                value=datetime.now(),
+                                                key=f"exp_date_{trip_id_modal}",
+                                            )
+                                            exp_category = st.selectbox(
+                                                "Category",
+                                                options=[
+                                                    "Meals",
+                                                    "Transport",
+                                                    "Lodging",
+                                                    "Incidentals",
+                                                    "Entertainment",
+                                                    "Communication",
+                                                    "Other",
+                                                ],
+                                                key=f"exp_category_{trip_id_modal}",
+                                            )
+                                        with col3:
+                                            exp_amount = st.number_input(
+                                                "Amount",
+                                                min_value=0.0,
+                                                step=10.0,
+                                                value=0.0,
+                                                key=f"exp_amount_{trip_id_modal}",
+                                            )
+                                            exp_reimbursable = st.checkbox(
+                                                "Reimbursable",
+                                                value=True,
+                                                key=f"exp_reim_{trip_id_modal}",
+                                            )
+                                        exp_description = st.text_input(
+                                            "Description",
+                                            key=f"exp_desc_{trip_id_modal}",
+                                        )
+                                        exp_notes = st.text_area(
+                                            "Notes",
+                                            key=f"exp_notes_{trip_id_modal}",
+                                            height=80,
+                                        )
+                                        exp_receipt = st.file_uploader(
+                                            "Attach Receipt (image or PDF)",
+                                            type=["png", "jpg", "jpeg", "pdf"],
+                                            key=f"exp_receipt_{trip_id_modal}",
+                                        )
+                                        if st.form_submit_button("➕ Add Expense"):
+                                            if exp_amount <= 0:
+                                                st.warning(
+                                                    "Amount must be greater than zero."
+                                                )
+                                            else:
+                                                receipt_path_val = None
+                                                if exp_receipt is not None:
+                                                    folder = f"receipts/trip_{trip_id_modal}/expenses"
+                                                    os.makedirs(folder, exist_ok=True)
+                                                    fname = f"exp_{int(datetime.now().timestamp())}_{exp_receipt.name}"
+                                                    receipt_path_val = (
+                                                        f"{folder}/{fname}"
+                                                    )
+                                                    with open(
+                                                        receipt_path_val, "wb"
+                                                    ) as f:
+                                                        f.write(exp_receipt.getbuffer())
+                                                db.add_expense(
+                                                    trip_id=trip_id_modal,
+                                                    member_id=exp_member_id,
+                                                    expense_date=exp_date.isoformat(),
+                                                    category=exp_category,
+                                                    description=exp_description,
+                                                    amount=exp_amount,
+                                                    currency=base_cur_modal_exp,
+                                                    receipt_path=receipt_path_val,
+                                                    notes=exp_notes,
+                                                    is_reimbursable=(
+                                                        1 if exp_reimbursable else 0
+                                                    ),
+                                                )
+                                                st.success("Expense added!")
+                                                st.rerun()
+
+                                # ===== DASHBOARD =====
+                                summary_exp = db.get_expense_summary(trip_id_modal)
+                                if summary_exp:
+                                    st.write("**📊 Delegation Expense Summary**")
+                                    total_allowance_all = sum(
+                                        s["allowance"] for s in summary_exp
+                                    )
+                                    total_spent_all = sum(
+                                        s["spent"] for s in summary_exp
+                                    )
+                                    total_remaining_all = (
+                                        total_allowance_all - total_spent_all
+                                    )
+                                    col_s1, col_s2, col_s3 = st.columns(3)
+                                    with col_s1:
+                                        st.metric(
+                                            "Delegation Allowance",
+                                            f"{total_allowance_all:,.2f} {base_cur_modal_exp}",
+                                        )
+                                    with col_s2:
+                                        st.metric(
+                                            "Total Spent",
+                                            f"{total_spent_all:,.2f} {base_cur_modal_exp}",
+                                        )
+                                    with col_s3:
+                                        st.metric(
+                                            "Remaining",
+                                            f"{total_remaining_all:,.2f} {base_cur_modal_exp}",
+                                        )
+
+                                    st.write("**Per‑Traveler Breakdown**")
+                                    for s in summary_exp:
+                                        with st.container():
+                                            col_a, col_b, col_c, col_d = st.columns(
+                                                [2, 1.2, 1.2, 1.2]
+                                            )
+                                            with col_a:
+                                                st.write(
+                                                    f"**{s['name']}** ({s.get('role','')})"
+                                                )
+                                                st.caption(
+                                                    f"{s['entry_count']} entr{'y' if s['entry_count']==1 else 'ies'}"
+                                                )
+                                            with col_b:
+                                                st.write(
+                                                    f"Allowance: **{s['allowance']:,.2f}**"
+                                                )
+                                            with col_c:
+                                                st.write(
+                                                    f"Spent: **{s['spent']:,.2f}**"
+                                                )
+                                            with col_d:
+                                                color = (
+                                                    "🟢"
+                                                    if s["remaining"] >= 0
+                                                    else "🔴"
+                                                )
+                                                st.write(
+                                                    f"{color} Remaining: **{s['remaining']:,.2f}**"
+                                                )
+                                            st.divider()
+
+                                # ===== EXPENSE LIST =====
+                                all_expenses = db.get_expenses(trip_id_modal)
+                                if all_expenses:
+                                    with st.expander(
+                                        f"📋 All Expenses ({len(all_expenses)})",
+                                        expanded=False,
+                                    ):
+                                        member_name_lookup = {
+                                            m["id"]: m["name"]
+                                            for m in trip_members_for_expenses
+                                        }
+                                        for ex in all_expenses:
+                                            ex_id = ex["id"]
+                                            col_a, col_b, col_c, col_d, col_e = (
+                                                st.columns([1, 2, 2, 1, 1])
+                                            )
+                                            with col_a:
+                                                st.write(ex["expense_date"][:10])
+                                            with col_b:
+                                                st.write(
+                                                    f"**{member_name_lookup.get(ex['member_id'], '—')}**"
+                                                )
+                                                if ex.get("category"):
+                                                    st.caption(ex["category"])
+                                            with col_c:
+                                                st.write(ex.get("description") or "—")
+                                                if ex.get("receipt_path"):
+                                                    st.caption("🧾 Receipt attached")
+                                            with col_d:
+                                                st.write(
+                                                    f"**{ex['amount']:,.2f}** {ex.get('currency','USD')}"
+                                                )
+                                            with col_e:
+                                                if not is_locked:
+                                                    if st.button(
+                                                        "🗑️",
+                                                        key=f"del_exp_{ex_id}_{trip_id_modal}",
+                                                    ):
+                                                        db.delete_expense(ex_id)
+                                                        st.rerun()
+                                            st.divider()
+                                else:
+                                    st.caption("No expenses recorded yet.")
+
                             # ---- Additional actions ----
                             st.divider()
                             (
