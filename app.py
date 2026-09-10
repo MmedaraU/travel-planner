@@ -22,6 +22,20 @@ import duplicate_detection
 import sqlite3
 import zipfile
 
+# --- Venue dress code options (used in the Venues tab) ---
+DRESS_CODE_OPTIONS = [
+    "No Dress Code",
+    "Business Formal",
+    "Business Casual",
+    "Smart Casual",
+    "Casual",
+    "Cocktail",
+    "Black Tie",
+    "Formal / Gala",
+    "Other",
+]
+
+
 # --- Helpers ---
 def safe_index(options, value, default="No Preference"):
     if value is None:
@@ -822,7 +836,7 @@ if st.session_state.get("show_full_profile", False):
             else:
                 st.caption("No passports added.")
 
-            # ---- MEMBERSHIPS (READ-ONLY) ----
+                       # ---- MEMBERSHIPS (READ-ONLY) ----
             st.subheader("✈️ Memberships")
             mems = db.get_memberships(exec_id)
             if mems:
@@ -830,9 +844,15 @@ if st.session_state.get("show_full_profile", False):
                     col1, col2, col3 = st.columns([2, 2, 2])
                     with col1:
                         emoji = (
-                            "✈️"
-                            if m["category"] == "airline"
-                            else "🏨" if m["category"] == "hotel" else "🚗"
+                            "✈️" if m["category"] == "airline" else
+                            "🏨" if m["category"] == "hotel" else
+                            "🚗" if m["category"] == "car rental" else
+                            "🛋️" if m["category"] == "lounge" else
+                            "🚄" if m["category"] == "rail" else
+                            "⛴️" if m["category"] == "ferry" else
+                            "🚗" if m["category"] == "ride-share" else
+                            "💳" if m["category"] == "credit card" else
+                            "📌"  # fallback
                         )
                         st.write(
                             f"{emoji} {m['program_name']}: {m['membership_number']}"
@@ -853,6 +873,7 @@ if st.session_state.get("show_full_profile", False):
                         st.write(m.get("notes") or "")
             else:
                 st.caption("No memberships added.")
+
 
             # ---- ACTION BUTTONS ----
             st.divider()
@@ -1132,13 +1153,15 @@ tab_names = [
     "📋 All Trips",
     "🏢 Companies",
     "👥 Contacts",
+    "🏢 Venues",       # <-- NEW
 ]
 default_tab = st.session_state.get("active_tab", "✈️ Trip Planner")
 default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
 if "active_tab" in st.session_state:
     del st.session_state["active_tab"]
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(tab_names)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(tab_names)
+
 
 # ------------------------------------------------------------------
 # TAB 1: TRIP PLANNER (CREATE ONLY)
@@ -1596,6 +1619,32 @@ with tab1:
                             value=item.get("notes", ""),
                             key=f"create_e_notes_{idx}",
                         )
+                        # ---- Venue (only for session-type items) ----
+                        session_types = ["Meeting", "Conference", "Dinner", "Site Visit", "Tour", "Activity"]
+                        e_venue_id = item.get("venue_id")  # keep existing if not changed
+                        if e_type in session_types:
+                            venue_options = db.get_venues(active_only=True)
+                            venue_labels = {
+                                f"{v['name']}" + (f" — {v['city']}" if v.get("city") else ""): v["id"]
+                                for v in venue_options
+                            }
+                            venue_labels["(No venue)"] = None
+
+                            # Determine current label to pre-select
+                            current_venue_label = "(No venue)"
+                            for lbl, vid in venue_labels.items():
+                                if vid == e_venue_id:
+                                    current_venue_label = lbl
+                                    break
+
+                            selected_venue_label = st.selectbox(
+                                "Venue (optional)",
+                                options=list(venue_labels.keys()),
+                                index=list(venue_labels.keys()).index(current_venue_label),
+                                key=f"create_e_venue_{idx}",
+                            )
+                            e_venue_id = venue_labels[selected_venue_label]
+
                         # Delegation assignment
                         if company_id and st.session_state.get(
                             "create_trip_delegation"
@@ -1661,6 +1710,7 @@ with tab1:
                                 "delegation_ids": e_delegation_ids,
                                 "contact_ids": e_contact_ids,
                                 "timezone": e_timezone_value,
+                                "venue_id": e_venue_id,
                             }
                             st.session_state[f"create_editing_item_{idx}"] = False
                             st.rerun()
@@ -1734,6 +1784,32 @@ with tab1:
             n_confirmed = st.checkbox("Confirmed", key="create_n_confirmed")
             n_notes = st.text_area("Notes", key="create_n_notes")
 
+            # ---- Venue (only relevant for session-type items) ----
+            session_types = [
+                "Meeting",
+                "Conference",
+                "Dinner",
+                "Site Visit",
+                "Tour",
+                "Activity",
+            ]
+            n_venue_id = None
+            if n_type in session_types:
+                venue_options = db.get_venues(active_only=True)
+                venue_labels = {
+                    f"{v['name']}"
+                    + (f" — {v['city']}" if v.get("city") else ""): v["id"]
+                    for v in venue_options
+                }
+                venue_labels["(No venue)"] = None
+                selected_venue_label = st.selectbox(
+                    "Venue (optional)",
+                    options=list(venue_labels.keys()),
+                    index=list(venue_labels.keys()).index("(No venue)"),
+                    key="create_n_venue",
+                )
+                n_venue_id = venue_labels[selected_venue_label]
+
             # Delegation assignment
             if company_id and st.session_state.get("create_trip_delegation"):
                 delegation_options = {
@@ -1783,6 +1859,7 @@ with tab1:
                             "delegation_ids": selected_delegation_ids,
                             "contact_ids": selected_contact_ids,
                             "timezone": n_timezone_value,
+                            "venue_id": n_venue_id,
                         }
                     )
                     st.rerun()
@@ -1915,6 +1992,7 @@ with tab1:
                         item["cost_currency"],
                         item.get("exchange_rate_snapshot", 1.0),
                         timezone=item.get("timezone"),
+												venue_id=item.get("venue_id"),
                     )
                     if item.get("delegation_ids"):
                         real_delegation_ids = [
@@ -2534,6 +2612,7 @@ with tab3:
                                                 item["cost_currency"],
                                                 item.get("exchange_rate_snapshot", 1.0),
                                                 timezone=item.get("timezone"),
+                                                venue_id=item.get("venue_id"),
                                             )
                                             # Restore delegation and contacts
                                             if item.get("delegation_ids"):
@@ -2867,6 +2946,55 @@ with tab3:
                                                 value=item.get("notes", ""),
                                                 key=f"modal_e_notes_{trip_id_modal}_{idx}",
                                             )
+
+                                            # ---- Venue (only for session-type items) ----
+                                            session_types = [
+                                                "Meeting",
+                                                "Conference",
+                                                "Dinner",
+                                                "Site Visit",
+                                                "Tour",
+                                                "Activity",
+                                            ]
+                                            e_venue_id_modal = item.get("venue_id")
+                                            if e_type in session_types:
+                                                venue_options_modal = db.get_venues(
+                                                    active_only=True
+                                                )
+                                                venue_labels_modal = {
+                                                    f"{v['name']}"
+                                                    + (
+                                                        f" — {v['city']}"
+                                                        if v.get("city")
+                                                        else ""
+                                                    ): v["id"]
+                                                    for v in venue_options_modal
+                                                }
+                                                venue_labels_modal["(No venue)"] = None
+
+                                                current_venue_label_modal = "(No venue)"
+                                                for (
+                                                    lbl,
+                                                    vid,
+                                                ) in venue_labels_modal.items():
+                                                    if vid == e_venue_id_modal:
+                                                        current_venue_label_modal = lbl
+                                                        break
+
+                                                selected_venue_label_modal = st.selectbox(
+                                                    "Venue (optional)",
+                                                    options=list(
+                                                        venue_labels_modal.keys()
+                                                    ),
+                                                    index=list(
+                                                        venue_labels_modal.keys()
+                                                    ).index(current_venue_label_modal),
+                                                    key=f"modal_e_venue_{trip_id_modal}_{idx}",
+                                                )
+                                                e_venue_id_modal = venue_labels_modal[
+                                                    selected_venue_label_modal
+                                                ]
+
                                             # Delegation assignment
                                             if company_id_modal:
                                                 delegation_options_modal = (
@@ -2954,6 +3082,7 @@ with tab3:
                                                     "delegation_ids": selected_delegation_ids_modal,
                                                     "contact_ids": selected_contact_ids_modal,
                                                     "timezone": e_timezone_value_modal,
+                                                    "venue_id": e_venue_id_modal,
                                                 }
                                                 st.session_state[
                                                     f"modal_editing_item_{trip_id_modal}_{idx}"
@@ -3317,7 +3446,7 @@ with tab3:
                                         )
                                         st.rerun()
 
-                                                        # ---- Travel Pack generation ----
+                                        # ---- Travel Pack generation ----
                             if st.session_state.get(f"show_travel_pack_modal_{trip_id_modal}", False):
                                 st.info("Generate a self-contained Travel Pack in your preferred format.")
                                 html_content = doc_generator.generate_travel_pack_html(
@@ -3363,7 +3492,6 @@ with tab3:
                                 else:
                                     st.error("Failed to generate travel pack.")
 
-                                    
                             # ---- Delete confirmation ----
                             if st.session_state.get(
                                 f"confirm_del_modal_{trip_id_modal}", False
@@ -4449,3 +4577,283 @@ with tab5:
                 st.caption("No active contacts for this company yet.")
     else:
         st.info("Select a company above to set default contacts.")
+
+
+# ------------------------------------------------------------------
+# TAB 6: VENUES
+# ------------------------------------------------------------------
+with tab6:
+    st.header("🏢 Venues")
+    st.caption(
+        "Manage reusable venues (conference centers, hotels, private residences, etc.). "
+        "Each venue can be attached to specific itinerary items (meetings, conferences, dinners)."
+    )
+
+    # ---- Search & filter ----
+    col_search, col_country = st.columns(2)
+    with col_search:
+        search_term = st.text_input(
+            "🔍 Search Venues",
+            placeholder="Name, address, city...",
+            key="venue_search",
+        )
+    with col_country:
+        # Get distinct countries
+        conn = sqlite3.connect(db.DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "SELECT DISTINCT country FROM venues WHERE country IS NOT NULL AND country != '' ORDER BY country"
+        )
+        venue_countries = [row[0] for row in c.fetchall()]
+        conn.close()
+        selected_country_filter = st.selectbox(
+            "Filter by Country",
+            options=["All Countries"] + venue_countries,
+            index=0,
+            key="venue_country_filter",
+        )
+        filter_country = (
+            None if selected_country_filter == "All Countries" else selected_country_filter
+        )
+
+    # ---- Add Venue Form ----
+    with st.expander("➕ Add New Venue", expanded=False):
+        with st.form("add_venue_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                add_name = st.text_input("Venue Name*", key="add_venue_name")
+                add_address = st.text_input("Address", key="add_venue_address")
+                add_city = st.text_input("City", key="add_venue_city")
+                country_list = sorted([c.name for c in pycountry.countries])
+                add_country = st.selectbox(
+                    "Country",
+                    options=[""] + country_list,
+                    key="add_venue_country",
+                )
+            with col2:
+                add_wifi_ssid = st.text_input(
+                    "WiFi SSID", key="add_venue_wifi_ssid"
+                )
+                add_wifi_password = st.text_input(
+                    "WiFi Password", key="add_venue_wifi_password"
+                )
+                add_badge_info = st.text_input(
+                    "Badge Info", key="add_venue_badge_info"
+                )
+                add_dress_code = st.selectbox(
+                    "Dress Code",
+                    options=DRESS_CODE_OPTIONS,
+                    index=0,
+                    key="add_venue_dress_code",
+                )
+            add_notes = st.text_area("Note", key="add_venue_notes")
+
+            if st.form_submit_button("➕ Add Venue"):
+                if not add_name:
+                    st.warning("Venue Name is required.")
+                else:
+                    dupes = db.find_duplicate_venues(name=add_name)
+                    if dupes:
+                        st.warning(f"⚠️ A venue named '{add_name}' already exists:")
+                        for d in dupes:
+                            st.write(
+                                f"- {d['name']} ({d.get('city','')}, {d.get('country','')})"
+                            )
+                        if not st.checkbox("Add anyway?", key="force_add_venue"):
+                            st.stop()
+                    # Store "No Dress Code" as empty string for cleanliness
+                    dress_code_value = add_dress_code if add_dress_code != "No Dress Code" else ""
+                    db.add_venue(
+                        name=add_name,
+                        address=add_address,
+                        city=add_city,
+                        country=add_country,
+                        wifi_ssid=add_wifi_ssid,
+                        wifi_password=add_wifi_password,
+                        badge_info=add_badge_info,
+                        dress_code_notes=dress_code_value,
+                        notes=add_notes,
+                    )
+                    st.success(f"✅ Venue '{add_name}' added!")
+                    st.rerun()
+
+    # ---- List Venues ----
+    all_venues = db.get_venues(country=filter_country, active_only=False)
+    if search_term:
+        search_lower = search_term.lower()
+        all_venues = [
+            v
+            for v in all_venues
+            if search_lower in (v.get("name") or "").lower()
+            or search_lower in (v.get("address") or "").lower()
+            or search_lower in (v.get("city") or "").lower()
+            or search_lower in (v.get("country") or "").lower()
+        ]
+
+    if not all_venues:
+        st.info("No venues found. Add one using the form above.")
+    else:
+        st.write(f"**{len(all_venues)} venue(s)**")
+        for v in all_venues:
+            vid = v["id"]
+            col1, col2, col3, col4 = st.columns([2, 2, 2, 1.2])
+            with col1:
+                st.write(f"**{v['name']}**")
+                location_parts = [p for p in [v.get("city"), v.get("country")] if p]
+                if location_parts:
+                    st.caption("📍 " + ", ".join(location_parts))
+            with col2:
+                if v.get("address"):
+                    st.write(f"🏠 {v['address']}")
+                if v.get("wifi_ssid"):
+                    st.write(f"📶 {v['wifi_ssid']}")
+            with col3:
+                if v.get("badge_info"):
+                    st.write(f"🎫 {v['badge_info']}")
+                if v.get("dress_code_notes"):
+                    st.write(f"👔 {v['dress_code_notes']}")
+            with col4:
+                if st.button("✏️", key=f"edit_venue_{vid}"):
+                    st.session_state[f"editing_venue_{vid}"] = True
+
+            if not v.get("is_active", 1):
+                st.caption("⚠️ Inactive")
+
+            # ---- Edit Venue ----
+            if st.session_state.get(f"editing_venue_{vid}", False):
+                with st.expander(f"Edit {v['name']}", expanded=True):
+                    with st.form(key=f"edit_venue_form_{vid}"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            edit_name = st.text_input(
+                                "Venue Name*",
+                                value=v["name"],
+                                key=f"edit_venue_name_{vid}",
+                            )
+                            edit_address = st.text_input(
+                                "Address",
+                                value=v.get("address") or "",
+                                key=f"edit_venue_address_{vid}",
+                            )
+                            edit_city = st.text_input(
+                                "City",
+                                value=v.get("city") or "",
+                                key=f"edit_venue_city_{vid}",
+                            )
+                            country_list = sorted(
+                                [c.name for c in pycountry.countries]
+                            )
+                            edit_country = st.selectbox(
+                                "Country",
+                                options=[""] + country_list,
+                                index=(
+                                    ([""] + country_list).index(
+                                        v.get("country") or ""
+                                    )
+                                    if (v.get("country") or "") in country_list
+                                    else 0
+                                ),
+                                key=f"edit_venue_country_{vid}",
+                            )
+                        with col2:
+                            edit_wifi_ssid = st.text_input(
+                                "WiFi SSID",
+                                value=v.get("wifi_ssid") or "",
+                                key=f"edit_venue_wifi_ssid_{vid}",
+                            )
+                            edit_wifi_password = st.text_input(
+                                "WiFi Password",
+                                value=v.get("wifi_password") or "",
+                                key=f"edit_venue_wifi_password_{vid}",
+                            )
+                            edit_badge_info = st.text_input(
+                                "Badge Info",
+                                value=v.get("badge_info") or "",
+                                key=f"edit_venue_badge_{vid}",
+                            )
+
+                            # ---- Dress Code dropdown (preserve legacy custom values) ----
+                            current_dress_code = (
+                                v.get("dress_code_notes") or "No Dress Code"
+                            )
+                            dress_code_options_edit = list(DRESS_CODE_OPTIONS)
+                            if current_dress_code not in dress_code_options_edit:
+                                # Preserve any legacy free-text value
+                                dress_code_options_edit.append(current_dress_code)
+
+                            edit_dress_code = st.selectbox(
+                                "Dress Code",
+                                options=dress_code_options_edit,
+                                index=dress_code_options_edit.index(
+                                    current_dress_code
+                                ),
+                                key=f"edit_venue_dress_{vid}",
+                            )
+
+                        edit_notes = st.text_area(
+                            "Note",
+                            value=v.get("notes") or "",
+                            key=f"edit_venue_notes_{vid}",
+                        )
+                        edit_active = st.checkbox(
+                            "Active",
+                            value=bool(v.get("is_active", 1)),
+                            key=f"edit_venue_active_{vid}",
+                        )
+
+                        col_save, col_delete, col_cancel = st.columns(3)
+                        with col_save:
+                            if st.form_submit_button("💾 Save"):
+                                if edit_name:
+                                    # Store "No Dress Code" as empty string
+                                    dress_code_value = (
+                                        edit_dress_code
+                                        if edit_dress_code != "No Dress Code"
+                                        else ""
+                                    )
+                                    db.update_venue(
+                                        vid,
+                                        name=edit_name,
+                                        address=edit_address,
+                                        city=edit_city,
+                                        country=edit_country,
+                                        wifi_ssid=edit_wifi_ssid,
+                                        wifi_password=edit_wifi_password,
+                                        badge_info=edit_badge_info,
+                                        dress_code_notes=dress_code_value,
+                                        notes=edit_notes,
+                                        is_active=edit_active,
+                                    )
+                                    st.session_state.pop(
+                                        f"editing_venue_{vid}", None
+                                    )
+                                    st.success("Venue updated!")
+                                    st.rerun()
+                                else:
+                                    st.warning("Venue Name is required.")
+                        with col_delete:
+                            if st.form_submit_button("🗑️ Delete"):
+                                st.session_state[f"confirm_del_venue_{vid}"] = True
+                        with col_cancel:
+                            if st.form_submit_button("❌ Cancel"):
+                                st.session_state.pop(f"editing_venue_{vid}", None)
+                                st.rerun()
+
+            # ---- Delete Confirmation ----
+            if st.session_state.get(f"confirm_del_venue_{vid}", False):
+                st.warning(
+                    f"⚠️ Permanently delete venue '{v['name']}'? Items referencing it will be unlinked."
+                )
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("✅ Yes", key=f"confirm_del_venue_yes_{vid}"):
+                        db.delete_venue(vid)
+                        st.session_state.pop(f"confirm_del_venue_{vid}", None)
+                        st.session_state.pop(f"editing_venue_{vid}", None)
+                        st.success("Venue deleted.")
+                        st.rerun()
+                with col_no:
+                    if st.button("❌ Cancel", key=f"confirm_del_venue_no_{vid}"):
+                        st.session_state.pop(f"confirm_del_venue_{vid}", None)
+                        st.rerun()
+            st.divider()

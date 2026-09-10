@@ -230,10 +230,134 @@ def migrate_db():
             c.execute("PRAGMA foreign_keys=ON")
             break
 
-    conn.commit()
-    conn.close()
+            # =========================================================
+    # VENUES – migrate from per-trip to master table
+    # =========================================================
+    c.execute("PRAGMA table_info(venues)")
+    venue_cols = [row[1] for row in c.fetchall()]
 
-    
+    # Detect old schema (has trip_id) vs new schema (has is_active)
+    if "trip_id" in venue_cols and "is_active" not in venue_cols:
+        # ---- MIGRATION: old per-trip venues → master venues ----
+        print("Migrating venues table to master schema...")
+
+        # 1. Create new master venues table
+        c.execute("""CREATE TABLE IF NOT EXISTS venues_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            address TEXT,
+            city TEXT,
+            country TEXT,
+            wifi_ssid TEXT,
+            wifi_password TEXT,
+            badge_info TEXT,
+            dress_code_notes TEXT,
+            notes TEXT,
+            is_active INTEGER DEFAULT 1
+        )""")
+
+        # 2. Copy old venues (deduplicate by name) and build a trip→venue_id map
+        c.execute(
+            "SELECT id, trip_id, name, address, wifi_ssid, wifi_password, badge_info, dress_code_notes, notes FROM venues"
+        )
+        old_venues = c.fetchall()
+        trip_to_new_venue = {}  # trip_id → new venue id
+        name_to_new_venue = {}  # name → new venue id (dedupe)
+
+        for v in old_venues:
+            (
+                old_id,
+                trip_id,
+                name,
+                address,
+                wifi_ssid,
+                wifi_password,
+                badge_info,
+                dress_code,
+                notes,
+            ) = v
+            key = (name or "").strip().lower()
+            if key and key in name_to_new_venue:
+                # Reuse an existing master venue with same name
+                trip_to_new_venue[trip_id] = name_to_new_venue[key]
+                continue
+            c.execute(
+                """INSERT INTO venues_new
+                         (name, address, wifi_ssid, wifi_password, badge_info, dress_code_notes, notes)
+                         VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    name,
+                    address,
+                    wifi_ssid,
+                    wifi_password,
+                    badge_info,
+                    dress_code,
+                    notes,
+                ),
+            )
+            new_id = c.lastrowid
+            trip_to_new_venue[trip_id] = new_id
+            if key:
+                name_to_new_venue[key] = new_id
+
+        # 3. Drop old venues table, rename new one
+        c.execute("DROP TABLE venues")
+        c.execute("ALTER TABLE venues_new RENAME TO venues")
+
+        # 4. Add venue_id column to itinerary_items if missing
+        c.execute("PRAGMA table_info(itinerary_items)")
+        item_cols = [row[1] for row in c.fetchall()]
+        if "venue_id" not in item_cols:
+            c.execute("ALTER TABLE itinerary_items ADD COLUMN venue_id INTEGER")
+
+        # 5. Link existing session-type items to their trip's venue
+        session_types = (
+            "Meeting",
+            "Conference",
+            "Dinner",
+            "Site Visit",
+            "Tour",
+            "Activity",
+        )
+        placeholders = ",".join(["?"] * len(session_types))
+        for trip_id, new_venue_id in trip_to_new_venue.items():
+            c.execute(
+                f"""UPDATE itinerary_items
+                          SET venue_id = ?
+                          WHERE trip_id = ?
+                            AND item_type IN ({placeholders})
+                            AND venue_id IS NULL""",
+                (new_venue_id, trip_id, *session_types),
+            )
+
+        print("Venues migration complete.")
+
+    else:
+        # ---- Fresh install or already migrated ----
+        c.execute("""CREATE TABLE IF NOT EXISTS venues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            address TEXT,
+            city TEXT,
+            country TEXT,
+            wifi_ssid TEXT,
+            wifi_password TEXT,
+            badge_info TEXT,
+            dress_code_notes TEXT,
+            notes TEXT,
+            is_active INTEGER DEFAULT 1
+        )""")
+
+        # Ensure venue_id column exists on itinerary_items
+        c.execute("PRAGMA table_info(itinerary_items)")
+        item_cols = [row[1] for row in c.fetchall()]
+        if "venue_id" not in item_cols:
+            c.execute("ALTER TABLE itinerary_items ADD COLUMN venue_id INTEGER")
+
+    # Index for performance
+    c.execute("CREATE INDEX IF NOT EXISTS idx_venues_name ON venues(name)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_venues_country ON venues(country)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_items_venue ON itinerary_items(venue_id)")
 
 def init_db():
     """Create all tables if they don't exist, then run migrations."""
@@ -1574,6 +1698,7 @@ def add_itinerary_item(
     cost_currency="USD",
     exchange_rate_snapshot=1.0,
     timezone=None,
+    venue_id=None,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1581,8 +1706,8 @@ def add_itinerary_item(
         """
         INSERT INTO itinerary_items 
         (trip_id, item_type, description, datetime_start, datetime_end, location,
-         cost, confirmation_code, notes, is_confirmed, cost_currency, exchange_rate_snapshot, timezone)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         cost, confirmation_code, notes, is_confirmed, cost_currency, exchange_rate_snapshot, timezone, venue_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             trip_id,
@@ -1598,6 +1723,7 @@ def add_itinerary_item(
             cost_currency,
             exchange_rate_snapshot,
             timezone,
+            venue_id,
         ),
     )
     conn.commit()
@@ -1637,6 +1763,7 @@ def update_itinerary_item(
     cost_currency="USD",
     exchange_rate_snapshot=1.0,
     timezone=None,
+    venue_id=None,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1655,6 +1782,7 @@ def update_itinerary_item(
             cost_currency = ?,
             exchange_rate_snapshot = ?,
             timezone = ?
+            venue_id = ?
         WHERE id = ?
     """,
         (
@@ -1670,6 +1798,7 @@ def update_itinerary_item(
             cost_currency,
             exchange_rate_snapshot,
             timezone,
+            venue_id,
             item_id,
         ),
     )
@@ -2289,3 +2418,176 @@ def apply_trip_template(
         )
 
     return trip_id
+
+
+# =========================================================
+# VENUES (Master Table)
+# =========================================================
+
+
+def add_venue(
+    name,
+    address=None,
+    city=None,
+    country=None,
+    wifi_ssid=None,
+    wifi_password=None,
+    badge_info=None,
+    dress_code_notes=None,
+    notes=None,
+):
+    """Create a new reusable venue."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO venues
+                 (name, address, city, country, wifi_ssid, wifi_password,
+                  badge_info, dress_code_notes, notes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            name,
+            address,
+            city,
+            country,
+            wifi_ssid,
+            wifi_password,
+            badge_info,
+            dress_code_notes,
+            notes,
+        ),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_venues(country=None, active_only=True):
+    """Return all venues, optionally filtered by country."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    conditions = []
+    params = []
+    if active_only:
+        conditions.append("is_active = 1")
+    if country:
+        conditions.append("country = ?")
+        params.append(country)
+    query = "SELECT * FROM venues"
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY name"
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_venue(venue_id):
+    """Return a single venue by ID."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM venues WHERE id = ?", (venue_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_venue(
+    venue_id,
+    name=None,
+    address=None,
+    city=None,
+    country=None,
+    wifi_ssid=None,
+    wifi_password=None,
+    badge_info=None,
+    dress_code_notes=None,
+    notes=None,
+    is_active=None,
+):
+    """Update an existing venue."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    for col, val in [
+        ("name", name),
+        ("address", address),
+        ("city", city),
+        ("country", country),
+        ("wifi_ssid", wifi_ssid),
+        ("wifi_password", wifi_password),
+        ("badge_info", badge_info),
+        ("dress_code_notes", dress_code_notes),
+        ("notes", notes),
+    ]:
+        if val is not None:
+            fields.append(f"{col} = ?")
+            params.append(val)
+    if is_active is not None:
+        fields.append("is_active = ?")
+        params.append(1 if is_active else 0)
+    if not fields:
+        conn.close()
+        return
+    params.append(venue_id)
+    sql = f"UPDATE venues SET {', '.join(fields)} WHERE id = ?"
+    c.execute(sql, params)
+    conn.commit()
+    conn.close()
+
+
+def delete_venue(venue_id):
+    """Delete a venue (also clears references in itinerary_items)."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE itinerary_items SET venue_id = NULL WHERE venue_id = ?", (venue_id,)
+    )
+    c.execute("DELETE FROM venues WHERE id = ?", (venue_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_venues_for_trip(trip_id):
+    """Return the unique venues referenced by items on a given trip."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT DISTINCT v.*
+                 FROM venues v
+                 JOIN itinerary_items i ON i.venue_id = v.id
+                 WHERE i.trip_id = ? AND v.is_active = 1
+                 ORDER BY v.name""",
+        (trip_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def find_duplicate_venues(name=None, address=None):
+    """Check for existing venue with the same name or address."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    conditions = []
+    params = []
+    if name:
+        conditions.append("name = ?")
+        params.append(name)
+    if address:
+        conditions.append("address = ?")
+        params.append(address)
+    if not conditions:
+        conn.close()
+        return []
+    query = f"SELECT * FROM venues WHERE is_active = 1 AND ({' OR '.join(conditions)})"
+    conn.row_factory = sqlite3.Row
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

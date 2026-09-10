@@ -206,7 +206,27 @@
       display: block;
     }
 
+    .venue-block {
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+    }
+
+    .venue-block:not(:last-child) {
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .venue-block h3 {
+      margin-top: 0;
+      margin-bottom: 8px;
+      font-size: 1.25rem;
+    }
+
     .text-muted {
+      color: #94a3b8;
+      font-size: 0.9rem;
+    }
+
+    .footer-note {
       color: #94a3b8;
       font-size: 0.9rem;
       margin-top: 20px;
@@ -248,31 +268,34 @@
 <body>
   <div class="container">
 
-    <!-- Cover -->
+    <!-- ============================================================
+         COVER / TRIP OVERVIEW
+         ============================================================ -->
     <div class="card">
       <h1>{{ trip.purpose }}</h1>
       <div class="subhead">
         <span class="label">From:</span> {{ trip.departure_city or 'N/A' }}
         {% if trip.departure_region %}, {{ trip.departure_region }}{% endif %}
         {% if trip.departure_country %}, {{ trip.departure_country }}{% endif %}
-        &nbsp;|&nbsp; <span class="label">To:</span> {{ stops[0].city if stops else 'N/A' }}
-        &nbsp;|&nbsp; <span class="label">Duration:</span> {{ trip.start_date[:10] }} – {{ trip.end_date[:10] }}
-        &nbsp;|&nbsp; <span class="label">Status:</span> {{ trip.status | title }}
+        &nbsp;|&nbsp;
+        <span class="label">To:</span> {{ stops[0].city if stops else 'N/A' }}
+        &nbsp;|&nbsp;
+        <span class="label">Duration:</span> {{ trip.start_date[:10] }} – {{ trip.end_date[:10] }}
+        &nbsp;|&nbsp;
+        <span class="label">Status:</span> {{ trip.status | title }}
       </div>
       <div class="row">
-        <div class="col"><span class="label">Budget:</span> {{ "%.2f"|format(trip.budget or 0) }} {{ trip.base_currency
-          }}</div>
-        <div class="col"><span class="label">Total Spent:</span> {{ "%.2f"|format(total_spent) }} {{ trip.base_currency
-          }}</div>
-        <div class="col"><span class="label">Confirmed:</span> {{ "%.2f"|format(confirmed_spent) }} {{
-          trip.base_currency }}</div>
-        <div class="col"><span class="label">Estimated:</span> {{ "%.2f"|format(estimated_spent) }} {{
-          trip.base_currency }}</div>
+        <div class="col"><span class="label">Budget:</span> {{ "%.2f"|format(trip.budget or 0) }} {{ trip.base_currency }}</div>
+        <div class="col"><span class="label">Total Spent:</span> {{ "%.2f"|format(total_spent) }} {{ trip.base_currency }}</div>
+        <div class="col"><span class="label">Confirmed:</span> {{ "%.2f"|format(confirmed_spent) }} {{ trip.base_currency }}</div>
+        <div class="col"><span class="label">Estimated:</span> {{ "%.2f"|format(estimated_spent) }} {{ trip.base_currency }}</div>
       </div>
     </div>
 
-    <!-- Delegation -->
-    {% if memberships or delegation %}
+    <!-- ============================================================
+         DELEGATION
+         ============================================================ -->
+    {% if delegation %}
     <div class="card">
       <h2>👥 Delegation</h2>
       <div class="delegation-grid">
@@ -288,21 +311,28 @@
     </div>
     {% endif %}
 
-    <!-- Stops -->
+    <!-- ============================================================
+         ROUTE (STOPS)
+         ============================================================ -->
     {% if stops %}
     <div class="card">
       <h2>📍 Route</h2>
       <ul>
         {% for stop in stops %}
-        <li><strong>{{ stop.city }}</strong> ({{ stop.country or '' }}{% if stop.region %}, {{ stop.region }}{% endif
-          %}) – {{ stop.start_date[:10] }} to {{ stop.end_date[:10] }}</li>
+        <li>
+          <strong>{{ stop.city }}</strong>
+          ({{ stop.country or '' }}{% if stop.region %}, {{ stop.region }}{% endif %})
+          – {{ stop.start_date[:10] }} to {{ stop.end_date[:10] }}
+        </li>
         {% endfor %}
       </ul>
     </div>
     {% endif %}
 
-    <!-- Itinerary (flights, transport, hotels) -->
-    {% set itinerary_items = items | selectattr('item_type', 'in', ['Flight', 'Transport', 'Hotel']) | list %}
+    <!-- ============================================================
+         ITINERARY (FLIGHTS & TRANSPORT)
+         ============================================================ -->
+    {% set itinerary_items = items | selectattr('item_type', 'in', ['Flight', 'Transport']) | list %}
     {% if itinerary_items %}
     <div class="card">
       <h2>✈️ Itinerary</h2>
@@ -321,7 +351,9 @@
           <tr>
             <td>{{ item.formatted_time }}</td>
             <td>{{ item.item_type | title }}</td>
-            <td>{{ item.description }}<br><small class="text-muted">Conf: {{ item.confirmation_code or 'N/A' }}</small>
+            <td>
+              {{ item.description }}<br>
+              <small class="text-muted">Conf: {{ item.confirmation_code or 'N/A' }}</small>
             </td>
             <td>{{ item.location or 'N/A' }}</td>
             <td>{{ "%.2f"|format(item.cost or 0) }} {{ item.cost_currency or 'USD' }}</td>
@@ -332,9 +364,43 @@
     </div>
     {% endif %}
 
-    <!-- Agenda (meetings, conferences, dinners, site visits) -->
-    {% set agenda_items = items | selectattr('item_type', 'in', ['Meeting', 'Conference', 'Dinner', 'Site Visit']) |
-    list %}
+    <!-- ============================================================
+         HOTELS
+         ============================================================ -->
+    {% set hotels = items | selectattr('item_type', 'equalto', 'Hotel') | list %}
+    {% if hotels %}
+    <div class="card">
+      <h2>🏨 Hotels</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Check-in / Check-out</th>
+            <th>Hotel</th>
+            <th>Location</th>
+            <th>Confirmation</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for hotel in hotels %}
+          <tr>
+            <td>{{ hotel.formatted_time }}</td>
+            <td>{{ hotel.description }}</td>
+            <td>{{ hotel.location or 'N/A' }}</td>
+            <td>{{ hotel.confirmation_code or 'N/A' }}</td>
+            <td>{{ "%.2f"|format(hotel.cost or 0) }} {{ hotel.cost_currency or 'USD' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    <!-- ============================================================
+         AGENDA (Meetings, Conferences, Dinners, Site Visits, Tours, Activities)
+         Now includes a Venue column.
+         ============================================================ -->
+    {% set agenda_items = items | selectattr('item_type', 'in', ['Meeting', 'Conference', 'Dinner', 'Site Visit', 'Tour', 'Activity']) | list %}
     {% if agenda_items %}
     <div class="card">
       <h2>📋 Agenda</h2>
@@ -345,6 +411,7 @@
             <th>Type</th>
             <th>Description</th>
             <th>Location</th>
+            <th>Venue</th>
             <th>Attendees</th>
           </tr>
         </thead>
@@ -353,10 +420,15 @@
           <tr>
             <td>{{ item.formatted_time }}</td>
             <td>{{ item.item_type | title }}</td>
-            <td>{{ item.description }}<br><small class="text-muted">Conf: {{ item.confirmation_code or 'N/A' }}</small>
+            <td>
+              {{ item.description }}<br>
+              <small class="text-muted">Conf: {{ item.confirmation_code or 'N/A' }}</small>
             </td>
             <td>{{ item.location or 'N/A' }}</td>
-            <td>{% if item.participants %}{{ item.participants | join(', ') }}{% else %}—{% endif %}</td>
+            <td>{{ item.venue_name or '—' }}</td>
+            <td>
+              {% if item.participants %}{{ item.participants | join(', ') }}{% else %}—{% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -364,7 +436,47 @@
     </div>
     {% endif %}
 
-    <!-- Contacts (Local Support) -->
+    <!-- ============================================================
+         VENUES (unique venues referenced by this trip's items)
+         ============================================================ -->
+    {% if trip_venues %}
+    <div class="card">
+      <h2>🏢 Venues</h2>
+      {% for v in trip_venues %}
+      <div class="venue-block">
+        <h3>{{ v.name }}</h3>
+        {% if v.address %}
+        <div><span class="label">Address:</span> {{ v.address }}</div>
+        {% endif %}
+        {% if v.city or v.country %}
+        <div>
+          <span class="label">Location:</span>
+          {{ v.city or '' }}{% if v.city and v.country %}, {% endif %}{{ v.country or '' }}
+        </div>
+        {% endif %}
+        {% if v.wifi_ssid or v.wifi_password %}
+        <div>
+          <span class="label">WiFi:</span>
+          {{ v.wifi_ssid or '' }}{% if v.wifi_password %} / {{ v.wifi_password }}{% endif %}
+        </div>
+        {% endif %}
+        {% if v.badge_info %}
+        <div><span class="label">Badge Info:</span> {{ v.badge_info }}</div>
+        {% endif %}
+        {% if v.dress_code_notes %}
+        <div><span class="label">Dress Code:</span> {{ v.dress_code_notes }}</div>
+        {% endif %}
+        {% if v.notes %}
+        <div><span class="label">Notes:</span> {{ v.notes }}</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- ============================================================
+         LOCAL SUPPORT CONTACTS
+         ============================================================ -->
     {% if contacts %}
     <div class="card">
       <h2>📞 Local Support</h2>
@@ -382,7 +494,9 @@
     </div>
     {% endif %}
 
-    <!-- Receipts -->
+    <!-- ============================================================
+         RECEIPTS
+         ============================================================ -->
     {% if receipts %}
     <div class="card">
       <h2>🧾 Receipts</h2>
@@ -399,7 +513,10 @@
     </div>
     {% endif %}
 
-    <footer class="text-muted print-only">
+    <!-- ============================================================
+         FOOTER (print only)
+         ============================================================ -->
+    <footer class="footer-note print-only">
       Generated by Executive Travel Planner on {{ now.strftime('%Y-%m-%d %H:%M') }}
     </footer>
 

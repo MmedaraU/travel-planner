@@ -353,7 +353,7 @@ def generate_all_executive_profiles_doc(profiles):
 def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
     """
     Generate a self-contained HTML travel pack.
-    Includes contacts per item, delegation, and receipts.
+    Includes contacts per item, delegation, venue, and receipts.
     """
     trip = db.get_trip(trip_id)
     if not trip:
@@ -362,15 +362,33 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
     if not executive:
         executive = {}
 
+    trip_venues = db.get_venues_for_trip(trip_id)
     stops = db.get_trip_stops(trip_id)
     items = db.get_items_for_trip(trip_id)
     contacts = db.get_trip_contacts(trip_id)
+    trip_venues = db.get_venues_for_trip(trip_id)
     memberships = db.get_memberships(trip["exec_id"])
 
+    # ---- Delegation: only members assigned to items on this trip ----
+    company_id_for_delegation = executive.get("company_id") if executive else None
+    delegation = []
+    if company_id_for_delegation:
+        assigned_ids = set()
+        for item in items:
+            for m in db.get_item_delegation_members(item["id"]):
+                assigned_ids.add(m["id"])
+        if assigned_ids:
+            all_members = db.get_delegation_members(
+                company_id_for_delegation, active_only=True
+            )
+            delegation = [m for m in all_members if m["id"] in assigned_ids]
+
+    # ---- Budget totals ----
     total_spent = sum(i.get("cost", 0) for i in items)
     confirmed_spent = sum(i.get("cost", 0) for i in items if i.get("is_confirmed", 0))
     estimated_spent = total_spent - confirmed_spent
 
+    # ---- Format items with timezone + participants + contacts ----
     formatted_items = []
     receipts = []
     fallback_tz = pytz.timezone(exec_timezone)
@@ -379,7 +397,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         item_tz_str = item.get("timezone") or exec_timezone
         try:
             item_tz = pytz.timezone(item_tz_str)
-        except:
+        except Exception:
             item_tz = fallback_tz
 
         dt_naive = datetime.fromisoformat(item["datetime_start"])
@@ -393,7 +411,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         dt_display = dt_aware.astimezone(display_tz)
         formatted_time = dt_display.strftime("%d-%m-%Y %H:%M %Z")
 
-        # Delegation members
+        # Delegation members assigned to this item
         delegation_members = db.get_item_delegation_members(item["id"])
         delegation_names = (
             [m["name"] for m in delegation_members] if delegation_members else []
@@ -402,6 +420,13 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         # Contacts assigned to this item
         item_contacts = db.get_item_contacts(item["id"])
         contact_names = [c["name"] for c in item_contacts] if item_contacts else []
+
+        # ---- Venue lookup for this item ----
+        venue_name_for_item = None
+        if item.get("venue_id"):
+            v = db.get_venue(item["venue_id"])
+            if v:
+                venue_name_for_item = v["name"]
 
         item_dict = {
             "id": item["id"],
@@ -414,11 +439,15 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
             "notes": item.get("notes", ""),
             "is_confirmed": item.get("is_confirmed", 0),
             "formatted_time": formatted_time,
-            "participants": delegation_names,  # template uses 'participants' for delegation
-            "contacts": contact_names,  # new field
+            "participants": delegation_names,  # used for Agenda attendees
+            "contacts": contact_names,  # for future use
+            "venue_id": item.get("venue_id"),
+            "venue_name": venue_name_for_item,
+            "venue_id": item.get("venue_id"),
         }
         formatted_items.append(item_dict)
 
+        # Collect receipts
         receipt_path = item.get("receipt_path")
         if receipt_path and os.path.exists(receipt_path):
             with open(receipt_path, "rb") as f:
@@ -435,9 +464,11 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
                     {"description": item["description"], "data_uri": data_uri}
                 )
 
+    # ---- Build context for Jinja2 ----
     context = {
         "trip": trip,
         "executive": executive,
+        "delegation": delegation,  # <-- ADDED (fixes missing Delegation section)
         "stops": stops,
         "items": formatted_items,
         "contacts": contacts,
@@ -446,6 +477,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         "confirmed_spent": confirmed_spent,
         "estimated_spent": estimated_spent,
         "receipts": receipts,
+        "trip_venues": trip_venues,
         "now": datetime.now(),
     }
 
@@ -558,7 +590,7 @@ def generate_company_profile_docx(company_id):
     return file_stream
 
 
-def generate_travel_pack_pdf(trip_id, exec_timezone, display_mode="Executive Home"):
+def generate_travel_pack_pdf(trip_id, exec_timezone, display_mode="Home"):
     """
     Generate a PDF version of the travel pack using WeasyPrint.
     Returns a BytesIO stream.
@@ -570,83 +602,167 @@ def generate_travel_pack_pdf(trip_id, exec_timezone, display_mode="Executive Hom
     return io.BytesIO(pdf_bytes)
 
 
-def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Executive Home"):
+def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
     """
     Generate a Word (.docx) version of the travel pack.
+    Mirrors the HTML travel pack structure with the same sections.
     """
     trip = db.get_trip(trip_id)
     if not trip:
         return None
+
     executive = db.get_executive_profile(trip["exec_id"])
+    if not executive:
+        executive = {}
+
+    venue = db.get_venue(trip_id)
     stops = db.get_trip_stops(trip_id)
     items = db.get_items_for_trip(trip_id)
     contacts = db.get_trip_contacts(trip_id)
-    delegation = db.get_delegation_members(
-        executive["company_id"] if executive else None, active_only=True
-    )
+    trip_venues = db.get_venues_for_trip(trip_id)
 
+    # ---- Delegation: only members assigned to items on this trip ----
+    company_id_for_delegation = executive.get("company_id") if executive else None
+    delegation = []
+    if company_id_for_delegation:
+        assigned_ids = set()
+        for item in items:
+            for m in db.get_item_delegation_members(item["id"]):
+                assigned_ids.add(m["id"])
+        if assigned_ids:
+            all_members = db.get_delegation_members(
+                company_id_for_delegation, active_only=True
+            )
+            delegation = [m for m in all_members if m["id"] in assigned_ids]
+
+    # ---- Budget totals ----
+    total_spent = sum(i.get("cost", 0) for i in items)
+    confirmed_spent = sum(i.get("cost", 0) for i in items if i.get("is_confirmed", 0))
+    estimated_spent = total_spent - confirmed_spent
+
+    # =========================================================
+    # BUILD THE DOCUMENT
+    # =========================================================
     doc = Document()
+
+    # ---- Cover / Trip Overview ----
     doc.add_heading(trip.get("purpose", "Travel Pack"), 0)
 
-    # Trip overview
     doc.add_heading("Trip Overview", level=1)
-    doc.add_paragraph(
-        f"From: {trip.get('departure_city', 'N/A')} {trip.get('departure_region', '')} {trip.get('departure_country', '')}"
-    )
-    doc.add_paragraph(f"Dates: {trip['start_date'][:10]} – {trip['end_date'][:10]}")
-    doc.add_paragraph(
-        f"Budget: {trip.get('budget', 0):.2f} {trip.get('base_currency', 'USD')}"
-    )
+    dep_parts = [
+        p for p in [
+            trip.get("departure_city"),
+            trip.get("departure_region"),
+            trip.get("departure_country"),
+        ] if p
+    ]
+    departure_display = ", ".join(dep_parts) if dep_parts else "Not specified"
+    dest_display = stops[0]["city"] if stops else "N/A"
 
-    # Delegation
-    doc.add_heading("Delegation", level=1)
-    for member in delegation:
-        p = doc.add_paragraph()
-        p.add_run(f"{member['name']}").bold = True
-        if member.get("role"):
-            p.add_run(f" ({member['role']})")
-        if member.get("email"):
-            p.add_run(f"\nEmail: {member['email']}")
-        if member.get("phone"):
-            p.add_run(f"\nPhone: {member['phone']}")
+    overview_table = doc.add_table(rows=1, cols=2)
+    overview_table.style = "Table Grid"
+    hdr = overview_table.rows[0].cells
+    hdr[0].text = "Detail"
+    hdr[1].text = "Value"
 
-    # Stops
+    overview_rows = [
+        ("From", departure_display),
+        ("To", dest_display),
+        ("Dates", f"{trip['start_date'][:10]} – {trip['end_date'][:10]}"),
+        ("Status", trip.get("status", "").title()),
+        ("Budget", f"{trip.get('budget', 0):.2f} {trip.get('base_currency', 'USD')}"),
+        ("Total Spent", f"{total_spent:.2f} {trip.get('base_currency', 'USD')}"),
+        ("Confirmed", f"{confirmed_spent:.2f} {trip.get('base_currency', 'USD')}"),
+        ("Estimated", f"{estimated_spent:.2f} {trip.get('base_currency', 'USD')}"),
+    ]
+    for label, value in overview_rows:
+        row = overview_table.add_row().cells
+        row[0].text = label
+        row[1].text = str(value)
+
+    # ---- Delegation ----
+    if delegation:
+        doc.add_heading("Delegation", level=1)
+        table = doc.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        hdr[0].text = "Name"
+        hdr[1].text = "Role"
+        hdr[2].text = "Email"
+        hdr[3].text = "Phone"
+        for member in delegation:
+            row = table.add_row().cells
+            row[0].text = member.get("name", "")
+            row[1].text = member.get("role", "")
+            row[2].text = member.get("email", "")
+            row[3].text = member.get("phone", "")
+
+    # ---- Route (Stops) ----
     if stops:
         doc.add_heading("Route", level=1)
         for stop in stops:
             loc = stop["city"]
+            loc_parts = []
+            if stop.get("region"):
+                loc_parts.append(stop["region"])
             if stop.get("country"):
-                loc += f", {stop['country']}"
+                loc_parts.append(stop["country"])
+            if loc_parts:
+                loc += f" ({', '.join(loc_parts)})"
             doc.add_paragraph(
                 f"{loc}: {stop['start_date'][:10]} to {stop['end_date'][:10]}",
                 style="List Bullet",
             )
 
-    # Itinerary (flights, transport, hotels)
+    # ---- Itinerary (Flights & Transport only) ----
     itinerary_items = [
-        item for item in items if item["item_type"] in ["Flight", "Transport", "Hotel"]
+        item for item in items if item["item_type"] in ["Flight", "Transport"]
     ]
     if itinerary_items:
         doc.add_heading("Itinerary", level=1)
-        table = doc.add_table(rows=1, cols=5)
+        table = doc.add_table(rows=1, cols=6)
         table.style = "Table Grid"
         hdr = table.rows[0].cells
-        hdr[0].text = "Date/Time"
-        hdr[1].text = "Type"
-        hdr[2].text = "Description"
-        hdr[3].text = "Location"
-        hdr[4].text = "Cost"
+        headers = ["Date/Time", "Type", "Description", "Location", "Confirmation", "Cost"]
+        for i, h in enumerate(headers):
+            hdr[i].text = h
+            hdr[i].paragraphs[0].runs[0].bold = True
+
         for item in itinerary_items:
             row = table.add_row().cells
             row[0].text = item["datetime_start"][:16]
             row[1].text = item["item_type"]
             row[2].text = item["description"]
             row[3].text = item.get("location", "")
-            row[4].text = (
+            row[4].text = item.get("confirmation_code", "") or "—"
+            row[5].text = (
                 f"{item.get('cost', 0):.2f} {item.get('cost_currency', 'USD')}"
             )
 
-    # Agenda (meetings, conferences, dinners, site visits)
+    # ---- Hotels (separate section) ----
+    hotels = [item for item in items if item["item_type"] == "Hotel"]
+    if hotels:
+        doc.add_heading("Hotels", level=1)
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        headers = ["Check-in / Check-out", "Hotel", "Location", "Confirmation", "Cost"]
+        for i, h in enumerate(headers):
+            hdr[i].text = h
+            hdr[i].paragraphs[0].runs[0].bold = True
+
+        for hotel in hotels:
+            row = table.add_row().cells
+            end_str = hotel["datetime_end"][:16] if hotel.get("datetime_end") else ""
+            row[0].text = f"{hotel['datetime_start'][:16]} – {end_str}" if end_str else hotel["datetime_start"][:16]
+            row[1].text = hotel["description"]
+            row[2].text = hotel.get("location", "")
+            row[3].text = hotel.get("confirmation_code", "") or "—"
+            row[4].text = (
+                f"{hotel.get('cost', 0):.2f} {hotel.get('cost_currency', 'USD')}"
+            )
+
+    # ---- Agenda (Meetings, Conferences, Dinners, Site Visits) ----
     agenda_items = [
         item
         for item in items
@@ -657,43 +773,91 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Executive Ho
         table = doc.add_table(rows=1, cols=5)
         table.style = "Table Grid"
         hdr = table.rows[0].cells
-        hdr[0].text = "Date/Time"
-        hdr[1].text = "Type"
-        hdr[2].text = "Description"
-        hdr[3].text = "Location"
-        hdr[4].text = "Attendees"
+        headers = ["Date/Time", "Type", "Description", "Location", "Attendees"]
+        for i, h in enumerate(headers):
+            hdr[i].text = h
+            hdr[i].paragraphs[0].runs[0].bold = True
+
         for item in agenda_items:
             row = table.add_row().cells
             row[0].text = item["datetime_start"][:16]
             row[1].text = item["item_type"]
             row[2].text = item["description"]
             row[3].text = item.get("location", "")
-            # Get attendees from delegation (if any)
+            # Venue name
+            venue_name = ""
+            if item.get("venue_id"):
+                v = db.get_venue(item["venue_id"])
+                if v:
+                    venue_name = v["name"]
+            row[4].text = venue_name or "—"
             attendees = db.get_item_delegation_members(item["id"])
             attendee_names = ", ".join([a["name"] for a in attendees])
             row[4].text = attendee_names or "—"
 
-    # Contacts
+    # ---- Venues (unique venues referenced by this trip's items) ----
+    if trip_venues:
+        doc.add_heading("Venues", level=1)
+        for v in trip_venues:
+            p = doc.add_paragraph()
+            p.add_run(v["name"]).bold = True
+            if v.get("address"):
+                p.add_run(f"\nAddress: {v['address']}")
+            location_parts = [x for x in [v.get("city"), v.get("country")] if x]
+            if location_parts:
+                p.add_run(f"\nLocation: {', '.join(location_parts)}")
+            if v.get("wifi_ssid") or v.get("wifi_password"):
+                p.add_run(
+                    f"\nWiFi: {v.get('wifi_ssid', '')} / {v.get('wifi_password', '')}"
+                )
+            if v.get("badge_info"):
+                p.add_run(f"\nBadge Info: {v['badge_info']}")
+            if v.get("dress_code_notes"):
+                p.add_run(f"\nDress Code: {v['dress_code_notes']}")
+            if v.get("notes"):
+                p.add_run(f"\nNotes: {v['notes']}")
+            doc.add_paragraph()  # spacing
+
+
+    # ---- Local Support Contacts ----
     if contacts:
         doc.add_heading("Local Support", level=1)
-        for c in contacts:
-            p = doc.add_paragraph()
-            p.add_run(c["name"]).bold = True
-            if c.get("role"):
-                p.add_run(f" ({c['role']})")
-            p.add_run(
-                f"\n📞 {c.get('phone', '')}  ✉️ {c.get('email', '')}  🌍 {c.get('country', '')}"
-            )
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        headers = ["Name", "Role", "Phone", "Email", "Country"]
+        for i, h in enumerate(headers):
+            hdr[i].text = h
+            hdr[i].paragraphs[0].runs[0].bold = True
 
-    # Receipts – embed images if possible
-    for item in items:
-        if item.get("receipt_path") and os.path.exists(item["receipt_path"]):
-            doc.add_heading("Receipts", level=1)
+        for c in contacts:
+            row = table.add_row().cells
+            row[0].text = c.get("name", "")
+            row[1].text = c.get("role", "")
+            row[2].text = c.get("phone", "")
+            row[3].text = c.get("email", "")
+            row[4].text = c.get("country", "")
+
+    # ---- Receipts ----
+    receipt_items = [
+        item for item in items
+        if item.get("receipt_path") and os.path.exists(item["receipt_path"])
+    ]
+    if receipt_items:
+        doc.add_heading("Receipts", level=1)
+        for item in receipt_items:
             try:
                 doc.add_picture(item["receipt_path"], width=Inches(2))
                 doc.add_paragraph(item["description"])
-            except:
+                doc.add_paragraph()  # spacing
+            except Exception:
                 pass
+
+    # ---- Footer ----
+    doc.add_page_break()
+    doc.add_paragraph(
+        f"Generated by Executive Travel Planner on {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    )
 
     file_stream = io.BytesIO()
     doc.save(file_stream)
