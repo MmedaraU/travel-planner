@@ -479,6 +479,91 @@
     </div>
     {% endif %}
 
+
+
+    <!-- Emergency Info -->
+    {% if emergency_hospitals or trip_emergency_numbers %}
+    <div class="card">
+      <h2>🚨 Emergency Info</h2>
+
+      {% if trip_emergency_numbers %}
+      <h3 style="margin-top: 8px; margin-bottom: 8px; font-size: 1.15rem;">Emergency Services</h3>
+      {% for loc, nums in trip_emergency_numbers.items() %}
+      <div style="margin-bottom: 16px;">
+        <strong>{{ loc }}</strong>
+        <div style="margin-left: 16px;">
+          {% if nums.police %}<div>🚓 Police: {{ nums.police }}</div>{% endif %}
+          {% if nums.ambulance %}<div>🚑 Ambulance: {{ nums.ambulance }}</div>{% endif %}
+          {% if nums.fire %}<div>🚒 Fire: {{ nums.fire }}</div>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+      {% endif %}
+
+      {% if emergency_hospitals %}
+      <h3 style="margin-top: 16px; margin-bottom: 8px; font-size: 1.15rem;">Nearest Hospitals</h3>
+      {% for h in emergency_hospitals %}
+      <div style="margin-bottom: 16px;">
+        <strong>{{ h.name }}</strong>
+        {% if h.city %}<span class="text-muted"> · {{ h.city }}{% if h.country %}, {{ h.country }}{% endif %}</span>{%
+        endif
+        %}
+        {% if h.address %}<div>🏠 {{ h.address }}</div>{% endif %}
+        {% if h.phone %}<div>📞 {{ h.phone }}</div>{% endif %}
+        {% if h.maps_url %}<div><a href="{{ h.maps_url }}" target="_blank">Open in Maps</a></div>{% endif %}
+        {% if h.notes %}<div class="text-muted">{{ h.notes }}</div>{% endif %}
+      </div>
+      {% endfor %}
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Weather (as of generation time) -->
+    {% if weather %}
+    <div class="card">
+      <h2>🌦️ Weather</h2>
+      <div class="subhead">
+        <span class="label">Location:</span> {{ weather.location }}
+        &nbsp;|&nbsp; <span class="label">Fetched:</span> {{ weather.fetched_at[:16] }}
+      </div>
+      <div class="row">
+        <div class="col">
+          <span class="label">Now:</span>
+          {{ weather.current.icon }} {{ weather.current.temp }}°C — {{ weather.current.desc }}
+        </div>
+        <div class="col">
+          <span class="label">Humidity:</span> {{ weather.current.humidity }}%
+        </div>
+        <div class="col">
+          <span class="label">Wind:</span> {{ weather.current.wind }} km/h
+        </div>
+      </div>
+      <table style="margin-top: 12px;">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Condition</th>
+            <th>High / Low</th>
+            <th>Precipitation</th>
+            <th>UV Index</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in weather.daily %}
+          <tr>
+            <td>{{ d.date }}</td>
+            <td>{{ d.icon }} {{ d.desc }}</td>
+            <td>{{ d.max }}° / {{ d.min }}°</td>
+            <td>{{ d.precip }} mm</td>
+            <td>{{ d.uv }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+
     <!-- ============================================================
          LOCAL SUPPORT CONTACTS
          ============================================================ -->

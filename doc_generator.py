@@ -364,6 +364,33 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
 
     trip_venues = db.get_venues_for_trip(trip_id)
     expense_summary = db.get_expense_summary(trip_id)
+
+        # ---- Emergency info ----
+    emergency_hospitals = db.get_hospitals_for_trip(trip_id)
+
+    # Country-level emergency numbers from Destination Guides
+    trip_emergency_numbers = {}
+    for stop in stops:
+        country = (stop.get("country") or "").strip()
+        if country and country not in trip_emergency_numbers:
+            dg = db.get_destination_guide_by_country(country)
+            if dg:
+                trip_emergency_numbers[country] = {
+                    "police": dg.get("emergency_police"),
+                    "ambulance": dg.get("emergency_ambulance"),
+                    "fire": dg.get("emergency_fire"),
+                }
+
+    # ---- Weather (from cache only, no live API call) ----
+    weather_data = None
+    if stops:
+        try:
+            import weather as weather_module
+            weather_data = weather_module.get_weather(stops[0]["city"])
+        except Exception:
+            weather_data = None
+
+
         # ---- Packing lists (per member) ----
     packing_lists = []
     for member in db.get_trip_delegation_members(trip_id):
@@ -517,6 +544,9 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         "total_spent_expenses": total_spent_expenses,
         "packing_lists": packing_lists,
         "trip_checklists": trip_checklists,
+        "emergency_hospitals": emergency_hospitals,
+        "trip_emergency_numbers": trip_emergency_numbers,
+        "weather": weather_data,
     }
 
     env = Environment(loader=FileSystemLoader("templates"))
@@ -902,7 +932,6 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
             row[4].text = f"{s['spent']:.2f}"
             row[5].text = f"{s['remaining']:.2f}"
 
-
     # ---- Packing Lists (per traveler) ----
     packing_lists_docx = []
     for member in db.get_trip_delegation_members(trip_id):
@@ -947,7 +976,91 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
             for it in items:
                 prefix = "☑ " if it["is_done"] else "☐ "
                 doc.add_paragraph(f"{prefix}{it['item_text']}", style="List Bullet")
-                
+
+    # ---- Emergency Info ----
+    emergency_hospitals = db.get_hospitals_for_trip(trip_id)
+    trip_emergency_numbers = {}
+    for stop in stops:
+        country = (stop.get("country") or "").strip()
+        if country and country not in trip_emergency_numbers:
+            dg = db.get_destination_guide_by_country(country)
+            if dg:
+                trip_emergency_numbers[country] = {
+                    "police": dg.get("emergency_police"),
+                    "ambulance": dg.get("emergency_ambulance"),
+                    "fire": dg.get("emergency_fire"),
+                }
+
+    if emergency_hospitals or trip_emergency_numbers:
+        doc.add_heading("Emergency Info", level=1)
+
+        if trip_emergency_numbers:
+            doc.add_heading("Emergency Services", level=2)
+            for loc, nums in trip_emergency_numbers.items():
+                p = doc.add_paragraph()
+                p.add_run(loc).bold = True
+                for label, val in [
+                    ("Police", nums.get("police")),
+                    ("Ambulance", nums.get("ambulance")),
+                    ("Fire", nums.get("fire")),
+                ]:
+                    if val:
+                        p.add_run(f"\n{label}: {val}")
+
+        if emergency_hospitals:
+            doc.add_heading("Nearest Hospitals", level=2)
+            for h in emergency_hospitals:
+                p = doc.add_paragraph()
+                p.add_run(h["name"]).bold = True
+                if h.get("city"):
+                    loc_str = h["city"] + (
+                        f", {h['country']}" if h.get("country") else ""
+                    )
+                    p.add_run(f" — {loc_str}")
+                if h.get("address"):
+                    p.add_run(f"\nAddress: {h['address']}")
+                if h.get("phone"):
+                    p.add_run(f"\nPhone: {h['phone']}")
+                if h.get("maps_url"):
+                    p.add_run(f"\nMaps: {h['maps_url']}")
+                if h.get("notes"):
+                    p.add_run(f"\nNotes: {h['notes']}")
+
+    # ---- Weather ----
+    weather_data = None
+    if stops:
+        try:
+            import weather as weather_module
+
+            weather_data = weather_module.get_weather(stops[0]["city"])
+        except Exception:
+            weather_data = None
+
+    if weather_data:
+        doc.add_heading("Weather", level=1)
+        doc.add_paragraph(
+            f"Location: {weather_data['location']}  ·  Fetched: {weather_data['fetched_at'][:16]}"
+        )
+        cur = weather_data["current"]
+        doc.add_paragraph(
+            f"Now: {cur['icon']} {cur['temp']}°C — {cur['desc']}  ·  "
+            f"Humidity: {cur['humidity']}%  ·  Wind: {cur['wind']} km/h"
+        )
+        table = doc.add_table(rows=1, cols=5)
+        table.style = "Table Grid"
+        hdr = table.rows[0].cells
+        headers = ["Date", "Condition", "High / Low", "Precipitation", "UV Index"]
+        for i, h in enumerate(headers):
+            hdr[i].text = h
+            hdr[i].paragraphs[0].runs[0].bold = True
+        for d in weather_data["daily"]:
+            row = table.add_row().cells
+            row[0].text = d["date"]
+            row[1].text = f"{d['icon']} {d['desc']}"
+            row[2].text = f"{d['max']}° / {d['min']}°"
+            row[3].text = f"{d['precip']} mm"
+            row[4].text = f"{d['uv']}"
+
     # ---- Receipts ----
     receipt_items = [
         item for item in items

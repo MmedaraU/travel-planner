@@ -551,7 +551,6 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_expenses_trip ON expenses(trip_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_expenses_member ON expenses(member_id)")
 
-
     # =========================================================
     # PHASE 4 – Packing Lists & Trip Checklists
     # =========================================================
@@ -606,6 +605,26 @@ def init_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_packing_items_list ON packing_items(list_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_trip_checklists_trip ON trip_checklists(trip_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_trip_checklist_items ON trip_checklist_items(checklist_id)")
+
+    # =========================================================
+    # PHASE 5 – Hospitals (city-level emergency info)
+    # =========================================================
+
+    c.execute("""CREATE TABLE IF NOT EXISTS hospitals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        city TEXT NOT NULL,
+        country TEXT,
+        name TEXT NOT NULL,
+        address TEXT,
+        phone TEXT,
+        maps_url TEXT,
+        notes TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )""")
+
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hospitals_city ON hospitals(city)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_hospitals_country ON hospitals(country)")
 
 # =========================================================
 # COMPANY MANAGEMENT
@@ -2507,6 +2526,7 @@ def export_all_data():
         "packing_items",
         "trip_checklists",
         "trip_checklist_items",
+        "hospitals"
     ]
     data = {}
     for table in tables:
@@ -3594,3 +3614,99 @@ def apply_checklist_template(trip_id, template_id):
     for i, text in enumerate(items):
         add_checklist_item(checklist_id, text, sort_order=i)
     return checklist_id
+# =========================================================
+# HOSPITALS
+# =========================================================
+
+
+def add_hospital(
+    city, country, name, address=None, phone=None, maps_url=None, notes=None
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO hospitals
+                 (city, country, name, address, phone, maps_url, notes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (city, country, name, address, phone, maps_url, notes),
+    )
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    return new_id
+
+
+def get_hospitals(city=None, country=None, active_only=True):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    conditions = []
+    params = []
+    if active_only:
+        conditions.append("is_active = 1")
+    if city:
+        conditions.append("city = ?")
+        params.append(city)
+    if country:
+        conditions.append("country = ?")
+        params.append(country)
+    query = "SELECT * FROM hospitals"
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY country, city, name"
+    c.execute(query, params)
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_hospital(hospital_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM hospitals WHERE id = ?", (hospital_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_hospital(hospital_id, **kwargs):
+    if not kwargs:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    fields = []
+    params = []
+    for k, v in kwargs.items():
+        fields.append(f"{k} = ?")
+        params.append(v)
+    params.append(hospital_id)
+    c.execute(f"UPDATE hospitals SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+
+def delete_hospital(hospital_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM hospitals WHERE id = ?", (hospital_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_hospitals_for_trip(trip_id):
+    """Return hospitals for the cities of a trip's stops."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT DISTINCT h.*
+                 FROM hospitals h
+                 JOIN trip_stops s ON LOWER(s.city) = LOWER(h.city)
+                 WHERE s.trip_id = ? AND h.is_active = 1
+                 ORDER BY s.stop_order, h.name""",
+        (trip_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]

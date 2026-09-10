@@ -21,6 +21,7 @@ from currency import get_currency_symbol
 import duplicate_detection
 import sqlite3
 import zipfile
+import weather
 
 # --- Venue dress code options (used in the Venues tab) ---
 DRESS_CODE_OPTIONS = [
@@ -2635,6 +2636,85 @@ with tab3:
                                             f"modal_items_{trip_id_modal}", None
                                         )
                                         st.rerun()
+
+                            # ---- Weather Widget ----
+                            st.write("**🌦️ Weather**")
+                            trip_stops_weather = st.session_state.get(
+                                f"modal_stops_{trip_id_modal}", []
+                            )
+                            if not trip_stops_weather:
+                                trip_stops_weather = db.get_trip_stops(trip_id_modal)
+
+                            if not trip_stops_weather:
+                                st.caption("Add at least one stop to see weather.")
+                            else:
+                                weather_city = trip_stops_weather[0]["city"]
+                                col_wbtn, col_winfo = st.columns([1, 3])
+                                with col_wbtn:
+                                    if st.button(
+                                        f"🌤️ Get weather",
+                                        key=f"get_weather_{trip_id_modal}",
+                                        help=f"Fetch live weather for {weather_city}",
+                                    ):
+                                        with st.spinner(
+                                            f"Fetching weather for {weather_city}..."
+                                        ):
+                                            w = weather.get_weather(weather_city)
+                                        if w:
+                                            st.session_state[
+                                                f"weather_{trip_id_modal}"
+                                            ] = w
+                                            st.rerun()
+                                        else:
+                                            st.warning(
+                                                f"Could not fetch weather for '{weather_city}'. "
+                                                f"Check the city name."
+                                            )
+                                with col_winfo:
+                                    st.caption(f"City: **{weather_city}**")
+
+                                # Show cached weather if we have it
+                                cached_weather = st.session_state.get(
+                                    f"weather_{trip_id_modal}"
+                                )
+                                if cached_weather:
+                                    cur = cached_weather["current"]
+                                    st.caption(
+                                        f"📍 {cached_weather['location']} · "
+                                        f"fetched {cached_weather['fetched_at'][:16]}"
+                                    )
+
+                                    col_w1, col_w2, col_w3, col_w4 = st.columns(4)
+                                    with col_w1:
+                                        st.metric(
+                                            "Now",
+                                            f"{cur['temp']}°C",
+                                            cur["icon"],
+                                        )
+                                    with col_w2:
+                                        st.metric("Humidity", f"{cur['humidity']}%")
+                                    with col_w3:
+                                        st.metric("Wind", f"{cur['wind']} km/h")
+                                    with col_w4:
+                                        st.caption(cur["desc"])
+
+                                    with st.expander(
+                                        "📅 5-Day Forecast", expanded=False
+                                    ):
+                                        for d in cached_weather["daily"]:
+                                            col_d1, col_d2, col_d3, col_d4 = st.columns(
+                                                [2, 1, 1, 1]
+                                            )
+                                            with col_d1:
+                                                st.write(f"{d['icon']} {d['date']}")
+                                            with col_d2:
+                                                st.write(
+                                                    f"**{d['max']}°** / {d['min']}°"
+                                                )
+                                            with col_d3:
+                                                st.write(f"☔ {d['precip']} mm")
+                                            with col_d4:
+                                                st.write(f"UV {d['uv']}")
 
                             # ---- Stops management ----
                             st.write("**📍 Stops**")
@@ -5466,12 +5546,13 @@ with tab7:
         "and reusable checklists and packing templates."
     )
 
-    lib_tab1, lib_tab2, lib_tab3, lib_tab4 = st.tabs(
+    lib_tab1, lib_tab2, lib_tab3, lib_tab4, lib_tab5 = st.tabs(
         [
             "🌍 Destination Guides",
             "🛂 Visa Rules",
             "✅ Checklist Templates",
             "🎒 Packing Templates",
+            "🚨 Hospitals",
         ]
     )
 
@@ -6173,5 +6254,208 @@ with tab7:
                     with c2:
                         if st.button("❌ Cancel", key=f"confirm_del_pt_no_{tid}"):
                             st.session_state.pop(f"confirm_del_pt_{tid}", None)
+                            st.rerun()
+                st.divider()
+    # ==============================================================
+    # SUB-TAB 5: Hospitals
+    # ==============================================================
+    with lib_tab5:
+        st.subheader("🚨 Hospitals")
+        st.caption(
+            "City-level hospital directory, used in the travel pack's Emergency section."
+        )
+
+        # ---- Add ----
+        with st.expander("➕ Add New Hospital", expanded=False):
+            with st.form("add_hospital_form"):
+                country_list = sorted([c.name for c in pycountry.countries])
+                col1, col2 = st.columns(2)
+                with col1:
+                    h_city = st.text_input("City*", key="h_city")
+                    h_name = st.text_input("Hospital Name*", key="h_name")
+                    h_phone = st.text_input("Phone", key="h_phone")
+                with col2:
+                    h_country = st.selectbox(
+                        "Country", options=[""] + country_list, key="h_country"
+                    )
+                    h_address = st.text_input("Address", key="h_address")
+                    h_maps = st.text_input(
+                        "Google Maps URL",
+                        key="h_maps",
+                        placeholder="https://maps.google.com/...",
+                    )
+                h_notes = st.text_area("Note", key="h_notes", height=80)
+
+                if st.form_submit_button("➕ Add Hospital"):
+                    if not h_city or not h_name:
+                        st.warning("City and Hospital Name are required.")
+                    else:
+                        db.add_hospital(
+                            city=h_city,
+                            country=h_country,
+                            name=h_name,
+                            address=h_address or None,
+                            phone=h_phone or None,
+                            maps_url=h_maps or None,
+                            notes=h_notes or None,
+                        )
+                        st.success(f"✅ Hospital '{h_name}' added!")
+                        st.rerun()
+
+        # ---- Filter ----
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            hosp_search = st.text_input(
+                "🔍 Search", key="hosp_search", placeholder="City, country, name..."
+            )
+        with col_f2:
+            conn = sqlite3.connect(db.DB_PATH)
+            c = conn.cursor()
+            c.execute(
+                "SELECT DISTINCT country FROM hospitals WHERE country IS NOT NULL AND country != '' ORDER BY country"
+            )
+            hosp_countries = [row[0] for row in c.fetchall()]
+            conn.close()
+            hosp_country_filter = st.selectbox(
+                "Filter by Country",
+                options=["All Countries"] + hosp_countries,
+                index=0,
+                key="hosp_country_filter",
+            )
+            hosp_filter_country = (
+                None if hosp_country_filter == "All Countries" else hosp_country_filter
+            )
+
+        # ---- List ----
+        all_hospitals = db.get_hospitals(country=hosp_filter_country, active_only=False)
+        if hosp_search:
+            s = hosp_search.lower()
+            all_hospitals = [
+                h
+                for h in all_hospitals
+                if s in (h.get("name") or "").lower()
+                or s in (h.get("city") or "").lower()
+                or s in (h.get("country") or "").lower()
+                or s in (h.get("address") or "").lower()
+            ]
+
+        if not all_hospitals:
+            st.info("No hospitals found.")
+        else:
+            st.write(f"**{len(all_hospitals)} hospital(s)**")
+            for h in all_hospitals:
+                hid = h["id"]
+                col1, col2, col3 = st.columns([3, 3, 1.2])
+                with col1:
+                    st.write(f"**{h['name']}**")
+                    loc = ", ".join([p for p in [h.get("city"), h.get("country")] if p])
+                    if loc:
+                        st.caption(f"📍 {loc}")
+                with col2:
+                    if h.get("address"):
+                        st.caption(f"🏠 {h['address']}")
+                    if h.get("phone"):
+                        st.write(f"📞 {h['phone']}")
+                    if h.get("maps_url"):
+                        st.markdown(f"[Open in Maps]({h['maps_url']})")
+                with col3:
+                    if st.button("✏️", key=f"edit_hosp_{hid}"):
+                        st.session_state[f"editing_hosp_{hid}"] = True
+
+                if not h.get("is_active", 1):
+                    st.caption("⚠️ Inactive")
+
+                # Edit
+                if st.session_state.get(f"editing_hosp_{hid}", False):
+                    with st.expander(f"Edit {h['name']}", expanded=True):
+                        with st.form(key=f"edit_hosp_form_{hid}"):
+                            country_list = sorted([c.name for c in pycountry.countries])
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                e_city = st.text_input(
+                                    "City*", value=h["city"], key=f"e_h_city_{hid}"
+                                )
+                                e_name = st.text_input(
+                                    "Hospital Name*",
+                                    value=h["name"],
+                                    key=f"e_h_name_{hid}",
+                                )
+                                e_phone = st.text_input(
+                                    "Phone",
+                                    value=h.get("phone") or "",
+                                    key=f"e_h_phone_{hid}",
+                                )
+                            with col2:
+                                e_country = st.selectbox(
+                                    "Country",
+                                    options=[""] + country_list,
+                                    index=(
+                                        ([""] + country_list).index(
+                                            h.get("country") or ""
+                                        )
+                                        if (h.get("country") or "") in country_list
+                                        else 0
+                                    ),
+                                    key=f"e_h_country_{hid}",
+                                )
+                                e_address = st.text_input(
+                                    "Address",
+                                    value=h.get("address") or "",
+                                    key=f"e_h_addr_{hid}",
+                                )
+                                e_maps = st.text_input(
+                                    "Google Maps URL",
+                                    value=h.get("maps_url") or "",
+                                    key=f"e_h_maps_{hid}",
+                                )
+                            e_notes = st.text_area(
+                                "Note",
+                                value=h.get("notes") or "",
+                                key=f"e_h_notes_{hid}",
+                                height=80,
+                            )
+                            e_active = st.checkbox(
+                                "Active",
+                                value=bool(h.get("is_active", 1)),
+                                key=f"e_h_act_{hid}",
+                            )
+
+                            c1, c2, c3 = st.columns(3)
+                            with c1:
+                                if st.form_submit_button("💾 Save"):
+                                    db.update_hospital(
+                                        hid,
+                                        city=e_city,
+                                        country=e_country,
+                                        name=e_name,
+                                        address=e_address,
+                                        phone=e_phone,
+                                        maps_url=e_maps,
+                                        notes=e_notes,
+                                        is_active=1 if e_active else 0,
+                                    )
+                                    st.session_state.pop(f"editing_hosp_{hid}", None)
+                                    st.success("Hospital updated!")
+                                    st.rerun()
+                            with c2:
+                                if st.form_submit_button("🗑️ Delete"):
+                                    st.session_state[f"confirm_del_hosp_{hid}"] = True
+                            with c3:
+                                if st.form_submit_button("❌ Cancel"):
+                                    st.session_state.pop(f"editing_hosp_{hid}", None)
+                                    st.rerun()
+
+                if st.session_state.get(f"confirm_del_hosp_{hid}", False):
+                    st.warning(f"⚠️ Permanently delete '{h['name']}'?")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ Yes", key=f"confirm_del_hosp_yes_{hid}"):
+                            db.delete_hospital(hid)
+                            st.session_state.pop(f"confirm_del_hosp_{hid}", None)
+                            st.session_state.pop(f"editing_hosp_{hid}", None)
+                            st.rerun()
+                    with c2:
+                        if st.button("❌ Cancel", key=f"confirm_del_hosp_no_{hid}"):
+                            st.session_state.pop(f"confirm_del_hosp_{hid}", None)
                             st.rerun()
                 st.divider()
