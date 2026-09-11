@@ -297,6 +297,25 @@
     </div>
 
     <!-- ============================================================
+                 RECEIPT UPLOAD FOLDER (optional)
+                 ============================================================ -->
+    {% if trip.receipt_upload_folder_url %}
+    <div class="card" style="border-left: 4px solid #10b981;">
+      <h2 style="margin-top: 0;">📥 Upload Receipts</h2>
+      <p style="margin-bottom: 8px;">
+        Delegation members: please upload your receipts (photos or PDFs) to the
+        shared folder below. The trip organizer will attach them to the expense report.
+      </p>
+      <p style="margin-bottom: 0;">
+        <a href="{{ trip.receipt_upload_folder_url }}" target="_blank" style="font-weight: 600; word-break: break-all;">
+          {{ trip.receipt_upload_folder_url }}
+        </a>
+      </p>
+    </div>
+    {% endif %}
+
+
+    <!-- ============================================================
          DELEGATION
          ============================================================ -->
     {% if delegation %}

@@ -35,6 +35,8 @@ def migrate_db():
         c.execute("ALTER TABLE trips ADD COLUMN display_currency TEXT DEFAULT 'USD'")
     if "trip_contacts" not in existing_trips:
         c.execute("ALTER TABLE trips ADD COLUMN trip_contacts TEXT")  # JSON array
+    if "receipt_upload_folder_url" not in existing_trips:
+        c.execute("ALTER TABLE trips ADD COLUMN receipt_upload_folder_url TEXT")
 
     # --- Columns for 'itinerary_items' table ---
     c.execute("PRAGMA table_info(itinerary_items)")
@@ -497,6 +499,7 @@ def init_db():
         base_currency TEXT DEFAULT 'USD',
         display_currency TEXT DEFAULT 'USD',
         trip_contacts TEXT,
+        receipt_upload_folder_url TEXT,
         FOREIGN KEY (exec_id) REFERENCES executives(id)
     )""")
 
@@ -1717,6 +1720,37 @@ def update_trip_currencies(trip_id, base_currency, display_currency):
         "UPDATE trips SET base_currency = ?, display_currency = ? WHERE id = ?",
         (base_currency, display_currency, trip_id),
     )
+    conn.commit()
+    conn.close()
+
+
+def update_trip_currencies(trip_id, base_currency, display_currency):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trips SET base_currency = ?, display_currency = ? WHERE id = ?",
+        (base_currency, display_currency, trip_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_trip_receipt_folder(trip_id, url):  # <-- NEW: paste this
+    """Set or clear the shared receipt-upload folder URL for a trip."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "UPDATE trips SET receipt_upload_folder_url = ? WHERE id = ?",
+        (url or None, trip_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_trip(trip_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM trips WHERE id = ?", (trip_id,))
     conn.commit()
     conn.close()
 
