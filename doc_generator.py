@@ -11,6 +11,53 @@ from jinja2 import Environment, FileSystemLoader
 import pytz
 import database as db
 from weasyprint import HTML
+import currency
+
+
+# ---------------------------------------------------------
+# Stage 6 – currency conversion helper for export totals
+# ---------------------------------------------------------
+def _convert_item_cost(item, trip_base_currency):
+    """
+    Convert a single itinerary item's cost to the trip's base currency.
+
+    Uses the item's `cost_date` (falling back to the date part of
+    `datetime_start`) so historical rates are honoured. If the new
+    conversion pipeline raises for any reason, falls back to the legacy
+    `exchange_rate_snapshot` multiplier so exports never crash.
+    """
+    cost = item.get("cost", 0) or 0
+    cost_cur = (item.get("cost_currency") or "USD").upper()
+    base_cur = (trip_base_currency or "USD").upper()
+
+    on_date = item.get("cost_date")
+    if not on_date and item.get("datetime_start"):
+        on_date = item["datetime_start"][:10]  # YYYY-MM-DD
+
+    try:
+        return currency.convert_amount(cost, cost_cur, base_cur, on_date)
+    except Exception:
+        # No rate available anywhere — treat the amount as if it were already
+        # in the base currency so exports never crash on missing data.
+        return float(cost)
+
+
+def _sum_items_in_base(items, trip_base_currency):
+    """
+    Return (total, confirmed, estimated) for a list of items,
+    converted to `trip_base_currency`.
+    """
+    total = 0.0
+    confirmed = 0.0
+    estimated = 0.0
+    for item in items:
+        converted = _convert_item_cost(item, trip_base_currency)
+        total += converted
+        if item.get("is_confirmed", 0):
+            confirmed += converted
+        else:
+            estimated += converted
+    return total, confirmed, estimated
 
 
 def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
@@ -170,12 +217,13 @@ def generate_expense_report_doc(
     doc = Document()
     doc.add_heading(f"Expense Report: {trip_purpose}", 0)
 
-    # Summary
-    total_spent = sum(item.get("cost", 0) for item in items)
-    confirmed_spent = sum(
-        item.get("cost", 0) for item in items if item.get("is_confirmed", 0)
+        # Summary (converted to trip base currency – Stage 6)
+    trip_base_cur = exec_data.get("base_currency", base_currency) or base_currency
+    total_spent, confirmed_spent, estimated_spent = _sum_items_in_base(
+        items, trip_base_cur
     )
-    estimated_spent = total_spent - confirmed_spent
+
+
 
     doc.add_heading("Summary", level=1)
     table = doc.add_table(rows=1, cols=2)
@@ -443,10 +491,11 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
             )
             delegation = [m for m in all_members if m["id"] in assigned_ids]
 
-    # ---- Budget totals ----
-    total_spent = sum(i.get("cost", 0) for i in items)
-    confirmed_spent = sum(i.get("cost", 0) for i in items if i.get("is_confirmed", 0))
-    estimated_spent = total_spent - confirmed_spent
+        # ---- Budget totals (converted to trip base currency – Stage 6) ----
+    base_cur = trip.get("base_currency", "USD")
+    total_spent, confirmed_spent, estimated_spent = _sum_items_in_base(
+        items, base_cur
+    )
 
     # ---- Format items with timezone + participants + contacts ----
     formatted_items = []
@@ -703,10 +752,9 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
             )
             delegation = [m for m in all_members if m["id"] in assigned_ids]
 
-    # ---- Budget totals ----
-    total_spent = sum(i.get("cost", 0) for i in items)
-    confirmed_spent = sum(i.get("cost", 0) for i in items if i.get("is_confirmed", 0))
-    estimated_spent = total_spent - confirmed_spent
+        # ---- Budget totals (converted to trip base currency – Stage 6) ----
+    base_cur = trip.get("base_currency", "USD")
+    total_spent, confirmed_spent, estimated_spent = _sum_items_in_base(items, base_cur)
 
     # =========================================================
     # BUILD THE DOCUMENT

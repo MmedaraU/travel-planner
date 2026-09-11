@@ -3,6 +3,7 @@ import os
 import json
 from datetime import date, datetime
 
+
 DB_PATH = "travel_planner.db"
 
 
@@ -45,8 +46,6 @@ def migrate_db():
         c.execute("ALTER TABLE itinerary_items ADD COLUMN receipt_path TEXT")
     if "cost_currency" not in existing_items:
         c.execute("ALTER TABLE itinerary_items ADD COLUMN cost_currency TEXT DEFAULT 'USD'")
-    if "exchange_rate_snapshot" not in existing_items:
-        c.execute("ALTER TABLE itinerary_items ADD COLUMN exchange_rate_snapshot REAL DEFAULT 1.0")
     if "timezone" not in existing_items:
         c.execute("ALTER TABLE itinerary_items ADD COLUMN timezone TEXT")
 
@@ -360,6 +359,36 @@ def migrate_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_items_venue ON itinerary_items(venue_id)")
 
     # =========================================================
+    # CURRENCY OVERHAUL – Stage 1: exchange_rates + cost_date
+    # =========================================================
+
+    # --- Exchange rates table ---
+    c.execute("""CREATE TABLE IF NOT EXISTS exchange_rates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rate_date TEXT NOT NULL,
+        base_currency TEXT NOT NULL,
+        target_currency TEXT NOT NULL,
+        rate REAL NOT NULL,
+        source TEXT,
+        fetched_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(rate_date, base_currency, target_currency)
+    )""")
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rates_pair_date "
+        "ON exchange_rates(base_currency, target_currency, rate_date)"
+    )
+
+    # --- Add cost_date to itinerary_items if missing ---
+    c.execute("PRAGMA table_info(itinerary_items)")
+    existing_items_now = [row[1] for row in c.fetchall()]
+    if "cost_date" not in existing_items_now:
+        c.execute("ALTER TABLE itinerary_items ADD COLUMN cost_date TEXT")
+        # Backfill: default cost_date to the date part of datetime_start
+        c.execute("""UPDATE itinerary_items
+                     SET cost_date = SUBSTR(datetime_start, 1, 10)
+                     WHERE cost_date IS NULL AND datetime_start IS NOT NULL""")
+
+    # =========================================================
     # PHASE 2 – Reusable Content Infrastructure
     # =========================================================
 
@@ -485,7 +514,6 @@ def init_db():
         is_confirmed INTEGER DEFAULT 0,
         receipt_path TEXT,
         cost_currency TEXT DEFAULT 'USD',
-        exchange_rate_snapshot REAL DEFAULT 1.0,
         timezone TEXT,
         FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE
     )""")
@@ -1778,9 +1806,11 @@ def duplicate_trip(trip_id, exec_id):
             item["notes"],
             item.get("is_confirmed", 0),
             item.get("cost_currency", "USD"),
-            item.get("exchange_rate_snapshot", 1.0),
             item.get("timezone"),
+            item.get("venue_id"),
+            item.get("cost_date"),
         )
+
 
     return new_trip_id
 
@@ -1873,9 +1903,9 @@ def add_itinerary_item(
     notes,
     is_confirmed=0,
     cost_currency="USD",
-    exchange_rate_snapshot=1.0,
     timezone=None,
     venue_id=None,
+    cost_date=None,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1883,7 +1913,7 @@ def add_itinerary_item(
         """
         INSERT INTO itinerary_items 
         (trip_id, item_type, description, datetime_start, datetime_end, location,
-         cost, confirmation_code, notes, is_confirmed, cost_currency, exchange_rate_snapshot, timezone, venue_id)
+         cost, confirmation_code, notes, is_confirmed, cost_currency, timezone, venue_id, cost_date)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
@@ -1898,16 +1928,15 @@ def add_itinerary_item(
             notes,
             is_confirmed,
             cost_currency,
-            exchange_rate_snapshot,
             timezone,
             venue_id,
+            cost_date,
         ),
     )
     conn.commit()
     new_id = c.lastrowid
     conn.close()
     return new_id
-
 
 def get_items_for_trip(trip_id):
     conn = sqlite3.connect(DB_PATH)
@@ -1938,9 +1967,9 @@ def update_itinerary_item(
     notes,
     is_confirmed,
     cost_currency="USD",
-    exchange_rate_snapshot=1.0,
     timezone=None,
     venue_id=None,
+    cost_date=None,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -1957,9 +1986,9 @@ def update_itinerary_item(
             notes = ?,
             is_confirmed = ?,
             cost_currency = ?,
-            exchange_rate_snapshot = ?,
-            timezone = ?
-            venue_id = ?
+            timezone = ?,
+            venue_id = ?,
+            cost_date = ?
         WHERE id = ?
     """,
         (
@@ -1973,9 +2002,9 @@ def update_itinerary_item(
             notes,
             is_confirmed,
             cost_currency,
-            exchange_rate_snapshot,
             timezone,
             venue_id,
+            cost_date,
             item_id,
         ),
     )
@@ -2035,53 +2064,122 @@ def get_trip_spending(trip_id):
     }
 
 
+# =========================================================
+# BUDGET & SPENDING FUNCTIONS
+# =========================================================
+
+
 def get_spending_summary(exec_id=None, company_id=None, start_date=None, end_date=None):
+    """
+    Return spending summary per trip.
+
+    Costs are converted to each trip's base currency using the exchange-rate
+    table (via currency.convert_amount) and the item's `cost_date` for
+    historical accuracy.
+
+    Falls back to the legacy `exchange_rate_snapshot` if conversion fails,
+    so the app never crashes on a missing rate.
+    """
+    # Local import to avoid a circular import at module load time.
+    import currency  # noqa: WPS433 (imported here on purpose)
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
-    query = """
-        SELECT 
-            t.id as trip_id,
-            e.name as executive_name,
-            c.name as company_name,
-            t.destination,
-            t.start_date,
-            t.end_date,
-            t.budget,
-            t.status,
-            t.base_currency,
-            t.display_currency,
-            COALESCE(SUM(i.cost * i.exchange_rate_snapshot), 0) as total_spent,
-            COALESCE(SUM(CASE WHEN i.is_confirmed = 1 THEN i.cost * i.exchange_rate_snapshot ELSE 0 END), 0) as confirmed_spent,
-            COALESCE(SUM(CASE WHEN i.is_confirmed = 0 THEN i.cost * i.exchange_rate_snapshot ELSE 0 END), 0) as estimated_spent
+    # ---- 1. Get trips matching the filters ----
+    trip_query = """
+        SELECT
+            t.*,
+            e.name AS executive_name,
+            c.name AS company_name
         FROM trips t
         JOIN executives e ON t.exec_id = e.id
         JOIN companies c ON e.company_id = c.id
-        LEFT JOIN itinerary_items i ON t.id = i.trip_id
         WHERE 1=1
     """
     params = []
 
     if exec_id:
-        query += " AND e.id = ?"
+        trip_query += " AND e.id = ?"
         params.append(exec_id)
     if company_id:
-        query += " AND c.id = ?"
+        trip_query += " AND c.id = ?"
         params.append(company_id)
     if start_date:
-        query += " AND t.start_date >= ?"
+        trip_query += " AND t.start_date >= ?"
         params.append(start_date)
     if end_date:
-        query += " AND t.end_date <= ?"
+        trip_query += " AND t.end_date <= ?"
         params.append(end_date)
 
-    query += " GROUP BY t.id ORDER BY t.start_date DESC"
+    trip_query += " ORDER BY t.start_date DESC"
 
-    c.execute(query, params)
-    rows = c.fetchall()
+    c.execute(trip_query, params)
+    trips = c.fetchall()
+
+    # ---- 2. For each trip, convert item costs to its base currency ----
+    summary = []
+    for trip in trips:
+        trip_id = trip["id"]
+        base_cur = (trip["base_currency"] or "USD").upper()
+
+        c.execute(
+            "SELECT * FROM itinerary_items WHERE trip_id = ?",
+            (trip_id,),
+        )
+        items = c.fetchall()
+
+        total = 0.0
+        confirmed = 0.0
+        estimated = 0.0
+
+        for item in items:
+            cost = item["cost"] or 0
+            cost_cur = (item["cost_currency"] or "USD").upper()
+
+            # Determine the date used for historical conversion.
+            on_date = item["cost_date"]
+            if not on_date and item["datetime_start"]:
+                on_date = item["datetime_start"][:10]  # "YYYY-MM-DD"
+
+            # Try the new conversion pipeline first.
+            try:
+                converted = currency.convert_amount(
+                    cost, cost_cur, base_cur, on_date
+                )
+            except Exception:
+                # No rate available anywhere — fall back to treating the
+                # amount as already being in the trip's base currency so
+                # the dashboard never crashes on missing data.
+                converted = float(cost)
+
+            total += converted
+            if item["is_confirmed"]:
+                confirmed += converted
+            else:
+                estimated += converted
+
+        summary.append(
+            {
+                "trip_id": trip_id,
+                "executive_name": trip["executive_name"],
+                "company_name": trip["company_name"],
+                "destination": trip["destination"],
+                "start_date": trip["start_date"],
+                "end_date": trip["end_date"],
+                "budget": trip["budget"] or 0,
+                "status": trip["status"],
+                "base_currency": base_cur,
+                "display_currency": trip["display_currency"],
+                "total_spent": total,
+                "confirmed_spent": confirmed,
+                "estimated_spent": estimated,
+            }
+        )
+
     conn.close()
-    return [dict(row) for row in rows]
+    return summary
 
 
 # =========================================================
@@ -2296,7 +2394,7 @@ def merge_database_data(data):
                 INSERT INTO itinerary_items 
                 (trip_id, item_type, description, datetime_start, datetime_end,
                  location, cost, cost_currency, is_confirmed, confirmation_code, notes,
-                 exchange_rate_snapshot, timezone)
+                 timezone, cost_date)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
@@ -2313,6 +2411,12 @@ def merge_database_data(data):
                     item.get("notes"),
                     1.0,
                     None,
+                    item.get("cost_date")
+                    or (
+                        item.get("datetime_start", "")[:10]
+                        if item.get("datetime_start")
+                        else None
+                    ),
                 ),
             )
             added_items += 1
@@ -2526,7 +2630,8 @@ def export_all_data():
         "packing_items",
         "trip_checklists",
         "trip_checklist_items",
-        "hospitals"
+        "hospitals",
+        "exchange_rates",
     ]
     data = {}
     for table in tables:
@@ -2582,22 +2687,25 @@ def apply_trip_template(
             stop.get("notes", ""),
         )
 
-    for item in template.get("items", []):
-        add_itinerary_item(
-            trip_id,
-            item.get("item_type", ""),
-            item.get("description", ""),
-            start_date.isoformat() + "T08:00:00",
-            start_date.isoformat() + "T09:00:00",
-            item.get("location", ""),
-            0,
-            item.get("confirmation_code", ""),
-            item.get("notes", ""),
-            0,
-            item.get("cost_currency", "USD"),
-            1.0,
-            None,
-        )
+        for item in template.get("items", []):
+            add_itinerary_item(
+                trip_id,
+                item.get("item_type", ""),
+                item.get("description", ""),
+                start_date.isoformat() + "T08:00:00",
+                start_date.isoformat() + "T09:00:00",
+                item.get("location", ""),
+                0,
+                item.get("confirmation_code", ""),
+                item.get("notes", ""),
+                0,
+                item.get("cost_currency", "USD"),
+                None,           # timezone
+                None,           # venue_id
+                start_date.isoformat(),  # cost_date
+            )
+
+
 
     return trip_id
 
@@ -3710,3 +3818,71 @@ def get_hospitals_for_trip(trip_id):
     rows = c.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+# =========================================================
+# EXCHANGE RATES (Stage 1 – storage helpers only)
+# =========================================================
+
+
+def save_exchange_rate(rate_date, base_currency, target_currency, rate, source=None):
+    """
+    Insert or replace an exchange rate row.
+    `rate` means: 1 base_currency = `rate` target_currency.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT OR REPLACE INTO exchange_rates
+           (rate_date, base_currency, target_currency, rate, source)
+           VALUES (?, ?, ?, ?, ?)""",
+        (rate_date, base_currency, target_currency, rate, source),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_exchange_rate(rate_date, base_currency, target_currency):
+    """
+    Return a single exchange_rates row (dict) or None.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT * FROM exchange_rates
+           WHERE rate_date = ? AND base_currency = ? AND target_currency = ?""",
+        (rate_date, base_currency, target_currency),
+    )
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_nearest_exchange_rate(rate_date, base_currency, target_currency, days=7):
+    """
+    Return the rate closest to `rate_date` within ±`days`.
+    Prefers the closest by absolute date difference.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT * FROM exchange_rates
+           WHERE base_currency = ? AND target_currency = ?
+             AND rate_date BETWEEN date(?, ?) AND date(?, ?)
+           ORDER BY ABS(julianday(rate_date) - julianday(?))
+           LIMIT 1""",
+        (
+            base_currency,
+            target_currency,
+            rate_date,
+            f"-{days} days",
+            rate_date,
+            f"+{days} days",
+            rate_date,
+        ),
+    )
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None

@@ -18,6 +18,7 @@ from excel_export import (
     export_company_profile_to_excel,
 )
 from currency import get_currency_symbol
+import currency
 import duplicate_detection
 import sqlite3
 import zipfile
@@ -1145,6 +1146,44 @@ with st.sidebar.expander("📤 Export Database", expanded=False):
                 key="export_csv_zip"
             )
 
+
+# --- Refresh Exchange Rates ---
+with st.sidebar.expander("💱 Exchange Rates", expanded=False):
+    st.caption(
+        "Fetch the latest exchange rates and store them in the database. "
+        "Rates are cached and reused for historical accuracy."
+    )
+
+    # Count existing rates
+    try:
+        conn = sqlite3.connect(db.DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM exchange_rates")
+        total_rates = c.fetchone()[0]
+        c.execute("SELECT MAX(fetched_at) FROM exchange_rates")
+        last_fetch = c.fetchone()[0]
+        conn.close()
+    except Exception:
+        total_rates = 0
+        last_fetch = None
+
+    st.write(f"**{total_rates}** rate row(s) stored.")
+    if last_fetch:
+        st.caption(f"Last fetched: {last_fetch[:16]}")
+
+    if st.button("🔄 Refresh Rates Now", use_container_width=True, key="refresh_rates_btn"):
+        with st.spinner("Fetching rates from API..."):
+            result = currency.seed_rates_for_date()
+        if result.get("error"):
+            st.error(f"Failed: {result['error']}")
+        else:
+            st.success(
+                f"✅ Stored {result['stored']} rate(s) for {result['date']} "
+                f"(skipped {result['skipped']})."
+            )
+            st.rerun()
+
+
 # =========================================================
 # MAIN AREA: TABS
 # =========================================================
@@ -1584,13 +1623,22 @@ with tab1:
                             ),
                             key=f"create_e_currency_{idx}",
                         )
-                        e_rate = st.number_input(
-                            "Exchange Rate (1 base currency = X this currency)",
-                            min_value=0.0,
-                            step=0.01,
-                            value=float(item.get("exchange_rate_snapshot", 1.0)),
-                            key=f"create_e_rate_{idx}",
+                                                # ---- Cost Date ----
+                        default_cost_date = item.get("cost_date")
+                        if default_cost_date:
+                            try:
+                                default_cost_date = datetime.fromisoformat(default_cost_date).date()
+                            except Exception:
+                                default_cost_date = datetime.fromisoformat(item["datetime_start"]).date()
+                        else:
+                            default_cost_date = datetime.fromisoformat(item["datetime_start"]).date()
+                        e_cost_date = st.date_input(
+                            "Cost Date",
+                            value=default_cost_date,
+                            key=f"create_e_cost_date_{idx}",
+                            help="Date the cost was incurred — used for accurate currency conversion.",
                         )
+                        
                         # ---- Timezone dropdown (Phase 4) ----
                         tz_display_names, tz_map = get_timezone_dropdown_options()
                         current_tz = item.get("timezone") or profile.get(
@@ -1608,9 +1656,7 @@ with tab1:
                         )
                         e_timezone_value = tz_map[e_timezone]
 
-                        st.caption(
-                            "💡 [Check current rates on XE.com](https://www.xe.com)"
-                        )
+                        
                         e_confirmed = st.checkbox(
                             "Confirmed",
                             value=bool(item.get("is_confirmed", 0)),
@@ -1705,7 +1751,7 @@ with tab1:
                                 "location": e_loc,
                                 "cost": e_cost,
                                 "cost_currency": e_currency,
-                                "exchange_rate_snapshot": e_rate,
+                                
                                 "is_confirmed": 1 if e_confirmed else 0,
                                 "confirmation_code": item.get("confirmation_code", ""),
                                 "notes": e_notes,
@@ -1713,6 +1759,7 @@ with tab1:
                                 "contact_ids": e_contact_ids,
                                 "timezone": e_timezone_value,
                                 "venue_id": e_venue_id,
+																"cost_date": e_cost_date.isoformat(),
                             }
                             st.session_state[f"create_editing_item_{idx}"] = False
                             st.rerun()
@@ -1758,13 +1805,13 @@ with tab1:
                 options=currency_options,
                 key="create_n_currency",
             )
-            n_rate = st.number_input(
-                "Exchange Rate (1 base currency = X this currency)",
-                min_value=0.0,
-                step=0.01,
-                value=1.0,
-                key="create_n_rate",
+            n_cost_date = st.date_input(
+                "Cost Date",
+                value=datetime.now(),
+                key="create_n_cost_date",
+                help="Date the cost was incurred — used for accurate currency conversion.",
             )
+            
             # ---- Timezone dropdown (Phase 4) ----
             tz_display_names, tz_map = get_timezone_dropdown_options()
             if profile and profile.get("timezone"):
@@ -1782,7 +1829,6 @@ with tab1:
             )
             n_timezone_value = tz_map[n_timezone]
 
-            st.caption("💡 [Check current rates on XE.com](https://www.xe.com)")
             n_confirmed = st.checkbox("Confirmed", key="create_n_confirmed")
             n_notes = st.text_area("Notes", key="create_n_notes")
 
@@ -1854,7 +1900,6 @@ with tab1:
                             "location": n_loc,
                             "cost": n_cost,
                             "cost_currency": n_currency,
-                            "exchange_rate_snapshot": n_rate,
                             "is_confirmed": 1 if n_confirmed else 0,
                             "confirmation_code": "",
                             "notes": n_notes,
@@ -1862,6 +1907,7 @@ with tab1:
                             "contact_ids": selected_contact_ids,
                             "timezone": n_timezone_value,
                             "venue_id": n_venue_id,
+														"cost_date": n_cost_date.isoformat(),
                         }
                     )
                     st.rerun()
@@ -1992,9 +2038,9 @@ with tab1:
                         item.get("notes", ""),
                         item.get("is_confirmed", 0),
                         item["cost_currency"],
-                        item.get("exchange_rate_snapshot", 1.0),
                         timezone=item.get("timezone"),
-												venue_id=item.get("venue_id"),
+						venue_id=item.get("venue_id"),
+                        cost_date=item.get("cost_date"),
                     )
                     if item.get("delegation_ids"):
                         real_delegation_ids = [
@@ -2612,9 +2658,9 @@ with tab3:
                                                 item.get("notes", ""),
                                                 item.get("is_confirmed", 0),
                                                 item["cost_currency"],
-                                                item.get("exchange_rate_snapshot", 1.0),
                                                 timezone=item.get("timezone"),
                                                 venue_id=item.get("venue_id"),
+                                                cost_date=item.get("cost_date"),
                                             )
                                             # Restore delegation and contacts
                                             if item.get("delegation_ids"):
@@ -2976,18 +3022,24 @@ with tab3:
                                                 ),
                                                 key=f"modal_e_currency_{trip_id_modal}_{idx}",
                                             )
-                                            e_rate = st.number_input(
-                                                "Exchange Rate (1 base currency = X this currency)",
-                                                min_value=0.0,
-                                                step=0.01,
-                                                value=float(
-                                                    item.get(
-                                                        "exchange_rate_snapshot", 1.0
-                                                    )
-                                                ),
-                                                key=f"modal_e_rate_{trip_id_modal}_{idx}",
+                                                                                                                        # ---- Cost Date ----
+                                            default_cost_date_modal = item.get("cost_date")
+                                            if default_cost_date_modal:
+                                                try:
+                                                    default_cost_date_modal = datetime.fromisoformat(default_cost_date_modal).date()
+                                                except Exception:
+                                                    default_cost_date_modal = datetime.fromisoformat(item["datetime_start"]).date()
+                                            else:
+                                                default_cost_date_modal = datetime.fromisoformat(item["datetime_start"]).date()
+                                            e_cost_date_modal = st.date_input(
+                                                "Cost Date",
+                                                value=default_cost_date_modal,
+                                                key=f"modal_e_cost_date_{trip_id_modal}_{idx}",
+                                                help="Date the cost was incurred — used for accurate currency conversion.",
                                             )
-                                            # ---- Timezone dropdown (Phase 4) ----
+                                            
+
+																						# ---- Timezone dropdown (Phase 4) ----
                                             tz_display_names, tz_map = (
                                                 get_timezone_dropdown_options()
                                             )
@@ -3014,9 +3066,7 @@ with tab3:
                                                 e_timezone_modal
                                             ]
 
-                                            st.caption(
-                                                "💡 [Check current rates on XE.com](https://www.xe.com)"
-                                            )
+                                            
                                             e_confirmed = st.checkbox(
                                                 "Confirmed",
                                                 value=bool(item.get("is_confirmed", 0)),
@@ -3152,7 +3202,6 @@ with tab3:
                                                     "location": e_loc,
                                                     "cost": e_cost,
                                                     "cost_currency": e_currency,
-                                                    "exchange_rate_snapshot": e_rate,
                                                     "is_confirmed": (
                                                         1 if e_confirmed else 0
                                                     ),
@@ -3227,14 +3276,14 @@ with tab3:
                                         key=f"modal_n_currency_{trip_id_modal}",
                                         disabled=is_locked,
                                     )
-                                    n_rate = st.number_input(
-                                        "Exchange Rate (1 base currency = X this currency)",
-                                        min_value=0.0,
-                                        step=0.01,
-                                        value=1.0,
-                                        key=f"modal_n_rate_{trip_id_modal}",
+                                    n_cost_date = st.date_input(
+                                        "Cost Date",
+                                        value=datetime.now(),
+                                        key=f"modal_n_cost_date_{trip_id_modal}",
                                         disabled=is_locked,
+                                        help="Date the cost was incurred — used for accurate currency conversion.",
                                     )
+                                    
                                     # ---- Timezone dropdown (Phase 4) ----
                                     tz_display_names, tz_map = (
                                         get_timezone_dropdown_options()
@@ -3263,9 +3312,6 @@ with tab3:
                                     )
                                     n_timezone_value_modal = tz_map[n_timezone_modal]
 
-                                    st.caption(
-                                        "💡 [Check current rates on XE.com](https://www.xe.com)"
-                                    )
                                     n_confirmed = st.checkbox(
                                         "Confirmed",
                                         key=f"modal_n_confirmed_{trip_id_modal}",
@@ -3334,7 +3380,6 @@ with tab3:
                                                         "location": n_loc,
                                                         "cost": n_cost,
                                                         "cost_currency": n_currency,
-                                                        "exchange_rate_snapshot": n_rate,
                                                         "is_confirmed": (
                                                             1 if n_confirmed else 0
                                                         ),
@@ -3343,6 +3388,7 @@ with tab3:
                                                         "delegation_ids": selected_delegation_ids_modal_new,
                                                         "contact_ids": selected_contact_ids_modal_new,
                                                         "timezone": n_timezone_value_modal,
+                                                        "cost_date": n_cost_date.isoformat(),
                                                     }
                                                 )
                                                 st.rerun()

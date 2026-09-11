@@ -91,3 +91,230 @@ def get_snapshot_rate(base_currency, foreign_currency):
         return 1.0
     rates = get_exchange_rates(base_currency)
     return rates.get(foreign_currency, 1.0)
+
+# =========================================================
+# STAGE 2 – Seed rates into the DB (exchange_rates table)
+# =========================================================
+
+CURRENCIES_SUPPORTED = [
+    "USD",
+    "EUR",
+    "GBP",
+    "NGN",
+    "JPY",
+    "BRL",
+    "CAD",
+    "AUD",
+    "CHF",
+    "CNY",
+    "INR",
+]
+
+
+def seed_rates_for_date(on_date=None, base_currency="USD"):
+    """
+    Fetch current rates for all supported currencies and store them
+    in the exchange_rates table.
+
+    - For each target currency, stores the direct pair (base -> target)
+      and the reverse pair (target -> base).
+
+    Parameters
+    ----------
+    on_date : str, optional
+        ISO date (YYYY-MM-DD). Defaults to today.
+    base_currency : str
+        The base currency for the fetch. Defaults to 'USD'.
+
+    Returns
+    -------
+    dict
+        {'stored': int, 'skipped': int, 'date': str}
+    """
+    import database as db  # local import to avoid circular dependency
+
+    if on_date is None:
+        on_date = datetime.now().date().isoformat()
+    if isinstance(on_date, datetime):
+        on_date = on_date.date().isoformat()
+    if isinstance(on_date, str) and "T" in on_date:
+        on_date = on_date.split("T")[0]
+
+    try:
+        rates = get_exchange_rates(base_currency)
+    except Exception as e:
+        return {"stored": 0, "skipped": 0, "date": on_date, "error": str(e)}
+
+    stored = 0
+    skipped = 0
+
+    for target in CURRENCIES_SUPPORTED:
+        if target == base_currency:
+            continue
+        rate = rates.get(target)
+        if not rate or rate <= 0:
+            skipped += 1
+            continue
+
+        # Direct pair
+        db.save_exchange_rate(on_date, base_currency, target, rate, "api")
+        stored += 1
+
+        # Reverse pair (derived) – speeds up lookups in the opposite direction
+        db.save_exchange_rate(on_date, target, base_currency, 1.0 / rate, "api_derived")
+        stored += 1
+
+    # Always store the self-pair for completeness
+    for cur in CURRENCIES_SUPPORTED:
+        db.save_exchange_rate(on_date, cur, cur, 1.0, "identity")
+        stored += 1
+
+    return {"stored": stored, "skipped": skipped, "date": on_date}
+
+    # =========================================================
+# STAGE 3 – Conversion core
+# =========================================================
+
+
+def get_rate(from_currency, to_currency, on_date=None, base_currency="USD"):
+    """
+    Return the exchange rate from `from_currency` to `to_currency` on `on_date`.
+
+    Parameters
+    ----------
+    from_currency : str
+        Currency code to convert FROM, e.g. 'EUR'.
+    to_currency : str
+        Currency code to convert TO, e.g. 'USD'.
+    on_date : str, date, or datetime, optional
+        The date the rate applies to (historical accuracy).
+        Defaults to today.
+    base_currency : str
+        The base currency used for cross-rate fallbacks. Defaults to 'USD'.
+
+    Returns
+    -------
+    float
+        The rate such that: amount_in_from * rate = amount_in_to.
+
+    Raises
+    ------
+    ValueError
+        If no rate can be determined for the pair and date.
+    """
+    import database as db  # local import to avoid circular dependency
+
+    if not from_currency or not to_currency:
+        raise ValueError("Both from_currency and to_currency are required.")
+
+    if from_currency == to_currency:
+        return 1.0
+
+    # Normalize date
+    if on_date is None:
+        on_date = datetime.now().date().isoformat()
+    if isinstance(on_date, datetime):
+        on_date = on_date.date().isoformat()
+    if hasattr(on_date, "isoformat") and not isinstance(on_date, str):
+        on_date = on_date.isoformat()
+    if isinstance(on_date, str) and "T" in on_date:
+        on_date = on_date.split("T")[0]
+
+    # ---- 1. Direct lookup ----
+    row = db.get_exchange_rate(on_date, from_currency, to_currency)
+    if row and row.get("rate"):
+        return float(row["rate"])
+
+    # ---- 2. Reverse lookup ----
+    row = db.get_exchange_rate(on_date, to_currency, from_currency)
+    if row and row.get("rate") and row["rate"] != 0:
+        return 1.0 / float(row["rate"])
+
+    # ---- 3. Cross via base currency ----
+    if from_currency != base_currency and to_currency != base_currency:
+        r1 = db.get_exchange_rate(on_date, from_currency, base_currency)
+        r2 = db.get_exchange_rate(on_date, base_currency, to_currency)
+        if r1 and r2 and r1.get("rate") and r2.get("rate"):
+            return float(r1["rate"]) * float(r2["rate"])
+
+    # ---- 4. Fetch from API for this date, then retry direct + reverse ----
+    try:
+        _fetch_rates_for_date(on_date, base_currency)
+    except Exception:
+        pass  # fall through to nearest
+
+    row = db.get_exchange_rate(on_date, from_currency, to_currency)
+    if row and row.get("rate"):
+        return float(row["rate"])
+
+    row = db.get_exchange_rate(on_date, to_currency, from_currency)
+    if row and row.get("rate") and row["rate"] != 0:
+        return 1.0 / float(row["rate"])
+
+    # ---- 5. Nearest date within ±7 days ----
+    row = db.get_nearest_exchange_rate(on_date, from_currency, to_currency, days=7)
+    if row and row.get("rate"):
+        return float(row["rate"])
+
+    row = db.get_nearest_exchange_rate(on_date, to_currency, from_currency, days=7)
+    if row and row.get("rate") and row["rate"] != 0:
+        return 1.0 / float(row["rate"])
+
+    # ---- 6. Give up ----
+    raise ValueError(
+        f"No exchange rate available for {from_currency} → {to_currency} "
+        f"on or around {on_date}."
+    )
+
+
+def convert_amount(
+    amount, from_currency, to_currency, on_date=None, base_currency="USD"
+):
+    """
+    Convert `amount` from one currency to another.
+
+    Returns 0.0 if amount is None. Returns the same amount if currencies match.
+    Raises ValueError if no rate can be determined.
+    """
+    if amount is None:
+        return 0.0
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return 0.0
+
+    if not from_currency or not to_currency:
+        return amount
+    if from_currency == to_currency:
+        return amount
+
+    rate = get_rate(from_currency, to_currency, on_date, base_currency)
+    return amount * rate
+
+
+def _fetch_rates_for_date(on_date, base_currency="USD"):
+    """
+    Fetch and store rates for a specific date.
+
+    Note: The free exchangerate-api.com tier only provides TODAY's rates,
+    not historical data. If `on_date` is not today, we fall back to fetching
+    today's rates and store them under `on_date` so the app remains functional.
+
+    For historically accurate rates, a paid API (or manual entry) is needed.
+    """
+    today = datetime.now().date().isoformat()
+
+    # If the requested date is not today and we already have data, do nothing
+    if on_date != today:
+        existing = None
+        try:
+            import database as db
+
+            existing = db.get_exchange_rate(on_date, base_currency, "EUR")
+        except Exception:
+            existing = None
+        if existing:
+            return  # already have data for this date
+
+    # Seed rates for the requested date
+    seed_rates_for_date(on_date, base_currency)

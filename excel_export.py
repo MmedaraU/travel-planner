@@ -4,7 +4,8 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import database as db
 from datetime import datetime
-
+import currency  # Stage 6
+from doc_generator import _sum_items_in_base
 
 def export_profile_to_excel(exec_id, currency_symbol="$"):
     """
@@ -174,13 +175,13 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
     ws["A1"].font = Font(size=14, bold=True)
     ws.merge_cells("A1:H1")
 
-    # Summary
-    total_spent = sum(item.get("cost", 0) for item in items)
-    confirmed_spent = sum(
-        item.get("cost", 0) for item in items if item.get("is_confirmed", 0)
+    # Summary (converted to trip base currency – Stage 6)
+    trip_base_cur = trip_data.get("base_currency", base_currency) or base_currency
+    total_spent, confirmed_spent, estimated_spent = _sum_items_in_base(
+        items, trip_base_cur
     )
-    estimated_spent = total_spent - confirmed_spent
     trip_budget = trip_data.get("budget", 0)
+    
 
     summary_data = [
         ("Total Budget", f"{trip_budget:.2f} {base_currency}"),
