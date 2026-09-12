@@ -85,9 +85,9 @@ def format_datetime_display(dt_str):
         return dt_str
 
 
-def get_company_delegation_options(company_id):
-    """Return a dict of delegation member label -> id for a company."""
-    members = db.get_delegation_members(company_id, active_only=True)
+def get_trip_delegation_options(trip_id):
+    """Return a dict of trip delegation label -> contact_id."""
+    members = db.get_trip_delegation_members(trip_id)
     return {f"{m['name']} ({m.get('role', '')})".strip(): m["id"] for m in members}
 
 
@@ -288,6 +288,7 @@ if st.session_state.get("show_add_executive", False):
             # Submit button inside the form
             if st.form_submit_button("💾 Create Executive"):
                 if exec_name and sel_company_id:
+                    proceed = True
                     if exec_email:
                         existing = duplicate_detection.find_duplicate_executive(
                             exec_email, exec_name, sel_company_id
@@ -299,28 +300,32 @@ if st.session_state.get("show_add_executive", False):
                             for dup in existing:
                                 st.write(f"- {dup['name']} (ID: {dup['id']})")
                             if not st.checkbox("Add anyway?", key="force_add_exec"):
-                                st.stop()
-                    new_id = db.add_executive(
-                        sel_company_id,
-                        exec_name,
-                        exec_email,
-                        exec_tz,
-                        exec_seat if exec_seat != "No Preference" else "",
-                        "",  # hotel_loyalty removed
-                        "",  # frequent_flyer_number removed
-                        exec_diet,
-                        None,  # passport_number removed
-                        exec_airline,
-                        exec_tsa,
-                        exec_meal if exec_meal != "No Preference" else "",
-                    )
-                    st.success(
-                        f"✅ Executive '{exec_name}' created! You can now add passports and memberships in the edit modal."
-                    )
-                    st.session_state["show_add_executive"] = False
-                    st.rerun()
+                                proceed = False
+                                st.info(
+                                    "Tick **Add anyway?** above and click "
+                                    "**💾 Create Executive** again to proceed."
+                                )
+
+                    if proceed:
+                        new_id = db.add_executive(
+                            sel_company_id,
+                            exec_name,
+                            exec_email,
+                            exec_tz,
+                            exec_seat if exec_seat != "No Preference" else "",
+                            exec_diet,
+                            exec_airline,
+                            exec_tsa,
+                            exec_meal if exec_meal != "No Preference" else "",
+                        )
+                        st.success(
+                            f"✅ Executive '{exec_name}' created! You can now add passports and memberships in the edit modal."
+                        )
+                        st.session_state["show_add_executive"] = False
+                        st.rerun()
                 else:
                     st.warning("Name and Company are required.")
+
 
 # --- Quick Profile (collapsible) ---
 if profile:
@@ -444,10 +449,7 @@ if st.session_state.get("show_full_profile", False):
                         new_email,
                         new_tz,
                         new_seat if new_seat != "No Preference" else "",
-                        "",  # hotel_loyalty removed
-                        "",  # frequent_flyer_number removed
                         new_diet,
-                        None,  # passport_number removed
                         new_airline,
                         new_tsa,
                         new_meal if new_meal != "No Preference" else "",
@@ -681,7 +683,13 @@ if st.session_state.get("show_full_profile", False):
                                 )
 
                                 # Extra fields
+                                                                # Extra fields
                                 with st.expander("More details (optional)"):
+                                    edit_tier = None
+                                    edit_alliance = None
+                                    edit_airport = None
+                                    edit_notes = None
+
                                     if edit_cat == "Airline":
                                         edit_tier = st.text_input(
                                             "Tier",
@@ -703,7 +711,15 @@ if st.session_state.get("show_full_profile", False):
                                             value=m.get("notes") or "",
                                             key=f"edit_mem_notes_{m['id']}",
                                         )
-                                    elif edit_cat == "Hotel":
+                                    elif edit_cat in (
+                                        "Hotel",
+                                        "Car Rental",
+                                        "Lounge",
+                                        "Rail",
+                                        "Ferry",
+                                        "Ride-Share",
+                                        "Credit Card",
+                                    ):
                                         edit_tier = st.text_input(
                                             "Status/Tier",
                                             value=m.get("tier") or "",
@@ -714,17 +730,13 @@ if st.session_state.get("show_full_profile", False):
                                             value=m.get("notes") or "",
                                             key=f"edit_mem_notes_{m['id']}",
                                         )
-                                        edit_alliance = None
-                                        edit_airport = None
-                                    else:  # Car
+                                    else:
                                         edit_notes = st.text_area(
                                             "Notes",
                                             value=m.get("notes") or "",
                                             key=f"edit_mem_notes_{m['id']}",
                                         )
-                                        edit_tier = None
-                                        edit_alliance = None
-                                        edit_airport = None
+
 
                                 col_save, col_cancel = st.columns(2)
                                 with col_save:
@@ -770,8 +782,13 @@ if st.session_state.get("show_full_profile", False):
                 with col_num:
                     new_num_mem = st.text_input("Membership Number", key="edit_mem_num")
                 # Extra fields inside nested expander (hidden by default)
-                with st.expander("➕ More details (optional)"):
+                with st.expander("➕ More details (optional)", expanded=False):
                     col_extra1, col_extra2 = st.columns(2)
+                    new_tier = None
+                    new_alliance = None
+                    new_airport = None
+                    new_notes_mem = None
+
                     if new_cat == "Airline":
                         with col_extra1:
                             new_tier = st.text_input("Tier", key="edit_mem_tier")
@@ -785,19 +802,26 @@ if st.session_state.get("show_full_profile", False):
                             new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
                         new_alliance = new_alliance or None
                         new_airport = new_airport or None
-                    elif new_cat == "Hotel":
+                    elif new_cat in (
+                        "Hotel",
+                        "Car Rental",
+                        "Lounge",
+                        "Rail",
+                        "Ferry",
+                        "Ride-Share",
+                        "Credit Card",
+                    ):
                         with col_extra1:
-                            new_tier = st.text_input("Status/Tier", key="edit_mem_tier")
+                            new_tier = st.text_input(
+                                "Status/Tier", key="edit_mem_tier"
+                            )
                         with col_extra2:
                             new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
-                        new_alliance = None
-                        new_airport = None
-                    else:  # Car
+                    else:
                         with col_extra1:
                             new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
-                        new_tier = None
-                        new_alliance = None
-                        new_airport = None
+
+
 
                 if st.button("➕ Add Membership", key="edit_mem_add_btn"):
                     if new_name_mem and new_num_mem:
@@ -1201,593 +1225,92 @@ default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
 if "active_tab" in st.session_state:
     del st.session_state["active_tab"]
 
+# If there are no executives, show a global warning but still render the tabs.
+if not profile:
+    st.warning("Please add an executive using the sidebar to use the Trip Planner.")
+
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(tab_names)
 
 
 # ------------------------------------------------------------------
 # TAB 1: TRIP PLANNER (CREATE ONLY)
 # ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# TAB 1: TRIP PLANNER (CREATE ONLY)
+# ------------------------------------------------------------------
 with tab1:
     if not profile:
-        st.warning("Please add an executive using the sidebar first.")
-        st.stop()
-
-    # Executive dropdown
-    exec_dropdown_options = {f"{name} (ID: {id})": id for id, name, _ in executives}
-    trip_exec_label = st.selectbox(
-        "👤 Executive for this Trip",
-        options=list(exec_dropdown_options.keys()),
-        key="create_trip_exec",
-    )
-    trip_exec_id = exec_dropdown_options[trip_exec_label]
-
-    # Trip Name
-    trip_purpose = st.text_input(
-        "Trip Name / Purpose (e.g., 'Q3 Sales Tour')", key="create_trip_purpose"
-    )
-
-    # --- Overall Trip Dates ---
-    col_start, col_end = st.columns(2)
-    with col_start:
-        overall_start = st.date_input(
-            "Start Date*",
-            value=st.session_state.get("create_overall_start", datetime.now()),
-            key="create_overall_start",
+        st.info(
+            "👤 **Add an executive in the sidebar** to start planning a trip. "
+            "The other tabs (Companies, Contacts, Venues, Library) work without one."
         )
-    with col_end:
-        overall_end = st.date_input(
-            "End Date*",
-            value=st.session_state.get(
-                "create_overall_end", datetime.now() + timedelta(days=1)
-            ),
-            key="create_overall_end",
+    else:
+        # Executive dropdown
+        exec_dropdown_options = {f"{name} (ID: {id})": id for id, name, _ in executives}
+        trip_exec_label = st.selectbox(
+            "👤 Executive for this Trip",
+            options=list(exec_dropdown_options.keys()),
+            key="create_trip_exec",
         )
-    if overall_start and overall_end and overall_end >= overall_start:
-        duration = (overall_end - overall_start).days
-        st.caption(f"⏱️ Duration: {duration} day(s)")
-    elif overall_start and overall_end:
-        st.warning("End date must be after start date.")
+        trip_exec_id = exec_dropdown_options[trip_exec_label]
 
-    # Departure
-    col_dep_city, col_dep_region = st.columns(2)
-    with col_dep_city:
-        departure_city = st.text_input("Departure City*", key="create_departure_city")
-    with col_dep_region:
-        departure_region = st.text_input(
-            "Region / State (optional)", key="create_departure_region"
+        # Trip Name
+        trip_purpose = st.text_input(
+            "Trip Name / Purpose (e.g., 'Q3 Sales Tour')", key="create_trip_purpose"
         )
 
-    country_list = sorted([c.name for c in pycountry.countries])
-    departure_country = st.selectbox(
-        "Country (optional)",
-        options=[""] + country_list,
-        key="create_departure_country",
-    )
-
-    # --- Budget & Currency (same row) ---
-    col_budget, col_currency = st.columns(2)
-    with col_budget:
-        budget = st.number_input(
-            "Budget Amount (in Base Currency)",
-            min_value=0.0,
-            step=100.0,
-            value=0.0,
-            key="create_trip_budget",
-        )
-    with col_currency:
-        base_currency_options = [
-            "USD",
-            "EUR",
-            "GBP",
-            "NGN",
-            "JPY",
-            "BRL",
-            "CAD",
-            "AUD",
-            "CHF",
-            "CNY",
-            "INR",
-        ]
-        trip_base_currency = st.selectbox(
-            "Base Currency",
-            options=base_currency_options,
-            index=0,
-            key="create_base_currency",
-        )
-
-    # --- Status ---
-    status_options = ["draft", "approved", "final"]
-    trip_status = st.selectbox(
-        "Trip Status",
-        options=status_options,
-        index=0,
-        key="create_trip_status",
-        help="Set the initial status of the trip. Draft = editable, Approved = locked, Final = locked.",
-    )
-
-    # ---- Timezone Display for this Trip ----
-    tz_display_mode = st.radio(
-        "Show times in:",
-        options=["Home", "Destination"],
-        index=0,
-        key="create_tz_display_mode",
-        horizontal=True,
-    )
-
-    # Stops
-    if "create_trip_stops" not in st.session_state:
-        st.session_state["create_trip_stops"] = []
-
-    if st.session_state["create_trip_stops"]:
-        for idx, stop in enumerate(st.session_state["create_trip_stops"]):
-            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
-            with col1:
-                st.write(f"**{idx + 1}.** {stop['city']}")
-            with col2:
-                loc_parts = []
-                if stop.get("region"):
-                    loc_parts.append(stop["region"])
-                if stop.get("country"):
-                    loc_parts.append(stop["country"])
-                st.write(", ".join(loc_parts) if loc_parts else "")
-            with col3:
-                st.write(
-                    f"{format_date_display(stop['start_date'])} → {format_date_display(stop['end_date'])}"
-                )
-            with col4:
-                st.write(stop.get("notes", "")[:30])
-            with col5:
-                if st.button("🗑️", key=f"create_del_stop_{idx}"):
-                    st.session_state["create_trip_stops"].pop(idx)
-                    st.rerun()
-
-    with st.expander("➕ Add Destination Stop"):
-        col_city, col_country = st.columns(2)
-        with col_city:
-            new_city = st.text_input("City*", key="create_new_stop_city")
-        with col_country:
-            new_country = st.selectbox(
-                "Country (optional)",
-                options=[""] + country_list,
-                key="create_new_stop_country",
-            )
-        col_region, col_notes = st.columns(2)
-        with col_region:
-            new_region = st.text_input(
-                "Region / State (optional)", key="create_new_stop_region"
-            )
-        with col_notes:
-            new_stop_notes = st.text_input(
-                "Notes (optional)", key="create_new_stop_notes"
-            )
+        # --- Overall Trip Dates ---
         col_start, col_end = st.columns(2)
         with col_start:
-            new_start = st.date_input(
-                "Start Date*", value=datetime.now(), key="create_new_stop_start"
+            overall_start = st.date_input(
+                "Start Date*",
+                value=st.session_state.get("create_overall_start", datetime.now()),
+                key="create_overall_start",
             )
         with col_end:
-            new_end = st.date_input(
-                "End Date*", value=datetime.now(), key="create_new_stop_end"
-            )
-
-        if st.button("➕ Add Stop", key="create_add_stop_button"):
-            if new_city and new_start and new_end:
-                st.session_state["create_trip_stops"].append(
-                    {
-                        "city": new_city,
-                        "country": new_country,
-                        "region": new_region,
-                        "start_date": new_start.isoformat(),
-                        "end_date": new_end.isoformat(),
-                        "notes": new_stop_notes,
-                    }
-                )
-                st.success(
-                    f"Added: {new_city}" + (f", {new_country}" if new_country else "")
-                )
-                st.rerun()
-            else:
-                st.warning("City, Start Date, and End Date are required.")
-
-    # ---- Contacts for this Trip (Local Support) ----
-    company_id = profile.get("company_id")
-    st.subheader("📋 Contacts for This Trip")
-    # Get distinct countries from contacts
-    conn = sqlite3.connect(db.DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "SELECT DISTINCT country FROM contacts WHERE country IS NOT NULL AND country != '' ORDER BY country"
-    )
-    countries = [row[0] for row in c.fetchall()]
-    conn.close()
-    country_options = ["All Countries"] + countries
-    selected_country = st.selectbox(
-        "Filter contacts by country",
-        options=country_options,
-        index=0,
-        key="create_contact_country_filter",
-    )
-    filter_country = None if selected_country == "All Countries" else selected_country
-
-    # Get contacts filtered by country (and active only)
-    all_contacts = db.get_contacts(active_only=True, country=filter_country)
-    if all_contacts:
-        contact_options = {}
-        for contact in all_contacts:
-            comp = (
-                db.get_company(contact["company_id"])
-                if contact.get("company_id")
-                else None
-            )
-            comp_name = comp["name"] if comp else "No Company"
-            label = f"{contact['name']} ({contact.get('role','')}) – {comp_name}"
-            contact_options[label] = contact["id"]
-        selected_contact_labels = st.multiselect(
-            "Select local support contacts to include in the travel pack",
-            options=list(contact_options.keys()),
-            default=[],
-            key="create_trip_contacts",
-        )
-        selected_contact_ids = [
-            contact_options[label] for label in selected_contact_labels
-        ]
-        st.session_state["create_trip_contact_ids"] = selected_contact_ids
-    else:
-        st.warning("No contacts found for the selected country.")
-        st.session_state["create_trip_contact_ids"] = []
-
-    # ---- Delegation (travelling group) ----
-    st.subheader("👥 Delegation")
-    if company_id:
-        if "create_trip_delegation" not in st.session_state:
-            st.session_state["create_trip_delegation"] = []
-
-        if st.session_state["create_trip_delegation"]:
-            for idx, member in enumerate(st.session_state["create_trip_delegation"]):
-                col1, col2, col3 = st.columns([3, 2, 1])
-                with col1:
-                    st.write(f"**{member['name']}** ({member.get('role', '')})")
-                with col2:
-                    st.write(f"{member.get('email', '')} | {member.get('phone', '')}")
-                with col3:
-                    if st.button("🗑️", key=f"create_del_delegation_{idx}"):
-                        st.session_state["create_trip_delegation"].pop(idx)
-                        st.rerun()
-        else:
-            st.caption("No delegation members added yet.")
-
-        with st.expander(
-            "➕ Add Delegation Members from Contacts (excluding Local Support)",
-            expanded=False,
-        ):
-            # Use helper that filters out Local Support contacts
-            contact_options = get_non_local_support_contacts(company_id)
-            if contact_options:
-                selected_labels = st.multiselect(
-                    "Select contacts to add as delegation members",
-                    options=list(contact_options.keys()),
-                    key="add_contacts_to_delegation",
-                )
-                if st.button("Add Selected", key="add_contacts_delegation_btn"):
-                    if selected_labels:
-                        added_count = 0
-                        existing_ids = [
-                            m.get("id")
-                            for m in st.session_state["create_trip_delegation"]
-                            if m.get("id")
-                        ]
-                        for label in selected_labels:
-                            contact_id = contact_options[label]
-                            if contact_id in existing_ids:
-                                continue
-                            contact = db.get_contact(contact_id)
-                            if contact:
-                                dupes = db.find_duplicate_delegation_members(
-                                    company_id, name=contact["name"]
-                                )
-                                if dupes:
-                                    real_id = dupes[0]["id"]
-                                else:
-                                    real_id = db.add_delegation_member(
-                                        company_id=company_id,
-                                        name=contact["name"],
-                                        email=contact.get("email"),
-                                        role=contact.get("role"),
-                                        phone=contact.get("phone"),
-                                    )
-                                st.session_state["create_trip_delegation"].append(
-                                    {
-                                        "id": real_id,
-                                        "name": contact["name"],
-                                        "email": contact.get("email"),
-                                        "role": contact.get("role"),
-                                        "phone": contact.get("phone"),
-                                    }
-                                )
-                                added_count += 1
-                        st.success(f"Added {added_count} delegation member(s).")
-                        st.rerun()
-                    else:
-                        st.warning("Please select at least one contact.")
-            else:
-                st.caption("No non-local-support contacts available for this company.")
-    else:
-        st.warning("No company selected – cannot add delegation members.")
-
-    # --- Itinerary Items (optional) ---
-    if "create_trip_items" not in st.session_state:
-        st.session_state["create_trip_items"] = []
-
-    if st.session_state["create_trip_items"]:
-        # Get display mode and exec timezone for formatting
-        exec_tz = profile.get("timezone", "America/New_York")
-        display_mode = st.session_state.get("create_tz_display_mode", "Home")
-
-        for idx, item in enumerate(st.session_state["create_trip_items"]):
-            # Format datetime
-            dt_display = format_item_datetime(item, exec_tz, display_mode)
-
-            # Use 5 columns to match the widths list (2,2,2,1,1)
-            col_i1, col_i2, col_i3, col_i4, col_i5 = st.columns([2, 2, 2, 1, 1])
-            with col_i1:
-                st.write(f"{item['description']} ({item['item_type']})")
-                st.caption(f"🕐 {dt_display}")
-            with col_i2:
-                st.write(f"{item.get('cost',0):.2f} {item.get('cost_currency','USD')}")
-                delegation = item.get("delegation_ids", [])
-                if delegation and st.session_state.get("create_trip_delegation"):
-                    names = [
-                        st.session_state["create_trip_delegation"][i].get("name", "")
-                        for i in delegation
-                        if i < len(st.session_state["create_trip_delegation"])
-                    ]
-                    if names:
-                        st.caption(f"👥 {', '.join(names)}")
-                contacts = item.get("contact_ids", [])
-                if contacts and company_id:
-                    contact_names = get_contact_names(contacts)
-                    if contact_names:
-                        st.caption(f"📞 {contact_names}")
-            with col_i3:
-                if st.button("✏️", key=f"create_edit_item_{idx}"):
-                    st.session_state[f"create_editing_item_{idx}"] = True
-            with col_i4:
-                if st.button("🗑️", key=f"create_del_item_{idx}"):
-                    st.session_state["create_trip_items"].pop(idx)
-                    st.rerun()
-            # col_i5 is unused; you can leave it or add future elements
-
-            if st.session_state.get(f"create_editing_item_{idx}", False):
-                with st.expander(f"Edit Item: {item['description']}", expanded=True):
-                    with st.form(key=f"create_edit_item_form_{idx}"):
-                        e_type = st.selectbox(
-                            "Type",
-                            options=(
-                                [cat[1] for cat in db.get_all_categories()]
-                                if db.get_all_categories()
-                                else ["Flight", "Hotel", "Meeting", "Transport"]
-                            ),
-                            index=0,
-                            key=f"create_e_type_{idx}",
-                        )
-                        e_desc = st.text_input(
-                            "Description",
-                            value=item["description"],
-                            key=f"create_e_desc_{idx}",
-                        )
-                        e_start = st.datetime_input(
-                            "Start",
-                            value=datetime.fromisoformat(item["datetime_start"]),
-                            key=f"create_e_start_{idx}",
-                        )
-                        e_end = st.datetime_input(
-                            "End",
-                            value=(
-                                datetime.fromisoformat(item["datetime_end"])
-                                if item["datetime_end"]
-                                else datetime.now()
-                            ),
-                            key=f"create_e_end_{idx}",
-                        )
-                        e_loc = st.text_input(
-                            "Location",
-                            value=item.get("location", ""),
-                            key=f"create_e_loc_{idx}",
-                        )
-                        e_cost = st.number_input(
-                            "Cost",
-                            value=float(item.get("cost", 0)),
-                            key=f"create_e_cost_{idx}",
-                        )
-                        # Currency dropdown
-                        currency_options = [
-                            "USD",
-                            "EUR",
-                            "GBP",
-                            "NGN",
-                            "JPY",
-                            "BRL",
-                            "CAD",
-                            "AUD",
-                            "CHF",
-                            "CNY",
-                            "INR",
-                        ]
-                        e_currency = st.selectbox(
-                            "Currency",
-                            options=currency_options,
-                            index=(
-                                currency_options.index(item.get("cost_currency", "USD"))
-                                if item.get("cost_currency", "USD") in currency_options
-                                else 0
-                            ),
-                            key=f"create_e_currency_{idx}",
-                        )
-                                                # ---- Cost Date ----
-                        default_cost_date = item.get("cost_date")
-                        if default_cost_date:
-                            try:
-                                default_cost_date = datetime.fromisoformat(default_cost_date).date()
-                            except Exception:
-                                default_cost_date = datetime.fromisoformat(item["datetime_start"]).date()
-                        else:
-                            default_cost_date = datetime.fromisoformat(item["datetime_start"]).date()
-                        e_cost_date = st.date_input(
-                            "Cost Date",
-                            value=default_cost_date,
-                            key=f"create_e_cost_date_{idx}",
-                            help="Date the cost was incurred — used for accurate currency conversion.",
-                        )
-                        
-                        # ---- Timezone dropdown (Phase 4) ----
-                        tz_display_names, tz_map = get_timezone_dropdown_options()
-                        current_tz = item.get("timezone") or profile.get(
-                            "timezone", "America/New_York"
-                        )
-                        current_tz_display = next(
-                            (n for n in tz_display_names if current_tz in n),
-                            tz_display_names[0],
-                        )
-                        e_timezone = st.selectbox(
-                            "Time Zone",
-                            options=tz_display_names,
-                            index=tz_display_names.index(current_tz_display),
-                            key=f"create_e_timezone_{idx}",
-                        )
-                        e_timezone_value = tz_map[e_timezone]
-
-                        
-                        e_confirmed = st.checkbox(
-                            "Confirmed",
-                            value=bool(item.get("is_confirmed", 0)),
-                            key=f"create_e_confirmed_{idx}",
-                        )
-                        e_notes = st.text_area(
-                            "Notes",
-                            value=item.get("notes", ""),
-                            key=f"create_e_notes_{idx}",
-                        )
-                        # ---- Venue (only for session-type items) ----
-                        session_types = ["Meeting", "Conference", "Dinner", "Site Visit", "Tour", "Activity"]
-                        e_venue_id = item.get("venue_id")  # keep existing if not changed
-                        if e_type in session_types:
-                            venue_options = db.get_venues(active_only=True)
-                            venue_labels = {
-                                f"{v['name']}" + (f" — {v['city']}" if v.get("city") else ""): v["id"]
-                                for v in venue_options
-                            }
-                            venue_labels["(No venue)"] = None
-
-                            # Determine current label to pre-select
-                            current_venue_label = "(No venue)"
-                            for lbl, vid in venue_labels.items():
-                                if vid == e_venue_id:
-                                    current_venue_label = lbl
-                                    break
-
-                            selected_venue_label = st.selectbox(
-                                "Venue (optional)",
-                                options=list(venue_labels.keys()),
-                                index=list(venue_labels.keys()).index(current_venue_label),
-                                key=f"create_e_venue_{idx}",
-                            )
-                            e_venue_id = venue_labels[selected_venue_label]
-
-                        # Delegation assignment
-                        if company_id and st.session_state.get(
-                            "create_trip_delegation"
-                        ):
-                            delegation_options = {
-                                f"{m['name']} ({m.get('role', '')})": idx
-                                for idx, m in enumerate(
-                                    st.session_state["create_trip_delegation"]
-                                )
-                            }
-                            current_delegation = item.get("delegation_ids", [])
-                            current_labels = [
-                                label
-                                for label, i in delegation_options.items()
-                                if i in current_delegation
-                            ]
-                            selected_parts = st.multiselect(
-                                "Assign Delegation Members",
-                                options=list(delegation_options.keys()),
-                                default=current_labels,
-                                key=f"create_e_delegation_{idx}",
-                            )
-                            e_delegation_ids = [
-                                delegation_options[label] for label in selected_parts
-                            ]
-                        else:
-                            e_delegation_ids = []
-
-                        # ---- Contact assignment (per item) ----
-                        if company_id:
-                            contact_options = get_company_contact_options(company_id)
-                            current_contact_ids = item.get("contact_ids", [])
-                            current_labels = [
-                                label
-                                for label, cid in contact_options.items()
-                                if cid in current_contact_ids
-                            ]
-                            selected_contacts = st.multiselect(
-                                "Assign Local Support Contacts",
-                                options=list(contact_options.keys()),
-                                default=current_labels,
-                                key=f"create_e_contacts_{idx}",
-                            )
-                            e_contact_ids = [
-                                contact_options[label] for label in selected_contacts
-                            ]
-                        else:
-                            e_contact_ids = []
-
-                        if st.form_submit_button("💾 Update Item"):
-                            st.session_state["create_trip_items"][idx] = {
-                                "item_type": e_type,
-                                "description": e_desc,
-                                "datetime_start": e_start.isoformat(),
-                                "datetime_end": e_end.isoformat() if e_end else None,
-                                "location": e_loc,
-                                "cost": e_cost,
-                                "cost_currency": e_currency,
-                                
-                                "is_confirmed": 1 if e_confirmed else 0,
-                                "confirmation_code": item.get("confirmation_code", ""),
-                                "notes": e_notes,
-                                "delegation_ids": e_delegation_ids,
-                                "contact_ids": e_contact_ids,
-                                "timezone": e_timezone_value,
-                                "venue_id": e_venue_id,
-																"cost_date": e_cost_date.isoformat(),
-                            }
-                            st.session_state[f"create_editing_item_{idx}"] = False
-                            st.rerun()
-                        if st.form_submit_button("❌ Cancel"):
-                            st.session_state[f"create_editing_item_{idx}"] = False
-                            st.rerun()
-
-    with st.expander("➕ Add Itinerary Item"):
-        with st.form(key="create_add_item_form"):
-            n_type = st.selectbox(
-                "Type",
-                options=(
-                    [cat[1] for cat in db.get_all_categories()]
-                    if db.get_all_categories()
-                    else ["Flight", "Hotel", "Meeting", "Transport"]
+            overall_end = st.date_input(
+                "End Date*",
+                value=st.session_state.get(
+                    "create_overall_end", datetime.now() + timedelta(days=1)
                 ),
-                key="create_n_type",
+                key="create_overall_end",
             )
-            n_desc = st.text_input("Description", key="create_n_desc")
-            n_start = st.datetime_input(
-                "Start", value=datetime.now(), key="create_n_start"
+        if overall_start and overall_end and overall_end >= overall_start:
+            duration = (overall_end - overall_start).days
+            st.caption(f"⏱️ Duration: {duration} day(s)")
+        elif overall_start and overall_end:
+            st.warning("End date must be after start date.")
+
+        # Departure
+        col_dep_city, col_dep_region = st.columns(2)
+        with col_dep_city:
+            departure_city = st.text_input(
+                "Departure City*", key="create_departure_city"
             )
-            n_end = st.datetime_input("End", value=datetime.now(), key="create_n_end")
-            n_loc = st.text_input("Location", key="create_n_loc")
-            n_cost = st.number_input(
-                "Cost", min_value=0.0, value=0.0, key="create_n_cost"
+        with col_dep_region:
+            departure_region = st.text_input(
+                "Region / State (optional)", key="create_departure_region"
             )
-            currency_options = [
+
+        country_list = sorted([c.name for c in pycountry.countries])
+        departure_country = st.selectbox(
+            "Country (optional)",
+            options=[""] + country_list,
+            key="create_departure_country",
+        )
+
+        # --- Budget & Currency (same row) ---
+        col_budget, col_currency = st.columns(2)
+        with col_budget:
+            budget = st.number_input(
+                "Budget Amount (in Base Currency)",
+                min_value=0.0,
+                step=100.0,
+                value=0.0,
+                key="create_trip_budget",
+            )
+        with col_currency:
+            base_currency_options = [
                 "USD",
                 "EUR",
                 "GBP",
@@ -1800,267 +1323,634 @@ with tab1:
                 "CNY",
                 "INR",
             ]
-            n_currency = st.selectbox(
-                "Currency",
-                options=currency_options,
-                key="create_n_currency",
+            trip_base_currency = st.selectbox(
+                "Base Currency",
+                options=base_currency_options,
+                index=0,
+                key="create_base_currency",
             )
-            n_cost_date = st.date_input(
-                "Cost Date",
-                value=datetime.now(),
-                key="create_n_cost_date",
-                help="Date the cost was incurred — used for accurate currency conversion.",
-            )
-            
-            # ---- Timezone dropdown (Phase 4) ----
-            tz_display_names, tz_map = get_timezone_dropdown_options()
-            if profile and profile.get("timezone"):
-                default_tz_display = next(
-                    (n for n in tz_display_names if profile["timezone"] in n),
-                    tz_display_names[0],
+
+        # --- Status ---
+        status_options = ["draft", "approved", "final"]
+        trip_status = st.selectbox(
+            "Trip Status",
+            options=status_options,
+            index=0,
+            key="create_trip_status",
+            help="Set the initial status of the trip. Draft = editable, Approved = locked, Final = locked.",
+        )
+
+        # ---- Timezone Display for this Trip ----
+        tz_display_mode = st.radio(
+            "Show times in:",
+            options=["Home", "Destination"],
+            index=0,
+            key="create_tz_display_mode",
+            horizontal=True,
+        )
+
+        # Stops
+        if "create_trip_stops" not in st.session_state:
+            st.session_state["create_trip_stops"] = []
+
+        if st.session_state["create_trip_stops"]:
+            for idx, stop in enumerate(st.session_state["create_trip_stops"]):
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
+                with col1:
+                    st.write(f"**{idx + 1}.** {stop['city']}")
+                with col2:
+                    loc_parts = []
+                    if stop.get("region"):
+                        loc_parts.append(stop["region"])
+                    if stop.get("country"):
+                        loc_parts.append(stop["country"])
+                    st.write(", ".join(loc_parts) if loc_parts else "")
+                with col3:
+                    st.write(
+                        f"{format_date_display(stop['start_date'])} → {format_date_display(stop['end_date'])}"
+                    )
+                with col4:
+                    st.write(stop.get("notes", "")[:30])
+                with col5:
+                    if st.button("🗑️", key=f"create_del_stop_{idx}"):
+                        st.session_state["create_trip_stops"].pop(idx)
+                        st.rerun()
+
+        with st.expander("➕ Add Destination Stop"):
+            col_city, col_country = st.columns(2)
+            with col_city:
+                new_city = st.text_input("City*", key="create_new_stop_city")
+            with col_country:
+                new_country = st.selectbox(
+                    "Country (optional)",
+                    options=[""] + country_list,
+                    key="create_new_stop_country",
                 )
-            else:
-                default_tz_display = tz_display_names[0]
-            n_timezone = st.selectbox(
-                "Time Zone (for this event)",
-                options=tz_display_names,
-                index=tz_display_names.index(default_tz_display),
-                key="create_n_timezone",
-            )
-            n_timezone_value = tz_map[n_timezone]
-
-            n_confirmed = st.checkbox("Confirmed", key="create_n_confirmed")
-            n_notes = st.text_area("Notes", key="create_n_notes")
-
-            # ---- Venue (only relevant for session-type items) ----
-            session_types = [
-                "Meeting",
-                "Conference",
-                "Dinner",
-                "Site Visit",
-                "Tour",
-                "Activity",
-            ]
-            n_venue_id = None
-            if n_type in session_types:
-                venue_options = db.get_venues(active_only=True)
-                venue_labels = {
-                    f"{v['name']}"
-                    + (f" — {v['city']}" if v.get("city") else ""): v["id"]
-                    for v in venue_options
-                }
-                venue_labels["(No venue)"] = None
-                selected_venue_label = st.selectbox(
-                    "Venue (optional)",
-                    options=list(venue_labels.keys()),
-                    index=list(venue_labels.keys()).index("(No venue)"),
-                    key="create_n_venue",
+            col_region, col_notes = st.columns(2)
+            with col_region:
+                new_region = st.text_input(
+                    "Region / State (optional)", key="create_new_stop_region"
                 )
-                n_venue_id = venue_labels[selected_venue_label]
-
-            # Delegation assignment
-            if company_id and st.session_state.get("create_trip_delegation"):
-                delegation_options = {
-                    f"{m['name']} ({m.get('role', '')})": idx
-                    for idx, m in enumerate(st.session_state["create_trip_delegation"])
-                }
-                selected_delegation = st.multiselect(
-                    "Assign Delegation Members",
-                    options=list(delegation_options.keys()),
-                    key="create_item_delegation",
+            with col_notes:
+                new_stop_notes = st.text_input(
+                    "Notes (optional)", key="create_new_stop_notes"
                 )
-                selected_delegation_ids = [
-                    delegation_options[label] for label in selected_delegation
-                ]
-            else:
-                selected_delegation_ids = []
-
-            # ---- Contact assignment (per item) ----
-            if company_id:
-                contact_options = get_company_contact_options(company_id)
-                selected_contacts = st.multiselect(
-                    "Assign Local Support Contacts",
-                    options=list(contact_options.keys()),
-                    key="create_item_contacts",
+            col_start, col_end = st.columns(2)
+            with col_start:
+                new_start = st.date_input(
+                    "Start Date*", value=datetime.now(), key="create_new_stop_start"
                 )
-                selected_contact_ids = [
-                    contact_options[label] for label in selected_contacts
-                ]
-            else:
-                selected_contact_ids = []
+            with col_end:
+                new_end = st.date_input(
+                    "End Date*", value=datetime.now(), key="create_new_stop_end"
+                )
 
-            if st.form_submit_button("➕ Add Item"):
-                if n_desc and n_start:
-                    st.session_state["create_trip_items"].append(
+            if st.button("➕ Add Stop", key="create_add_stop_button"):
+                if new_city and new_start and new_end:
+                    st.session_state["create_trip_stops"].append(
                         {
-                            "item_type": n_type,
-                            "description": n_desc,
-                            "datetime_start": n_start.isoformat(),
-                            "datetime_end": n_end.isoformat() if n_end else None,
-                            "location": n_loc,
-                            "cost": n_cost,
-                            "cost_currency": n_currency,
-                            "is_confirmed": 1 if n_confirmed else 0,
-                            "confirmation_code": "",
-                            "notes": n_notes,
-                            "delegation_ids": selected_delegation_ids,
-                            "contact_ids": selected_contact_ids,
-                            "timezone": n_timezone_value,
-                            "venue_id": n_venue_id,
-														"cost_date": n_cost_date.isoformat(),
+                            "city": new_city,
+                            "country": new_country,
+                            "region": new_region,
+                            "start_date": new_start.isoformat(),
+                            "end_date": new_end.isoformat(),
+                            "notes": new_stop_notes,
                         }
+                    )
+                    st.success(
+                        f"Added: {new_city}"
+                        + (f", {new_country}" if new_country else "")
                     )
                     st.rerun()
                 else:
-                    st.warning("Description and Start Time are required.")
+                    st.warning("City, Start Date, and End Date are required.")
 
-    # Create and Clear buttons
-    col_clear, col_create = st.columns(2)
-    with col_clear:
-        if st.button("🗑️ Clear Form", key="clear_create_form"):
-            st.session_state["create_trip_stops"] = []
-            st.session_state["create_trip_items"] = []
-            st.session_state["create_trip_delegation"] = []
-            st.session_state["create_trip_contact_ids"] = []
-            # Clear all text/number/select/date fields
-            keys_to_clear = [
-                "create_trip_purpose",
-                "create_departure_city",
-                "create_departure_region",
-                "create_departure_country",
-                "create_trip_budget",
-                "create_base_currency",
-                "create_trip_status",
-                "create_overall_start",
-                "create_overall_end",
+        # ---- Contacts for this Trip (Local Support) ----
+        company_id = profile.get("company_id")
+        st.subheader("📋 Contacts for This Trip")
+        # Get distinct countries from contacts
+        conn = sqlite3.connect(db.DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "SELECT DISTINCT country FROM contacts WHERE country IS NOT NULL AND country != '' ORDER BY country"
+        )
+        countries = [row[0] for row in c.fetchall()]
+        conn.close()
+        country_options = ["All Countries"] + countries
+        selected_country = st.selectbox(
+            "Filter contacts by country",
+            options=country_options,
+            index=0,
+            key="create_contact_country_filter",
+        )
+        filter_country = (
+            None if selected_country == "All Countries" else selected_country
+        )
+
+        # Get contacts filtered by country (and active only)
+        all_contacts = db.get_contacts(active_only=True, country=filter_country)
+        if all_contacts:
+            contact_options = {}
+            for contact in all_contacts:
+                comp = (
+                    db.get_company(contact["company_id"])
+                    if contact.get("company_id")
+                    else None
+                )
+                comp_name = comp["name"] if comp else "No Company"
+                label = f"{contact['name']} ({contact.get('role','')}) – {comp_name}"
+                contact_options[label] = contact["id"]
+            selected_contact_labels = st.multiselect(
+                "Select local support contacts to include in the travel pack",
+                options=list(contact_options.keys()),
+                default=[],
+                key="create_trip_contacts",
+            )
+            selected_contact_ids = [
+                contact_options[label] for label in selected_contact_labels
             ]
-            for key in keys_to_clear:
-                st.session_state.pop(key, None)
-            st.rerun()
-    with col_create:
-        if st.button("🚀 Create Trip", key="create_trip_button"):
-            if trip_purpose and st.session_state["create_trip_stops"]:
-                # Use the user-provided overall dates
-                overall_start = overall_start.isoformat()
-                overall_end = overall_end.isoformat()
-                stop_cities = [
-                    stop["city"] for stop in st.session_state["create_trip_stops"]
-                ]
-                dest_summary = " → ".join(stop_cities)
+            st.session_state["create_trip_contact_ids"] = selected_contact_ids
+        else:
+            st.warning("No contacts found for the selected country.")
+            st.session_state["create_trip_contact_ids"] = []
 
-                existing_trips = duplicate_detection.find_duplicate_trips(
-                    trip_exec_id, trip_purpose, overall_start, overall_end
+        # ---- Delegation (travelling group) ----
+        st.subheader("👥 Delegation")
+        if company_id:
+            # Build options from this company's contacts (non local-support preferred, but any allowed)
+            all_company_contacts = db.get_contacts(company_id, active_only=True)
+            contact_options = {
+                f"{c['name']} ({c.get('role', '')})".strip(): c["id"]
+                for c in all_company_contacts
+            }
+            current_ids = st.session_state.get("create_trip_delegation_ids", [])
+            current_labels = [
+                label for label, cid in contact_options.items() if cid in current_ids
+            ]
+            selected_labels = st.multiselect(
+                "Select delegation members for this trip",
+                options=list(contact_options.keys()),
+                default=current_labels,
+                key="create_trip_delegation_multiselect",
+            )
+            st.session_state["create_trip_delegation_ids"] = [
+                contact_options[label] for label in selected_labels
+            ]
+
+            if not contact_options:
+                st.caption(
+                    "No contacts for this company yet — add them in the "
+                    "**👥 Contacts** tab first."
                 )
-                if existing_trips:
-                    st.warning(
-                        "⚠️ You already have a trip with the same purpose and overlapping dates:"
+        else:
+            st.warning("No company selected – cannot add delegation members.")
+
+        # --- Itinerary Items (optional) ---
+        if "create_trip_items" not in st.session_state:
+            st.session_state["create_trip_items"] = []
+
+        if st.session_state["create_trip_items"]:
+            # Get display mode and exec timezone for formatting
+            exec_tz = profile.get("timezone", "America/New_York")
+            display_mode = st.session_state.get("create_tz_display_mode", "Home")
+
+            for idx, item in enumerate(st.session_state["create_trip_items"]):
+                # Format datetime
+                dt_display = format_item_datetime(item, exec_tz, display_mode)
+
+                # Use 5 columns to match the widths list (2,2,2,1,1)
+                col_i1, col_i2, col_i3, col_i4, col_i5 = st.columns([2, 2, 2, 1, 1])
+                with col_i1:
+                    st.write(f"{item['description']} ({item['item_type']})")
+                    st.caption(f"🕐 {dt_display}")
+                with col_i2:
+                    st.write(
+                        f"{item.get('cost',0):.2f} {item.get('cost_currency','USD')}"
                     )
-                    for dup in existing_trips:
-                        st.write(
-                            f"- {dup['destination']} ({dup['start_date'][:10]} to {dup['end_date'][:10]})"
-                        )
-                    if not st.checkbox("Proceed anyway?", key="force_trip_create"):
-                        st.stop()
-
-                # Budget is already in base currency
-                budget_base = budget
-
-                # ---- Contacts and Delegation ----
-                selected_contact_ids = st.session_state.get(
-                    "create_trip_contact_ids", []
-                )
-
-                # Map delegation indices to real IDs
-                delegation_id_map = {}
-                for idx, member in enumerate(
-                    st.session_state.get("create_trip_delegation", [])
-                ):
-                    if member.get("id"):
-                        real_id = member["id"]
-                    else:
-                        dupes = db.find_duplicate_delegation_members(
-                            company_id, name=member["name"]
-                        )
-                        if dupes:
-                            real_id = dupes[0]["id"]
-                        else:
-                            real_id = db.add_delegation_member(
-                                company_id=company_id,
-                                name=member["name"],
-                                email=member.get("email"),
-                                role=member.get("role"),
-                                phone=member.get("phone"),
+                    delegation = item.get("delegation_ids", [])
+                    if delegation and st.session_state.get("create_trip_delegation"):
+                        names = [
+                            st.session_state["create_trip_delegation"][i].get(
+                                "name", ""
                             )
-                    delegation_id_map[idx] = real_id
-
-                # Create trip
-                trip_id = db.create_or_get_trip(
-                    trip_exec_id,
-                    dest_summary,
-                    overall_start,
-                    overall_end,
-                    trip_purpose,
-                    trip_base_currency,
-                    trip_base_currency,
-                    trip_status,
-                    trip_contacts=selected_contact_ids,
-                )
-                db.update_trip_budget(trip_id, budget_base)
-                db.update_trip_departure_details(
-                    trip_id, departure_city, departure_region, departure_country
-                )
-                db.update_trip_status(trip_id, trip_status)
-
-                db.delete_all_trip_stops(trip_id)
-                for idx, stop in enumerate(st.session_state["create_trip_stops"]):
-                    db.add_trip_stop(
-                        trip_id,
-                        idx + 1,
-                        stop["city"],
-                        stop.get("country", ""),
-                        stop.get("region", ""),
-                        stop["start_date"],
-                        stop["end_date"],
-                        stop.get("notes", ""),
-                    )
-
-                # Add items with delegation and contact assignments
-                for item in st.session_state["create_trip_items"]:
-                    item_id = db.add_itinerary_item(
-                        trip_id,
-                        item["item_type"],
-                        item["description"],
-                        item["datetime_start"],
-                        item["datetime_end"],
-                        item.get("location", ""),
-                        item.get("cost", 0),
-                        item.get("confirmation_code", ""),
-                        item.get("notes", ""),
-                        item.get("is_confirmed", 0),
-                        item["cost_currency"],
-                        timezone=item.get("timezone"),
-						venue_id=item.get("venue_id"),
-                        cost_date=item.get("cost_date"),
-                    )
-                    if item.get("delegation_ids"):
-                        real_delegation_ids = [
-                            delegation_id_map[idx]
-                            for idx in item["delegation_ids"]
-                            if idx in delegation_id_map
+                            for i in delegation
+                            if i < len(st.session_state["create_trip_delegation"])
                         ]
-                        if real_delegation_ids:
-                            db.set_item_delegation_members(item_id, real_delegation_ids)
-                    if item.get("contact_ids"):
-                        # contact_ids are already real IDs (from company contacts)
-                        if item["contact_ids"]:
-                            db.set_item_contacts(item_id, item["contact_ids"])
+                        if names:
+                            st.caption(f"👥 {', '.join(names)}")
+                    contacts = item.get("contact_ids", [])
+                    if contacts and company_id:
+                        contact_names = get_contact_names(contacts)
+                        if contact_names:
+                            st.caption(f"📞 {contact_names}")
+                with col_i3:
+                    if st.button("✏️", key=f"create_edit_item_{idx}"):
+                        st.session_state[f"create_editing_item_{idx}"] = True
+                with col_i4:
+                    if st.button("🗑️", key=f"create_del_item_{idx}"):
+                        st.session_state["create_trip_items"].pop(idx)
+                        st.rerun()
+                # col_i5 is unused; you can leave it or add future elements
 
-                # Clear the form and session state
+                if st.session_state.get(f"create_editing_item_{idx}", False):
+                    with st.expander(
+                        f"Edit Item: {item['description']}", expanded=True
+                    ):
+                        with st.form(key=f"create_edit_item_form_{idx}"):
+                            e_type = st.selectbox(
+                                "Type",
+                                options=(
+                                    [cat[1] for cat in db.get_all_categories()]
+                                    if db.get_all_categories()
+                                    else ["Flight", "Hotel", "Meeting", "Transport"]
+                                ),
+                                index=0,
+                                key=f"create_e_type_{idx}",
+                            )
+                            e_desc = st.text_input(
+                                "Description",
+                                value=item["description"],
+                                key=f"create_e_desc_{idx}",
+                            )
+                            e_start = st.datetime_input(
+                                "Start",
+                                value=datetime.fromisoformat(item["datetime_start"]),
+                                key=f"create_e_start_{idx}",
+                            )
+                            e_end = st.datetime_input(
+                                "End",
+                                value=(
+                                    datetime.fromisoformat(item["datetime_end"])
+                                    if item["datetime_end"]
+                                    else datetime.now()
+                                ),
+                                key=f"create_e_end_{idx}",
+                            )
+                            e_loc = st.text_input(
+                                "Location",
+                                value=item.get("location", ""),
+                                key=f"create_e_loc_{idx}",
+                            )
+                            e_cost = st.number_input(
+                                "Cost",
+                                value=float(item.get("cost", 0)),
+                                key=f"create_e_cost_{idx}",
+                            )
+                            # Currency dropdown
+                            currency_options = [
+                                "USD",
+                                "EUR",
+                                "GBP",
+                                "NGN",
+                                "JPY",
+                                "BRL",
+                                "CAD",
+                                "AUD",
+                                "CHF",
+                                "CNY",
+                                "INR",
+                            ]
+                            e_currency = st.selectbox(
+                                "Currency",
+                                options=currency_options,
+                                index=(
+                                    currency_options.index(
+                                        item.get("cost_currency", "USD")
+                                    )
+                                    if item.get("cost_currency", "USD")
+                                    in currency_options
+                                    else 0
+                                ),
+                                key=f"create_e_currency_{idx}",
+                            )
+                            # ---- Cost Date ----
+                            default_cost_date = item.get("cost_date")
+                            if default_cost_date:
+                                try:
+                                    default_cost_date = datetime.fromisoformat(
+                                        default_cost_date
+                                    ).date()
+                                except Exception:
+                                    default_cost_date = datetime.fromisoformat(
+                                        item["datetime_start"]
+                                    ).date()
+                            else:
+                                default_cost_date = datetime.fromisoformat(
+                                    item["datetime_start"]
+                                ).date()
+                            e_cost_date = st.date_input(
+                                "Cost Date",
+                                value=default_cost_date,
+                                key=f"create_e_cost_date_{idx}",
+                                help="Date the cost was incurred — used for accurate currency conversion.",
+                            )
+
+                            # ---- Timezone dropdown (Phase 4) ----
+                            tz_display_names, tz_map = get_timezone_dropdown_options()
+                            current_tz = item.get("timezone") or profile.get(
+                                "timezone", "America/New_York"
+                            )
+                            current_tz_display = next(
+                                (n for n in tz_display_names if current_tz in n),
+                                tz_display_names[0],
+                            )
+                            e_timezone = st.selectbox(
+                                "Time Zone",
+                                options=tz_display_names,
+                                index=tz_display_names.index(current_tz_display),
+                                key=f"create_e_timezone_{idx}",
+                            )
+                            e_timezone_value = tz_map[e_timezone]
+
+                            e_confirmed = st.checkbox(
+                                "Confirmed",
+                                value=bool(item.get("is_confirmed", 0)),
+                                key=f"create_e_confirmed_{idx}",
+                            )
+                            e_notes = st.text_area(
+                                "Notes",
+                                value=item.get("notes", ""),
+                                key=f"create_e_notes_{idx}",
+                            )
+                            # ---- Venue (only for session-type items) ----
+                            session_types = [
+                                "Meeting",
+                                "Conference",
+                                "Dinner",
+                                "Site Visit",
+                                "Tour",
+                                "Activity",
+                            ]
+                            e_venue_id = item.get(
+                                "venue_id"
+                            )  # keep existing if not changed
+                            if e_type in session_types:
+                                venue_options = db.get_venues(active_only=True)
+                                venue_labels = {
+                                    f"{v['name']}"
+                                    + (f" — {v['city']}" if v.get("city") else ""): v[
+                                        "id"
+                                    ]
+                                    for v in venue_options
+                                }
+                                venue_labels["(No venue)"] = None
+
+                                # Determine current label to pre-select
+                                current_venue_label = "(No venue)"
+                                for lbl, vid in venue_labels.items():
+                                    if vid == e_venue_id:
+                                        current_venue_label = lbl
+                                        break
+
+                                selected_venue_label = st.selectbox(
+                                    "Venue (optional)",
+                                    options=list(venue_labels.keys()),
+                                    index=list(venue_labels.keys()).index(
+                                        current_venue_label
+                                    ),
+                                    key=f"create_e_venue_{idx}",
+                                )
+                                e_venue_id = venue_labels[selected_venue_label]
+
+                            # Delegation assignment
+                            if company_id and st.session_state.get(
+                                "create_trip_delegation"
+                            ):
+                                delegation_options = {
+                                    f"{m['name']} ({m.get('role', '')})": m["id"]
+                                    for m in db.get_contacts(company_id, active_only=True)
+                                    if m["id"] in st.session_state.get("create_trip_delegation_ids", [])
+                                }
+                                current_delegation = item.get("delegation_ids", [])
+                                current_labels = [
+                                    label
+                                    for label, i in delegation_options.items()
+                                    if i in current_delegation
+                                ]
+                                selected_parts = st.multiselect(
+                                    "Assign Delegation Members",
+                                    options=list(delegation_options.keys()),
+                                    default=current_labels,
+                                    key=f"create_e_delegation_{idx}",
+                                )
+                                e_delegation_ids = [
+                                    delegation_options[label]
+                                    for label in selected_parts
+                                ]
+                            else:
+                                e_delegation_ids = []
+
+                            # ---- Contact assignment (per item) ----
+                            if company_id:
+                                contact_options = get_company_contact_options(
+                                    company_id
+                                )
+                                current_contact_ids = item.get("contact_ids", [])
+                                current_labels = [
+                                    label
+                                    for label, cid in contact_options.items()
+                                    if cid in current_contact_ids
+                                ]
+                                selected_contacts = st.multiselect(
+                                    "Assign Local Support Contacts",
+                                    options=list(contact_options.keys()),
+                                    default=current_labels,
+                                    key=f"create_e_contacts_{idx}",
+                                )
+                                e_contact_ids = [
+                                    contact_options[label]
+                                    for label in selected_contacts
+                                ]
+                            else:
+                                e_contact_ids = []
+
+                            if st.form_submit_button("💾 Update Item"):
+                                st.session_state["create_trip_items"][idx] = {
+                                    "item_type": e_type,
+                                    "description": e_desc,
+                                    "datetime_start": e_start.isoformat(),
+                                    "datetime_end": (
+                                        e_end.isoformat() if e_end else None
+                                    ),
+                                    "location": e_loc,
+                                    "cost": e_cost,
+                                    "cost_currency": e_currency,
+                                    "is_confirmed": 1 if e_confirmed else 0,
+                                    "confirmation_code": item.get(
+                                        "confirmation_code", ""
+                                    ),
+                                    "notes": e_notes,
+                                    "delegation_ids": e_delegation_ids,
+                                    "contact_ids": e_contact_ids,
+                                    "timezone": e_timezone_value,
+                                    "venue_id": e_venue_id,
+                                    "cost_date": e_cost_date.isoformat(),
+                                }
+                                st.session_state[f"create_editing_item_{idx}"] = False
+                                st.rerun()
+                            if st.form_submit_button("❌ Cancel"):
+                                st.session_state[f"create_editing_item_{idx}"] = False
+                                st.rerun()
+
+        with st.expander("➕ Add Itinerary Item"):
+            with st.form(key="create_add_item_form"):
+                n_type = st.selectbox(
+                    "Type",
+                    options=(
+                        [cat[1] for cat in db.get_all_categories()]
+                        if db.get_all_categories()
+                        else ["Flight", "Hotel", "Meeting", "Transport"]
+                    ),
+                    key="create_n_type",
+                )
+                n_desc = st.text_input("Description", key="create_n_desc")
+                n_start = st.datetime_input(
+                    "Start", value=datetime.now(), key="create_n_start"
+                )
+                n_end = st.datetime_input(
+                    "End", value=datetime.now(), key="create_n_end"
+                )
+                n_loc = st.text_input("Location", key="create_n_loc")
+                n_cost = st.number_input(
+                    "Cost", min_value=0.0, value=0.0, key="create_n_cost"
+                )
+                currency_options = [
+                    "USD",
+                    "EUR",
+                    "GBP",
+                    "NGN",
+                    "JPY",
+                    "BRL",
+                    "CAD",
+                    "AUD",
+                    "CHF",
+                    "CNY",
+                    "INR",
+                ]
+                n_currency = st.selectbox(
+                    "Currency",
+                    options=currency_options,
+                    key="create_n_currency",
+                )
+                n_cost_date = st.date_input(
+                    "Cost Date",
+                    value=datetime.now(),
+                    key="create_n_cost_date",
+                    help="Date the cost was incurred — used for accurate currency conversion.",
+                )
+
+                # ---- Timezone dropdown (Phase 4) ----
+                tz_display_names, tz_map = get_timezone_dropdown_options()
+                if profile and profile.get("timezone"):
+                    default_tz_display = next(
+                        (n for n in tz_display_names if profile["timezone"] in n),
+                        tz_display_names[0],
+                    )
+                else:
+                    default_tz_display = tz_display_names[0]
+                n_timezone = st.selectbox(
+                    "Time Zone (for this event)",
+                    options=tz_display_names,
+                    index=tz_display_names.index(default_tz_display),
+                    key="create_n_timezone",
+                )
+                n_timezone_value = tz_map[n_timezone]
+
+                n_confirmed = st.checkbox("Confirmed", key="create_n_confirmed")
+                n_notes = st.text_area("Notes", key="create_n_notes")
+
+                # ---- Venue (only relevant for session-type items) ----
+                session_types = [
+                    "Meeting",
+                    "Conference",
+                    "Dinner",
+                    "Site Visit",
+                    "Tour",
+                    "Activity",
+                ]
+                n_venue_id = None
+                if n_type in session_types:
+                    venue_options = db.get_venues(active_only=True)
+                    venue_labels = {
+                        f"{v['name']}"
+                        + (f" — {v['city']}" if v.get("city") else ""): v["id"]
+                        for v in venue_options
+                    }
+                    venue_labels["(No venue)"] = None
+                    selected_venue_label = st.selectbox(
+                        "Venue (optional)",
+                        options=list(venue_labels.keys()),
+                        index=list(venue_labels.keys()).index("(No venue)"),
+                        key="create_n_venue",
+                    )
+                    n_venue_id = venue_labels[selected_venue_label]
+
+                # Delegation assignment
+                if company_id and st.session_state.get("create_trip_delegation_ids"):
+                    delegation_options = {
+                        f"{m['name']} ({m.get('role', '')})": m["id"]
+                        for m in db.get_contacts(company_id, active_only=True)
+                        if m["id"] in st.session_state["create_trip_delegation_ids"]
+                    }
+                    selected_delegation = st.multiselect(
+                        "Assign Delegation Members",
+                        options=list(delegation_options.keys()),
+                        key="create_item_delegation",
+                    )
+                    selected_delegation_ids = [
+                        delegation_options[label] for label in selected_delegation
+                    ]
+                else:
+                    selected_delegation_ids = []
+
+                # ---- Contact assignment (per item) ----
+                if company_id:
+                    contact_options = get_company_contact_options(company_id)
+                    selected_contacts = st.multiselect(
+                        "Assign Local Support Contacts",
+                        options=list(contact_options.keys()),
+                        key="create_item_contacts",
+                    )
+                    selected_contact_ids = [
+                        contact_options[label] for label in selected_contacts
+                    ]
+                else:
+                    selected_contact_ids = []
+
+                if st.form_submit_button("➕ Add Item"):
+                    if n_desc and n_start:
+                        st.session_state["create_trip_items"].append(
+                            {
+                                "item_type": n_type,
+                                "description": n_desc,
+                                "datetime_start": n_start.isoformat(),
+                                "datetime_end": n_end.isoformat() if n_end else None,
+                                "location": n_loc,
+                                "cost": n_cost,
+                                "cost_currency": n_currency,
+                                "is_confirmed": 1 if n_confirmed else 0,
+                                "confirmation_code": "",
+                                "notes": n_notes,
+                                "delegation_ids": selected_delegation_ids,
+                                "contact_ids": selected_contact_ids,
+                                "timezone": n_timezone_value,
+                                "venue_id": n_venue_id,
+                                "cost_date": n_cost_date.isoformat(),
+                            }
+                        )
+                        st.rerun()
+                    else:
+                        st.warning("Description and Start Time are required.")
+
+        # Create and Clear buttons
+        col_clear, col_create = st.columns(2)
+        with col_clear:
+            if st.button("🗑️ Clear Form", key="clear_create_form"):
                 st.session_state["create_trip_stops"] = []
                 st.session_state["create_trip_items"] = []
                 st.session_state["create_trip_delegation"] = []
                 st.session_state["create_trip_contact_ids"] = []
-
+                # Clear all text/number/select/date fields
                 keys_to_clear = [
                     "create_trip_purpose",
                     "create_departure_city",
@@ -2074,66 +1964,201 @@ with tab1:
                 ]
                 for key in keys_to_clear:
                     st.session_state.pop(key, None)
+                st.rerun()
+        with col_create:
+            if st.button("🚀 Create Trip", key="create_trip_button"):
+                if trip_purpose and st.session_state["create_trip_stops"]:
+                    # Use the user-provided overall dates
+                    overall_start = overall_start.isoformat()
+                    overall_end = overall_end.isoformat()
+                    stop_cities = [
+                        stop["city"] for stop in st.session_state["create_trip_stops"]
+                    ]
+                    dest_summary = " → ".join(stop_cities)
 
-                st.success(
-                    f"✅ Trip '{trip_purpose}' created successfully with status '{trip_status}'!"
-                )
-
-                # ---- Save as Template ----
-                st.session_state["last_created_trip_id"] = trip_id
-                st.session_state["last_created_trip_name"] = trip_purpose
-
-                col_save_template, col_continue = st.columns(2)
-                with col_save_template:
-                    if st.button(
-                        "📋 Save as Template", key="save_template_after_create"
-                    ):
-                        st.session_state["show_save_template_after_create"] = True
-                with col_continue:
-                    if st.button("Continue", key="continue_after_create"):
-                        st.session_state.pop("last_created_trip_id", None)
-                        st.session_state.pop("last_created_trip_name", None)
-                        st.session_state.pop("show_save_template_after_create", None)
-                        st.rerun()
-
-                if st.session_state.get("show_save_template_after_create", False):
-                    st.info("Save this trip as a reusable template.")
-                    template_name = st.text_input(
-                        "Template Name*",
-                        value=f"{trip_purpose} Template",
-                        key="template_name_after_create",
+                    proceed = True
+                    existing_trips = duplicate_detection.find_duplicate_trips(
+                        trip_exec_id, trip_purpose, overall_start, overall_end
                     )
-                    template_desc = st.text_input(
-                        "Description (optional)", key="template_desc_after_create"
+                    if existing_trips:
+                        st.warning(
+                            "⚠️ You already have a trip with the same purpose and overlapping dates:"
+                        )
+                        for dup in existing_trips:
+                            st.write(
+                                f"- {dup['destination']} ({dup['start_date'][:10]} to {dup['end_date'][:10]})"
+                            )
+                        if not st.checkbox("Proceed anyway?", key="force_trip_create"):
+                            proceed = False
+                            st.info(
+                                "Tick **Proceed anyway?** above and click "
+                                "**🚀 Create Trip** again to save the duplicate."
+                            )
+
+                    if proceed:
+                        # Budget is already in base currency
+                        budget_base = budget
+
+                    # ---- Contacts and Delegation ----
+                    selected_contact_ids = st.session_state.get(
+                        "create_trip_contact_ids", []
                     )
-                    col_yes, col_no = st.columns(2)
-                    with col_yes:
-                        if st.button("💾 Save", key="confirm_save_after_create"):
-                            if template_name:
-                                new_id = db.save_trip_as_template(
-                                    trip_id, template_name, template_desc
+
+                    # Create trip
+                    trip_id = db.create_or_get_trip(
+                        trip_exec_id,
+                        dest_summary,
+                        overall_start,
+                        overall_end,
+                        trip_purpose,
+                        trip_base_currency,
+                        trip_base_currency,
+                        trip_status,
+                        trip_contacts=selected_contact_ids,
+                    )
+                    db.update_trip_budget(trip_id, budget_base)
+                    db.update_trip_departure_details(
+                        trip_id, departure_city, departure_region, departure_country
+                    )
+                    db.update_trip_status(trip_id, trip_status)
+
+                    # Save trip delegation (who is on this trip)
+                    db.set_trip_delegation(
+                        trip_id,
+                        st.session_state.get("create_trip_delegation_ids", []),
+                    )
+
+                    db.delete_all_trip_stops(trip_id)
+                    for idx, stop in enumerate(st.session_state["create_trip_stops"]):
+                        db.add_trip_stop(
+                            trip_id,
+                            idx + 1,
+                            stop["city"],
+                            stop.get("country", ""),
+                            stop.get("region", ""),
+                            stop["start_date"],
+                            stop["end_date"],
+                            stop.get("notes", ""),
+                        )
+
+                    # Add items with delegation and contact assignments
+                    for item in st.session_state["create_trip_items"]:
+                        item_id = db.add_itinerary_item(
+                            trip_id,
+                            item["item_type"],
+                            item["description"],
+                            item["datetime_start"],
+                            item["datetime_end"],
+                            item.get("location", ""),
+                            item.get("cost", 0),
+                            item.get("confirmation_code", ""),
+                            item.get("notes", ""),
+                            item.get("is_confirmed", 0),
+                            item["cost_currency"],
+                            timezone=item.get("timezone"),
+                            venue_id=item.get("venue_id"),
+                            cost_date=item.get("cost_date"),
+                        )
+                        if item.get("delegation_ids"):
+                            # Already real contact IDs from the contact-based multiselect
+                            real_delegation_ids = list(item["delegation_ids"])
+                            if real_delegation_ids:
+                                db.set_item_delegation_members(
+                                    item_id, real_delegation_ids
                                 )
-                                if new_id:
-                                    st.success(f"✅ Template '{template_name}' saved!")
-                                    st.session_state.pop(
-                                        "show_save_template_after_create", None
-                                    )
-                                    st.session_state.pop("last_created_trip_id", None)
-                                    st.session_state.pop("last_created_trip_name", None)
-                                    st.rerun()
-                                else:
-                                    st.error("Failed to save template.")
-                            else:
-                                st.warning("Template Name is required.")
-                    with col_no:
-                        if st.button("Cancel", key="cancel_save_after_create"):
+                        if item.get("contact_ids"):
+                            # contact_ids are already real IDs (from company contacts)
+                            if item["contact_ids"]:
+                                db.set_item_contacts(item_id, item["contact_ids"])
+
+                    # Clear the form and session state
+                    st.session_state["create_trip_stops"] = []
+                    st.session_state["create_trip_items"] = []
+                    st.session_state["create_trip_delegation"] = []
+                    st.session_state["create_trip_contact_ids"] = []
+
+                    keys_to_clear = [
+                        "create_trip_purpose",
+                        "create_departure_city",
+                        "create_departure_region",
+                        "create_departure_country",
+                        "create_trip_budget",
+                        "create_base_currency",
+                        "create_trip_status",
+                        "create_overall_start",
+                        "create_overall_end",
+                    ]
+                    for key in keys_to_clear:
+                        st.session_state.pop(key, None)
+
+                    st.success(
+                        f"✅ Trip '{trip_purpose}' created successfully with status '{trip_status}'!"
+                    )
+
+                    # ---- Save as Template ----
+                    st.session_state["last_created_trip_id"] = trip_id
+                    st.session_state["last_created_trip_name"] = trip_purpose
+
+                    col_save_template, col_continue = st.columns(2)
+                    with col_save_template:
+                        if st.button(
+                            "📋 Save as Template", key="save_template_after_create"
+                        ):
+                            st.session_state["show_save_template_after_create"] = True
+                    with col_continue:
+                        if st.button("Continue", key="continue_after_create"):
+                            st.session_state.pop("last_created_trip_id", None)
+                            st.session_state.pop("last_created_trip_name", None)
                             st.session_state.pop(
                                 "show_save_template_after_create", None
                             )
                             st.rerun()
 
-            else:
-                st.warning("Enter a Trip Name and add at least one stop.")
+                    if st.session_state.get("show_save_template_after_create", False):
+                        st.info("Save this trip as a reusable template.")
+                        template_name = st.text_input(
+                            "Template Name*",
+                            value=f"{trip_purpose} Template",
+                            key="template_name_after_create",
+                        )
+                        template_desc = st.text_input(
+                            "Description (optional)", key="template_desc_after_create"
+                        )
+                        col_yes, col_no = st.columns(2)
+                        with col_yes:
+                            if st.button("💾 Save", key="confirm_save_after_create"):
+                                if template_name:
+                                    new_id = db.save_trip_as_template(
+                                        trip_id, template_name, template_desc
+                                    )
+                                    if new_id:
+                                        st.success(
+                                            f"✅ Template '{template_name}' saved!"
+                                        )
+                                        st.session_state.pop(
+                                            "show_save_template_after_create", None
+                                        )
+                                        st.session_state.pop(
+                                            "last_created_trip_id", None
+                                        )
+                                        st.session_state.pop(
+                                            "last_created_trip_name", None
+                                        )
+                                        st.rerun()
+                                    else:
+                                        st.error("Failed to save template.")
+                                else:
+                                    st.warning("Template Name is required.")
+                        with col_no:
+                            if st.button("Cancel", key="cancel_save_after_create"):
+                                st.session_state.pop(
+                                    "show_save_template_after_create", None
+                                )
+                                st.rerun()
+
+                else:
+                    st.warning("Enter a Trip Name and add at least one stop.")
+
 
 # ------------------------------------------------------------------
 # TAB 2: TRIP TEMPLATES (unchanged)
@@ -3129,8 +3154,8 @@ with tab3:
                                             # Delegation assignment
                                             if company_id_modal:
                                                 delegation_options_modal = (
-                                                    get_company_delegation_options(
-                                                        company_id_modal
+                                                    get_trip_delegation_options(
+                                                        trip_id_modal
                                                     )
                                                 )
                                                 current_delegation_ids = item.get(
@@ -3325,8 +3350,8 @@ with tab3:
                                     # Delegation assignment
                                     if not is_locked and company_id_modal:
                                         delegation_options_modal = (
-                                            get_company_delegation_options(
-                                                company_id_modal
+                                            get_trip_delegation_options(
+                                                trip_id_modal
                                             )
                                         )
                                         selected_delegation_modal_new = st.multiselect(
@@ -3398,73 +3423,48 @@ with tab3:
                                                 )
 
                             # ---- Delegation management for edit modal ----
+                            # ---- Delegation (trip travellers) ----
                             st.write("**👥 Delegation**")
                             if company_id_modal:
-                                all_members = db.get_delegation_members(
+                                all_company_contacts = db.get_contacts(
                                     company_id_modal, active_only=True
                                 )
-                                if all_members:
-                                    for member in all_members:
-                                        col1, col2, col3 = st.columns([3, 2, 1])
-                                        with col1:
-                                            st.write(
-                                                f"**{member['name']}** ({member.get('role', '')})"
-                                            )
-                                        with col2:
-                                            st.write(
-                                                f"{member.get('email', '')} | {member.get('phone', '')}"
-                                            )
-                                        with col3:
-                                            st.write("")
-                                else:
-                                    st.caption(
-                                        "No delegation members for this company."
-                                    )
-                                with st.expander("➕ Add Delegation Member"):
-                                    with st.form(
-                                        key=f"add_delegation_modal_{trip_id_modal}"
+                                contact_options = {
+                                    f"{c['name']} ({c.get('role', '')})".strip(): c["id"]
+                                    for c in all_company_contacts
+                                }
+                                existing_trip_delegation = db.get_trip_delegation_members(
+                                    trip_id_modal
+                                )
+                                existing_ids = [m["id"] for m in existing_trip_delegation]
+                                existing_labels = [
+                                    label
+                                    for label, cid in contact_options.items()
+                                    if cid in existing_ids
+                                ]
+                                selected_labels = st.multiselect(
+                                    "Travelers on this trip",
+                                    options=list(contact_options.keys()),
+                                    default=existing_labels,
+                                    key=f"modal_trip_delegation_{trip_id_modal}",
+                                    disabled=is_locked,
+                                )
+                                if not is_locked:
+                                    if st.button(
+                                        "💾 Save Delegation",
+                                        key=f"save_trip_delegation_{trip_id_modal}",
                                     ):
-                                        d_name = st.text_input(
-                                            "Name*",
-                                            key=f"modal_delegation_name_{trip_id_modal}",
+                                        db.set_trip_delegation(
+                                            trip_id_modal,
+                                            [contact_options[l] for l in selected_labels],
                                         )
-                                        d_email = st.text_input(
-                                            "Email",
-                                            key=f"modal_delegation_email_{trip_id_modal}",
-                                        )
-                                        d_role = st.text_input(
-                                            "Role",
-                                            key=f"modal_delegation_role_{trip_id_modal}",
-                                        )
-                                        d_phone = st.text_input(
-                                            "Phone",
-                                            key=f"modal_delegation_phone_{trip_id_modal}",
-                                        )
-                                        if st.form_submit_button(
-                                            "Add Delegation Member"
-                                        ):
-                                            if d_name:
-                                                dupes = db.find_duplicate_delegation_members(
-                                                    company_id_modal, name=d_name
-                                                )
-                                                if not dupes:
-                                                    db.add_delegation_member(
-                                                        company_id=company_id_modal,
-                                                        name=d_name,
-                                                        email=d_email,
-                                                        role=d_role,
-                                                        phone=d_phone,
-                                                    )
-                                                    st.success(
-                                                        "Delegation member added!"
-                                                    )
-                                                    st.rerun()
-                                                else:
-                                                    st.warning(
-                                                        "A member with that name already exists."
-                                                    )
-                                            else:
-                                                st.warning("Name is required.")
+                                        st.success("Delegation updated.")
+                                        st.rerun()
+
+                                st.caption(
+                                    "Add new people in the **👥 Contacts** tab, "
+                                    "then return here to include them."
+                                )
                             else:
                                 st.warning("No company associated with this trip.")
 
@@ -4523,252 +4523,6 @@ with tab4:
                             st.session_state.pop(f"export_company_{comp_id}", None)
                             st.rerun()
 
-                # ---- Phase 7: Delegation Management for this company ----
-                with st.expander(
-                    f"👥 Delegation ({len(db.get_delegation_members(comp_id, active_only=True))})",
-                    expanded=False,
-                ):
-                    # ---- Add new delegation member ----
-                    with st.form(key=f"add_delegation_comp_{comp_id}"):
-                        col_name, col_email, col_role, col_phone = st.columns(4)
-                        with col_name:
-                            d_name = st.text_input(
-                                "Name*", key=f"add_delegation_name_{comp_id}"
-                            )
-                        with col_email:
-                            d_email = st.text_input(
-                                "Email", key=f"add_delegation_email_{comp_id}"
-                            )
-                        with col_role:
-                            d_role = st.text_input(
-                                "Role", key=f"add_delegation_role_{comp_id}"
-                            )
-                        with col_phone:
-                            d_phone = st.text_input(
-                                "Phone", key=f"add_delegation_phone_{comp_id}"
-                            )
-                        if st.form_submit_button("➕ Add Delegation Member"):
-                            if d_name:
-                                # Check duplicate
-                                dupes = db.find_duplicate_delegation_members(
-                                    comp_id, name=d_name
-                                )
-                                if not dupes:
-                                    db.add_delegation_member(
-                                        comp_id, d_name, d_email, d_role, d_phone
-                                    )
-                                    st.success(f"Delegation member '{d_name}' added!")
-                                    st.rerun()
-                                else:
-                                    st.warning(
-                                        "A member with that name already exists."
-                                    )
-                            else:
-                                st.warning("Name is required.")
-
-                    # ---- CSV Import ----
-                    st.write("**📤 CSV Import / Export**")
-                    col_imp, col_exp = st.columns(2)
-                    with col_imp:
-                        uploaded_file = st.file_uploader(
-                            "Import CSV",
-                            type=["csv"],
-                            key=f"import_delegation_{comp_id}",
-                            help="Columns: Name, Email, Role, Phone",
-                        )
-                        if uploaded_file is not None:
-                            try:
-                                content = (
-                                    uploaded_file.getvalue()
-                                    .decode("utf-8")
-                                    .splitlines()
-                                )
-                                reader = csv.DictReader(content)
-                                expected = ["Name", "Email", "Role", "Phone"]
-                                if all(h in reader.fieldnames for h in expected):
-                                    if st.button(
-                                        f"Start Import",
-                                        key=f"start_import_delegation_{comp_id}",
-                                    ):
-                                        added = 0
-                                        skipped = 0
-                                        for row in reader:
-                                            name = row.get("Name", "").strip()
-                                            if not name:
-                                                continue
-                                            # Check duplicate
-                                            dupes = (
-                                                db.find_duplicate_delegation_members(
-                                                    comp_id, name=name
-                                                )
-                                            )
-                                            if dupes and not st.checkbox(
-                                                f"Duplicate '{name}' – add anyway?",
-                                                key=f"force_import_delegation_{name}_{comp_id}",
-                                            ):
-                                                skipped += 1
-                                                continue
-                                            db.add_delegation_member(
-                                                company_id=comp_id,
-                                                name=name,
-                                                email=row.get("Email", "").strip()
-                                                or None,
-                                                role=row.get("Role", "").strip()
-                                                or None,
-                                                phone=row.get("Phone", "").strip()
-                                                or None,
-                                            )
-                                            added += 1
-                                        st.success(
-                                            f"✅ Imported {added} delegation members. Skipped {skipped} duplicates."
-                                        )
-                                        st.rerun()
-                                else:
-                                    st.error(
-                                        f"CSV must have columns: {', '.join(expected)}"
-                                    )
-                            except Exception as e:
-                                st.error(f"Import failed: {e}")
-
-                    with col_exp:
-                        # Export CSV button
-                        if st.button(
-                            "📥 Export CSV", key=f"export_delegation_{comp_id}"
-                        ):
-                            members = db.get_delegation_members(
-                                comp_id, active_only=True
-                            )
-                            output = io.StringIO()
-                            writer = csv.writer(output)
-                            writer.writerow(["Name", "Email", "Role", "Phone"])
-                            for m in members:
-                                writer.writerow(
-                                    [
-                                        m["name"],
-                                        m.get("email", ""),
-                                        m.get("role", ""),
-                                        m.get("phone", ""),
-                                    ]
-                                )
-                            st.download_button(
-                                label="⬇️ Download CSV",
-                                data=output.getvalue().encode("utf-8"),
-                                file_name=f"delegation_{comp['name']}_{datetime.now().strftime('%Y%m%d')}.csv",
-                                mime="text/csv",
-                                key=f"download_delegation_{comp_id}",
-                            )
-
-                    # ---- List existing delegation members ----
-                    members = db.get_delegation_members(comp_id, active_only=True)
-                    if not members:
-                        st.caption("No delegation members yet.")
-                    else:
-                        st.write(f"**{len(members)} active members**")
-                        for m in members:
-                            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
-                            with col1:
-                                st.write(f"**{m['name']}**")
-                            with col2:
-                                st.write(m.get("email", ""))
-                            with col3:
-                                st.write(f"{m.get('role', '')} | {m.get('phone', '')}")
-                            with col4:
-                                if st.button(
-                                    "✏️", key=f"edit_delegation_{m['id']}_{comp_id}"
-                                ):
-                                    st.session_state[
-                                        f"editing_delegation_{m['id']}"
-                                    ] = True
-                            with col5:
-                                if st.button(
-                                    "🗑️", key=f"del_delegation_{m['id']}_{comp_id}"
-                                ):
-                                    st.session_state[f"delete_delegation_{m['id']}"] = (
-                                        True
-                                    )
-
-                            # ---- Edit delegation member popover ----
-                            if st.session_state.get(
-                                f"editing_delegation_{m['id']}", False
-                            ):
-                                with st.popover(
-                                    f"Edit {m['name']}", use_container_width=True
-                                ):
-                                    with st.form(key=f"edit_delegation_form_{m['id']}"):
-                                        e_name = st.text_input(
-                                            "Name*",
-                                            value=m["name"],
-                                            key=f"edit_delegation_name_{m['id']}",
-                                        )
-                                        e_email = st.text_input(
-                                            "Email",
-                                            value=m.get("email", ""),
-                                            key=f"edit_delegation_email_{m['id']}",
-                                        )
-                                        e_role = st.text_input(
-                                            "Role",
-                                            value=m.get("role", ""),
-                                            key=f"edit_delegation_role_{m['id']}",
-                                        )
-                                        e_phone = st.text_input(
-                                            "Phone",
-                                            value=m.get("phone", ""),
-                                            key=f"edit_delegation_phone_{m['id']}",
-                                        )
-                                        if st.form_submit_button("💾 Save"):
-                                            if e_name:
-                                                db.update_delegation_member(
-                                                    m["id"],
-                                                    name=e_name,
-                                                    email=e_email,
-                                                    role=e_role,
-                                                    phone=e_phone,
-                                                )
-                                                st.session_state.pop(
-                                                    f"editing_delegation_{m['id']}",
-                                                    None,
-                                                )
-                                                st.success("Updated!")
-                                                st.rerun()
-                                            else:
-                                                st.warning("Name is required.")
-                                        if st.form_submit_button("❌ Cancel"):
-                                            st.session_state.pop(
-                                                f"editing_delegation_{m['id']}", None
-                                            )
-                                            st.rerun()
-
-                            # ---- Delete confirmation ----
-                            if st.session_state.get(
-                                f"delete_delegation_{m['id']}", False
-                            ):
-                                st.warning(
-                                    f"⚠️ Permanently delete delegation member '{m['name']}'?"
-                                )
-                                col_yes, col_no = st.columns(2)
-                                with col_yes:
-                                    if st.button(
-                                        "✅ Yes",
-                                        key=f"confirm_del_delegation_{m['id']}",
-                                    ):
-                                        db.delete_delegation_member(m["id"])
-                                        st.session_state.pop(
-                                            f"delete_delegation_{m['id']}", None
-                                        )
-                                        st.success("Deleted.")
-                                        st.rerun()
-                                with col_no:
-                                    if st.button(
-                                        "❌ Cancel",
-                                        key=f"cancel_del_delegation_{m['id']}",
-                                    ):
-                                        st.session_state.pop(
-                                            f"delete_delegation_{m['id']}", None
-                                        )
-                                        st.rerun()
-                            st.divider()
-
-                st.divider()
 
 # ------------------------------------------------------------------
 # TAB 5: CONTACTS (Local Support & More)
@@ -4873,6 +4627,7 @@ with tab5:
                 if not add_name:
                     st.warning("Name is required.")
                 else:
+                    proceed = True
                     # Check duplicates (company can be None)
                     dupes = db.find_duplicate_contacts(
                         add_company_id, name=add_name, email=add_email, phone=add_phone
@@ -4884,21 +4639,28 @@ with tab5:
                         for d in dupes:
                             st.write(f"- {d['name']} ({d.get('role','')})")
                         if not st.checkbox("Add anyway?", key="force_add_contact"):
-                            st.stop()
-                    db.add_contact(
-                        company_id=add_company_id,
-                        name=add_name,
-                        role=add_role,
-                        phone=add_phone,
-                        email=add_email,
-                        country=add_country,
-                        city=add_city,
-                        notes=add_notes,
-                        tags=add_tags,
-                        type=add_type,
-                    )
-                    st.success(f"✅ Contact '{add_name}' added!")
-                    st.rerun()
+                            proceed = False
+                            st.info(
+                                "Tick **Add anyway?** above and click "
+                                "**➕ Add Contact** again to save the duplicate."
+                            )
+
+                    if proceed:
+                        db.add_contact(
+                            company_id=add_company_id,
+                            name=add_name,
+                            role=add_role,
+                            phone=add_phone,
+                            email=add_email,
+                            country=add_country,
+                            city=add_city,
+                            notes=add_notes,
+                            tags=add_tags,
+                            type=add_type,
+                        )
+                        st.success(f"✅ Contact '{add_name}' added!")
+                        st.rerun()
+
 
     # ---- Fetch contacts based on filter ----
     all_contacts = (
@@ -5306,7 +5068,6 @@ with tab5:
 # TAB 6: VENUES
 # ------------------------------------------------------------------
 with tab6:
-    st.header("🏢 Venues")
     st.caption(
         "Manage reusable venues (conference centers, hotels, private residences, etc.). "
         "Each venue can be attached to specific itinerary items (meetings, conferences, dinners)."
@@ -5375,6 +5136,7 @@ with tab6:
                 if not add_name:
                     st.warning("Venue Name is required.")
                 else:
+                    proceed = True
                     dupes = db.find_duplicate_venues(name=add_name)
                     if dupes:
                         st.warning(f"⚠️ A venue named '{add_name}' already exists:")
@@ -5383,22 +5145,29 @@ with tab6:
                                 f"- {d['name']} ({d.get('city','')}, {d.get('country','')})"
                             )
                         if not st.checkbox("Add anyway?", key="force_add_venue"):
-                            st.stop()
-                    # Store "No Dress Code" as empty string for cleanliness
-                    dress_code_value = add_dress_code if add_dress_code != "No Dress Code" else ""
-                    db.add_venue(
-                        name=add_name,
-                        address=add_address,
-                        city=add_city,
-                        country=add_country,
-                        wifi_ssid=add_wifi_ssid,
-                        wifi_password=add_wifi_password,
-                        badge_info=add_badge_info,
-                        dress_code_notes=dress_code_value,
-                        notes=add_notes,
-                    )
-                    st.success(f"✅ Venue '{add_name}' added!")
-                    st.rerun()
+                            proceed = False
+                            st.info(
+                                "Tick **Add anyway?** above and click **➕ Add Venue** "
+                                "again to save the duplicate."
+                            )
+
+                    if proceed:
+                        dress_code_value = (
+                            add_dress_code if add_dress_code != "No Dress Code" else ""
+                        )
+                        db.add_venue(
+                            name=add_name,
+                            address=add_address,
+                            city=add_city,
+                            country=add_country,
+                            wifi_ssid=add_wifi_ssid,
+                            wifi_password=add_wifi_password,
+                            badge_info=add_badge_info,
+                            dress_code_notes=dress_code_value,
+                            notes=add_notes,
+                        )
+                        st.success(f"✅ Venue '{add_name}' added!")
+                        st.rerun()
 
     # ---- List Venues ----
     all_venues = db.get_venues(country=filter_country, active_only=False)
@@ -5586,7 +5355,6 @@ with tab6:
 # TAB 7: LIBRARY (Reusable Content)
 # ------------------------------------------------------------------
 with tab7:
-    st.header("📚 Travel Library")
     st.caption(
         "Reusable content that powers trip briefings: destination guides, visa rules, "
         "and reusable checklists and packing templates."

@@ -37,13 +37,10 @@ def export_profile_to_excel(exec_id, currency_symbol="$"):
         ("Email", profile.get("Email", "")),
         ("Timezone", profile.get("Timezone", "")),
         ("Seat Preference", profile.get("Seat Preference", "")),
-        ("Hotel Loyalty", profile.get("Hotel Loyalty", "")),
-        ("Frequent Flyer", profile.get("Frequent Flyer", "")),
         ("Dietary", profile.get("Dietary", "")),
         ("Company", profile.get("Company", "")),
         ("Cost Center", profile.get("Cost Center", "")),
         ("Policy Notes", profile.get("Policy Notes", "")),
-        ("Passport Number", profile.get("Passport Number", "")),
         ("Preferred Airline", profile.get("Preferred Airline", "")),
         ("TSA PreCheck", profile.get("TSA PreCheck", "")),
         ("Meal Preference", profile.get("Meal Preference", "")),
@@ -346,8 +343,6 @@ def export_company_profile_to_excel(company_id):
         "Email",
         "Timezone",
         "Seat Preference",
-        "Hotel Loyalty",
-        "Frequent Flyer",
         "Dietary",
         "Passport",
         "Preferred Airline",
@@ -362,8 +357,6 @@ def export_company_profile_to_excel(company_id):
         ws2.cell(row=row_idx, column=2, value=e.get("email", ""))
         ws2.cell(row=row_idx, column=3, value=e.get("timezone", ""))
         ws2.cell(row=row_idx, column=4, value=e.get("seat_preference", ""))
-        ws2.cell(row=row_idx, column=5, value=e.get("hotel_loyalty", ""))
-        ws2.cell(row=row_idx, column=6, value=e.get("frequent_flyer_number", ""))
         ws2.cell(row=row_idx, column=7, value=e.get("dietary_restrictions", ""))
         ws2.cell(row=row_idx, column=8, value=e.get("passport_number", ""))
         ws2.cell(row=row_idx, column=9, value=e.get("preferred_airline", ""))

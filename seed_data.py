@@ -112,8 +112,6 @@ for exec_data in executives:
             email=exec_data["email"],
             timezone=exec_data["timezone"],
             seat_preference=exec_data["seat"],
-            hotel_loyalty=exec_data["hotel"],
-            frequent_flyer_number=exec_data["ff"],
             dietary_restrictions=exec_data["diet"],
             passport_number=exec_data["passport"],
             preferred_airline=exec_data["airline"],

@@ -65,18 +65,25 @@ def migrate_db():
         if col_name not in existing_execs:
             c.execute(f"ALTER TABLE executives ADD COLUMN {col_name} {col_type}")
 
-    # --- Columns for 'executive_memberships' ---
-    c.execute("PRAGMA table_info(executive_memberships)")
-    existing_membership_cols = [row[1] for row in c.fetchall()]
-    new_membership_cols = [
-        ("tier", "TEXT"),
-        ("alliance", "TEXT"),
-        ("airport_code", "TEXT"),
-        ("notes", "TEXT"),
-    ]
-    for col_name, col_type in new_membership_cols:
-        if col_name not in existing_membership_cols:
-            c.execute(f"ALTER TABLE executive_memberships ADD COLUMN {col_name} {col_type}")
+        # --- Columns for 'executive_memberships' (only if the table already exists) ---
+    c.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='executive_memberships'"
+    )
+    if c.fetchone():
+        c.execute("PRAGMA table_info(executive_memberships)")
+        existing_membership_cols = [row[1] for row in c.fetchall()]
+        new_membership_cols = [
+            ("tier", "TEXT"),
+            ("alliance", "TEXT"),
+            ("airport_code", "TEXT"),
+            ("notes", "TEXT"),
+        ]
+        for col_name, col_type in new_membership_cols:
+            if col_name not in existing_membership_cols:
+                c.execute(
+                    f"ALTER TABLE executive_memberships ADD COLUMN {col_name} {col_type}"
+                )
 
     # --- Create tables if they don't exist ---
     c.execute("""CREATE TABLE IF NOT EXISTS executive_passports (
@@ -154,25 +161,22 @@ def migrate_db():
         c.execute("ALTER TABLE contacts ADD COLUMN city TEXT")
 
     # --- Delegation tables ---
-    c.execute("DROP TABLE IF EXISTS company_participants")
-    c.execute("""CREATE TABLE IF NOT EXISTS delegation_members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        email TEXT,
-        role TEXT,
-        phone TEXT,
-        is_active INTEGER DEFAULT 1,
-        FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+    # --- Trip delegation (who is travelling on this trip) ---
+    c.execute("""CREATE TABLE IF NOT EXISTS trip_delegation (
+        trip_id INTEGER NOT NULL,
+        contact_id INTEGER NOT NULL,
+        PRIMARY KEY (trip_id, contact_id),
+        FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
     )""")
 
-    c.execute("DROP TABLE IF EXISTS item_participants")
+    # --- Item delegation (which trip travellers attend this item) ---
     c.execute("""CREATE TABLE IF NOT EXISTS item_delegation (
         item_id INTEGER NOT NULL,
-        member_id INTEGER NOT NULL,
-        PRIMARY KEY (item_id, member_id),
+        contact_id INTEGER NOT NULL,
+        PRIMARY KEY (item_id, contact_id),
         FOREIGN KEY (item_id) REFERENCES itinerary_items(id) ON DELETE CASCADE,
-        FOREIGN KEY (member_id) REFERENCES delegation_members(id) ON DELETE CASCADE
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
     )""")
 
     # --- Item contacts (many-to-many: itinerary items ↔ contacts) ---
@@ -188,7 +192,15 @@ def migrate_db():
     c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_country ON contacts(country)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_contacts_city ON contacts(city)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_delegation_company ON delegation_members(company_id)")
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trip_delegation_trip ON trip_delegation(trip_id)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trip_delegation_contact ON trip_delegation(contact_id)"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_item_delegation_contact ON item_delegation(contact_id)"
+    )
     c.execute("CREATE INDEX IF NOT EXISTS idx_item_delegation_item ON item_delegation(item_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_item_contacts_item ON item_contacts(item_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_trip_contacts ON trips(trip_contacts)")
@@ -453,6 +465,9 @@ def migrate_db():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )""")
 
+    conn.commit()
+    conn.close()
+
 def init_db():
     """Create all tables if they don't exist, then run migrations."""
     conn = sqlite3.connect(DB_PATH)
@@ -473,8 +488,6 @@ def init_db():
         email TEXT,
         timezone TEXT DEFAULT 'America/New_York',
         seat_preference TEXT,
-        hotel_loyalty TEXT,
-        frequent_flyer_number TEXT,
         dietary_restrictions TEXT,
         passport_number TEXT,
         preferred_airline TEXT,
@@ -541,6 +554,10 @@ def init_db():
     conn.commit()
     conn.close()
     migrate_db()
+
+    # Re-open a fresh connection for the Phase 3+ tables.
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
 
     # =========================================================
     # PHASE 3 – Expenses & Per Diem
@@ -656,6 +673,9 @@ def init_db():
 
     c.execute("CREATE INDEX IF NOT EXISTS idx_hospitals_city ON hospitals(city)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_hospitals_country ON hospitals(country)")
+
+    conn.commit()
+    conn.close()
 
 # =========================================================
 # COMPANY MANAGEMENT
@@ -898,180 +918,121 @@ def find_duplicate_contacts(company_id, name=None, email=None, phone=None):
 
 
 # =========================================================
-# DELEGATION MEMBERS
-# =========================================================
-
-
-def add_delegation_member(company_id, name, email=None, role=None, phone=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        """INSERT INTO delegation_members (company_id, name, email, role, phone)
-           VALUES (?, ?, ?, ?, ?)""",
-        (company_id, name, email, role, phone),
-    )
-    conn.commit()
-    new_id = c.lastrowid
-    conn.close()
-    return new_id
-
-
-def get_delegation_members(company_id=None, active_only=True):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    if company_id is not None:
-        if active_only:
-            c.execute(
-                "SELECT * FROM delegation_members WHERE company_id = ? AND is_active = 1 ORDER BY name",
-                (company_id,),
-            )
-        else:
-            c.execute(
-                "SELECT * FROM delegation_members WHERE company_id = ? ORDER BY name",
-                (company_id,),
-            )
-    else:
-        if active_only:
-            c.execute(
-                "SELECT * FROM delegation_members WHERE is_active = 1 ORDER BY company_id, name"
-            )
-        else:
-            c.execute("SELECT * FROM delegation_members ORDER BY company_id, name")
-    rows = c.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-
-def get_delegation_member(member_id):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT * FROM delegation_members WHERE id = ?", (member_id,))
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-
-def update_delegation_member(
-    member_id, name=None, email=None, role=None, phone=None, is_active=None
-):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    fields = []
-    params = []
-    if name is not None:
-        fields.append("name = ?")
-        params.append(name)
-    if email is not None:
-        fields.append("email = ?")
-        params.append(email)
-    if role is not None:
-        fields.append("role = ?")
-        params.append(role)
-    if phone is not None:
-        fields.append("phone = ?")
-        params.append(phone)
-    if is_active is not None:
-        fields.append("is_active = ?")
-        params.append(1 if is_active else 0)
-    params.append(member_id)
-    if fields:
-        sql = f"UPDATE delegation_members SET {', '.join(fields)} WHERE id = ?"
-        c.execute(sql, params)
-        conn.commit()
-    conn.close()
-
-
-def delete_delegation_member(member_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("DELETE FROM delegation_members WHERE id = ?", (member_id,))
-    conn.commit()
-    conn.close()
-
-
-def find_duplicate_delegation_members(company_id, name=None, email=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    query = (
-        "SELECT * FROM delegation_members WHERE company_id = ? AND is_active = 1 AND ("
-    )
-    conditions = []
-    params = [company_id]
-    if name:
-        conditions.append("name = ?")
-        params.append(name)
-    if email:
-        conditions.append("email = ?")
-        params.append(email)
-    if not conditions:
-        conn.close()
-        return []
-    query += " OR ".join(conditions) + ")"
-    conn.row_factory = sqlite3.Row
-    c.execute(query, params)
-    rows = c.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-
-# =========================================================
 # ITEM DELEGATION
 # =========================================================
 
 
-def add_item_delegation_member(item_id, member_id):
+def add_item_delegation_member(item_id, contact_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "INSERT OR IGNORE INTO item_delegation (item_id, member_id) VALUES (?, ?)",
-        (item_id, member_id),
+        "INSERT OR IGNORE INTO item_delegation (item_id, contact_id) VALUES (?, ?)",
+        (item_id, contact_id),
     )
     conn.commit()
     conn.close()
 
 
-def remove_item_delegation_member(item_id, member_id):
+def remove_item_delegation_member(item_id, contact_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "DELETE FROM item_delegation WHERE item_id = ? AND member_id = ?",
-        (item_id, member_id),
+        "DELETE FROM item_delegation WHERE item_id = ? AND contact_id = ?",
+        (item_id, contact_id),
     )
     conn.commit()
     conn.close()
 
 
 def get_item_delegation_members(item_id):
+    """Return contacts attending this item (as a list of dicts)."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute(
-        """
-        SELECT m.* FROM delegation_members m
-        JOIN item_delegation id ON m.id = id.member_id
-        WHERE id.item_id = ?
-        ORDER BY m.name
-        """,
+        """SELECT c.* FROM contacts c
+           JOIN item_delegation id ON c.id = id.contact_id
+           WHERE id.item_id = ?
+           ORDER BY c.name""",
         (item_id,),
     )
     rows = c.fetchall()
     conn.close()
-    return [dict(row) for row in rows]
+    return [dict(r) for r in rows]
 
 
-def set_item_delegation_members(item_id, member_ids):
+def set_item_delegation_members(item_id, contact_ids):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM item_delegation WHERE item_id = ?", (item_id,))
-    for mid in member_ids:
+    for cid in contact_ids or []:
         c.execute(
-            "INSERT OR IGNORE INTO item_delegation (item_id, member_id) VALUES (?, ?)",
-            (item_id, mid),
+            "INSERT OR IGNORE INTO item_delegation (item_id, contact_id) VALUES (?, ?)",
+            (item_id, cid),
         )
     conn.commit()
     conn.close()
+
+# =========================================================
+# TRIP DELEGATION (who is on this trip)
+# =========================================================
+
+def add_trip_delegation(trip_id, contact_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "INSERT OR IGNORE INTO trip_delegation (trip_id, contact_id) VALUES (?, ?)",
+        (trip_id, contact_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_trip_delegation(trip_id, contact_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "DELETE FROM trip_delegation WHERE trip_id = ? AND contact_id = ?",
+        (trip_id, contact_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_trip_delegation(trip_id, contact_ids):
+    """Replace the whole trip-delegation list in one shot."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM trip_delegation WHERE trip_id = ?", (trip_id,))
+    for cid in contact_ids or []:
+        c.execute(
+            "INSERT OR IGNORE INTO trip_delegation (trip_id, contact_id) VALUES (?, ?)",
+            (trip_id, cid),
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_trip_delegation_members(trip_id):
+    """Return contacts travelling on this trip, ordered by name."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute(
+        """SELECT c.* FROM contacts c
+           JOIN trip_delegation td ON c.id = td.contact_id
+           WHERE td.trip_id = ?
+           ORDER BY c.name""",
+        (trip_id,),
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_trip_delegation_ids(trip_id):
+    """Just the contact IDs on this trip — handy for multiselect defaults."""
+    return [m["id"] for m in get_trip_delegation_members(trip_id)]
 
 
 # =========================================================
@@ -1203,23 +1164,19 @@ def add_executive(
     email,
     timezone,
     seat_preference,
-    hotel_loyalty,
-    frequent_flyer_number,
     dietary_restrictions,
-    passport_number=None,
-    preferred_airline=None,
-    tsa_precheck=None,
-    meal_preference=None,
+    preferred_airline,
+    tsa_precheck,
+    meal_preference,
 ):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
         """
         INSERT INTO executives 
-        (company_id, name, email, timezone, seat_preference, hotel_loyalty,
-         frequent_flyer_number, dietary_restrictions, passport_number,
-         preferred_airline, tsa_precheck, meal_preference)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (company_id, name, email, timezone, seat_preference,
+         dietary_restrictions, preferred_airline, tsa_precheck, meal_preference)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             company_id,
@@ -1227,10 +1184,7 @@ def add_executive(
             email,
             timezone,
             seat_preference,
-            hotel_loyalty,
-            frequent_flyer_number,
             dietary_restrictions,
-            passport_number,
             preferred_airline,
             tsa_precheck,
             meal_preference,
@@ -1282,13 +1236,10 @@ def get_full_executive_profile(exec_id):
         "Email": raw.get("email", ""),
         "Timezone": raw.get("timezone", ""),
         "Seat Preference": raw.get("seat_preference", ""),
-        "Hotel Loyalty": raw.get("hotel_loyalty", ""),
-        "Frequent Flyer": raw.get("frequent_flyer_number", ""),
         "Dietary": raw.get("dietary_restrictions", ""),
         "Company": raw.get("company_name", ""),
         "Cost Center": raw.get("default_cost_center", ""),
         "Policy Notes": raw.get("policy_notes", ""),
-        "Passport Number": raw.get("passport_number", ""),
         "Preferred Airline": raw.get("preferred_airline", ""),
         "TSA PreCheck": raw.get("tsa_precheck", ""),
         "Meal Preference": raw.get("meal_preference", ""),
@@ -1318,10 +1269,7 @@ def update_executive(
     email,
     timezone,
     seat_preference,
-    hotel_loyalty,
-    frequent_flyer_number,
     dietary_restrictions,
-    passport_number,
     preferred_airline,
     tsa_precheck,
     meal_preference,
@@ -1336,10 +1284,7 @@ def update_executive(
             email = ?,
             timezone = ?,
             seat_preference = ?,
-            hotel_loyalty = ?,
-            frequent_flyer_number = ?,
             dietary_restrictions = ?,
-            passport_number = ?,
             preferred_airline = ?,
             tsa_precheck = ?,
             meal_preference = ?
@@ -1351,10 +1296,7 @@ def update_executive(
             email,
             timezone,
             seat_preference,
-            hotel_loyalty,
-            frequent_flyer_number,
             dietary_restrictions,
-            passport_number,
             preferred_airline,
             tsa_precheck,
             meal_preference,
@@ -1363,7 +1305,6 @@ def update_executive(
     )
     conn.commit()
     conn.close()
-
 
 # =========================================================
 # EXECUTIVE PASSPORTS
@@ -2329,9 +2270,7 @@ def merge_database_data(data):
         c.execute(
             """
             INSERT INTO executives 
-            (company_id, name, email, timezone, seat_preference, hotel_loyalty,
-             frequent_flyer_number, dietary_restrictions, passport_number,
-             preferred_airline, tsa_precheck, meal_preference)
+            (company_id, name, email, timezone, seat_preference, dietary_restrictions, passport_number, preferred_airline, tsa_precheck, meal_preference)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
@@ -2340,8 +2279,6 @@ def merge_database_data(data):
                 email,
                 exec_data.get("timezone", "America/New_York"),
                 exec_data.get("seat_preference"),
-                exec_data.get("hotel_loyalty"),
-                exec_data.get("frequent_flyer_number"),
                 exec_data.get("dietary_restrictions"),
                 exec_data.get("passport_number"),
                 exec_data.get("preferred_airline"),
@@ -2485,9 +2422,7 @@ def import_executives_from_csv(reader):
         c.execute(
             """
             INSERT INTO executives 
-            (company_id, name, email, timezone, seat_preference, hotel_loyalty,
-             frequent_flyer_number, dietary_restrictions, passport_number,
-             preferred_airline, tsa_precheck, meal_preference)
+            (company_id, name, email, timezone, seat_preference, dietary_restrictions, passport_number, preferred_airline, tsa_precheck, meal_preference)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
@@ -2496,8 +2431,6 @@ def import_executives_from_csv(reader):
                 email,
                 row.get("timezone", "America/New_York"),
                 row.get("seat_preference"),
-                row.get("hotel_loyalty"),
-                row.get("frequent_flyer_number"),
                 row.get("dietary_restrictions"),
                 row.get("passport_number"),
                 row.get("preferred_airline"),
@@ -2896,8 +2829,13 @@ def get_venues_for_trip(trip_id):
 
 def find_duplicate_venues(name=None, address=None):
     """Check for existing venue with the same name or address."""
+    if not name and not address:
+        return []
+
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     c = conn.cursor()
+
     conditions = []
     params = []
     if name:
@@ -2906,14 +2844,14 @@ def find_duplicate_venues(name=None, address=None):
     if address:
         conditions.append("address = ?")
         params.append(address)
-    if not conditions:
-        conn.close()
-        return []
-    query = f"SELECT * FROM venues WHERE is_active = 1 AND ({' OR '.join(conditions)})"
-    conn.row_factory = sqlite3.Row
+
+    query = (
+        f"SELECT * FROM venues " f"WHERE is_active = 1 AND ({' OR '.join(conditions)})"
+    )
     c.execute(query, params)
     rows = c.fetchall()
     conn.close()
+
     return [dict(row) for row in rows]
 
 
@@ -3264,12 +3202,12 @@ def delete_packing_template(template_id):
 # PER DIEM
 # =========================================================
 
-def set_per_diem(trip_id, member_id, daily_rate, days, currency="USD", notes=None):
+def set_per_diem(trip_id, contact_id, daily_rate, days, currency="USD", notes=None):
     """Upsert per-diem settings for a trip member."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id FROM per_diem WHERE trip_id = ? AND member_id = ?",
-              (trip_id, member_id))
+    c.execute("SELECT id FROM per_diem WHERE trip_id = ? AND contact_id = ?",
+              (trip_id, contact_id))
     row = c.fetchone()
     if row:
         c.execute("""UPDATE per_diem
@@ -3278,25 +3216,25 @@ def set_per_diem(trip_id, member_id, daily_rate, days, currency="USD", notes=Non
                   (daily_rate, days, currency, notes, row[0]))
     else:
         c.execute("""INSERT INTO per_diem
-                     (trip_id, member_id, daily_rate, days, currency, notes)
+                     (trip_id, contact_id, daily_rate, days, currency, notes)
                      VALUES (?, ?, ?, ?, ?, ?)""",
-                  (trip_id, member_id, daily_rate, days, currency, notes))
+                  (trip_id, contact_id, daily_rate, days, currency, notes))
     conn.commit()
     conn.close()
 
 
-def get_per_diem(trip_id, member_id=None):
+def get_per_diem(trip_id, contact_id=None):
     """Get per-diem rows for a trip (optionally a specific member)."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    if member_id:
-        c.execute("SELECT * FROM per_diem WHERE trip_id = ? AND member_id = ?",
-                  (trip_id, member_id))
+    if contact_id:
+        c.execute("SELECT * FROM per_diem WHERE trip_id = ? AND contact_id = ?",
+                  (trip_id, contact_id))
         row = c.fetchone()
         conn.close()
         return dict(row) if row else None
-    c.execute("SELECT * FROM per_diem WHERE trip_id = ? ORDER BY member_id",
+    c.execute("SELECT * FROM per_diem WHERE trip_id = ? ORDER BY contact_id",
               (trip_id,))
     rows = c.fetchall()
     conn.close()
@@ -3315,16 +3253,16 @@ def delete_per_diem(per_diem_id):
 # EXPENSES
 # =========================================================
 
-def add_expense(trip_id, member_id, expense_date, category=None,
+def add_expense(trip_id, contact_id, expense_date, category=None,
                 description=None, amount=0, currency="USD",
                 receipt_path=None, notes=None, is_reimbursable=1):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""INSERT INTO expenses
-                 (trip_id, member_id, expense_date, category, description,
+                 (trip_id, contact_id, expense_date, category, description,
                   amount, currency, receipt_path, notes, is_reimbursable)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (trip_id, member_id, expense_date, category, description,
+              (trip_id, contact_id, expense_date, category, description,
                amount, currency, receipt_path, notes, is_reimbursable))
     conn.commit()
     new_id = c.lastrowid
@@ -3332,15 +3270,15 @@ def add_expense(trip_id, member_id, expense_date, category=None,
     return new_id
 
 
-def get_expenses(trip_id, member_id=None):
+def get_expenses(trip_id, contact_id=None):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    if member_id:
+    if contact_id:
         c.execute("""SELECT * FROM expenses
-                     WHERE trip_id = ? AND member_id = ?
+                     WHERE trip_id = ? AND contact_id = ?
                      ORDER BY expense_date DESC, id DESC""",
-                  (trip_id, member_id))
+                  (trip_id, contact_id))
     else:
         c.execute("""SELECT * FROM expenses
                      WHERE trip_id = ?
@@ -3392,7 +3330,7 @@ def get_expense_summary(trip_id):
     Output:
     [
         {
-            "member_id": 1,
+            "contact_id": 1,
             "name": "Adaeze Okonkwo",
             "role": "CEO",
             "daily_rate": 180,
@@ -3415,9 +3353,9 @@ def get_expense_summary(trip_id):
         SELECT DISTINCT m.id, m.name, m.role
         FROM delegation_members m
         WHERE m.id IN (
-            SELECT member_id FROM per_diem WHERE trip_id = ?
+            SELECT contact_id FROM per_diem WHERE trip_id = ?
             UNION
-            SELECT member_id FROM expenses WHERE trip_id = ? AND member_id IS NOT NULL
+            SELECT contact_id FROM expenses WHERE trip_id = ? AND contact_id IS NOT NULL
         )
     """, (trip_id, trip_id))
     members = c.fetchall()
@@ -3425,7 +3363,7 @@ def get_expense_summary(trip_id):
     summary = []
     for m in members:
         # Per diem
-        c.execute("SELECT daily_rate, days, currency FROM per_diem WHERE trip_id = ? AND member_id = ?",
+        c.execute("SELECT daily_rate, days, currency FROM per_diem WHERE trip_id = ? AND contact_id = ?",
                   (trip_id, m["id"]))
         pd_row = c.fetchone()
         daily_rate = pd_row["daily_rate"] if pd_row else 0
@@ -3434,14 +3372,14 @@ def get_expense_summary(trip_id):
         allowance = (daily_rate or 0) * (days or 0)
 
         # Expenses
-        c.execute("SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as cnt FROM expenses WHERE trip_id = ? AND member_id = ?",
+        c.execute("SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as cnt FROM expenses WHERE trip_id = ? AND contact_id = ?",
                   (trip_id, m["id"]))
         exp_row = c.fetchone()
         spent = exp_row["total"] or 0
         entry_count = exp_row["cnt"] or 0
 
         summary.append({
-            "member_id": m["id"],
+            "contact_id": m["id"],
             "name": m["name"],
             "role": m["role"],
             "daily_rate": daily_rate,
@@ -3465,7 +3403,7 @@ def get_trip_delegation_members(trip_id):
     c.execute("""
         SELECT DISTINCT m.*
         FROM delegation_members m
-        JOIN item_delegation id ON m.id = id.member_id
+        JOIN item_delegation id ON m.id = id.contact_id
         JOIN itinerary_items i ON i.id = id.item_id
         WHERE i.trip_id = ?
         ORDER BY m.name
@@ -3480,22 +3418,22 @@ def get_trip_delegation_members(trip_id):
 # =========================================================
 
 
-def create_packing_list(trip_id, member_id, template_id=None):
+def create_packing_list(trip_id, contact_id, template_id=None):
     """Create a packing list for a trip member. Returns list_id (existing if already present)."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
-        "SELECT id FROM packing_lists WHERE trip_id = ? AND member_id = ?",
-        (trip_id, member_id),
+        "SELECT id FROM packing_lists WHERE trip_id = ? AND contact_id = ?",
+        (trip_id, contact_id),
     )
     row = c.fetchone()
     if row:
         conn.close()
         return row[0]
     c.execute(
-        """INSERT INTO packing_lists (trip_id, member_id, template_id)
+        """INSERT INTO packing_lists (trip_id, contact_id, template_id)
                  VALUES (?, ?, ?)""",
-        (trip_id, member_id, template_id),
+        (trip_id, contact_id, template_id),
     )
     conn.commit()
     new_id = c.lastrowid
@@ -3503,14 +3441,14 @@ def create_packing_list(trip_id, member_id, template_id=None):
     return new_id
 
 
-def get_packing_list(trip_id, member_id):
+def get_packing_list(trip_id, contact_id):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     c.execute(
         """SELECT * FROM packing_lists
-                 WHERE trip_id = ? AND member_id = ?""",
-        (trip_id, member_id),
+                 WHERE trip_id = ? AND contact_id = ?""",
+        (trip_id, contact_id),
     )
     row = c.fetchone()
     conn.close()
@@ -3583,7 +3521,7 @@ def delete_packing_item(item_id):
     conn.close()
 
 
-def apply_packing_template(trip_id, member_id, template_id):
+def apply_packing_template(trip_id, contact_id, template_id):
     """
     Apply a packing template to a member's packing list.
     Creates the list if needed, then adds items from the template.
@@ -3592,7 +3530,7 @@ def apply_packing_template(trip_id, member_id, template_id):
     tpl = get_packing_template(template_id)
     if not tpl:
         return 0
-    list_id = create_packing_list(trip_id, member_id, template_id)
+    list_id = create_packing_list(trip_id, contact_id, template_id)
     try:
         items_to_add = json.loads(tpl.get("items_json") or "[]")
     except Exception:
