@@ -678,24 +678,6 @@ def generate_company_profile_docx(company_id):
     else:
         doc.add_paragraph("No contacts.")
 
-    doc.add_heading("Delegation Members", level=1)
-    if delegation:
-        table = doc.add_table(rows=1, cols=4)
-        table.style = "Table Grid"
-        hdr = table.rows[0].cells
-        hdr[0].text = "Name"
-        hdr[1].text = "Email"
-        hdr[2].text = "Role"
-        hdr[3].text = "Phone"
-        for m in delegation:
-            row = table.add_row().cells
-            row[0].text = m.get("name", "")
-            row[1].text = m.get("email", "")
-            row[2].text = m.get("role", "")
-            row[3].text = m.get("phone", "")
-    else:
-        doc.add_paragraph("No delegation members.")
-
     doc.add_paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     file_stream = io.BytesIO()
     doc.save(file_stream)

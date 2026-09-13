@@ -87,3 +87,12 @@ $RECYCLE.BIN/
 # If you want to track .vscode/settings.json, remove this line.
 # But for a single-PA tool, I recommend ignoring it to avoid conflicts.
 .vscode/
+
+
+# ==========================
+# TEST FILES
+# ==========================
+migrate_delegation.py
+travel_planner.db.bak_20260912_095710
+travel_planner.db-wal
+travel_planner.db-shm
