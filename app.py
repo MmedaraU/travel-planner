@@ -1746,14 +1746,14 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
 # TABS
 # =========================================================
 
-tab_names = ["✈️ Trip Planner", "📋 Trip Templates", "📋 All Trips",
-             "🏢 Companies", "👥 Contacts", "🏢 Venues", "📚 Library"]
+tab_names = ["✈️ Trip Planner", "✈️ Trips", "🏢 Companies",
+             "👥 Contacts", "🏢 Venues", "📚 Library"]
 default_tab = st.session_state.get("active_tab", "✈️ Trip Planner")
 default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
 if "active_tab" in st.session_state:
     del st.session_state["active_tab"]
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(tab_names)
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(tab_names)
 
 
 # =========================================================
@@ -2245,97 +2245,23 @@ with tab1:
 
 
 # =========================================================
-# TAB 2: TRIP TEMPLATES
+# TAB 2: ALL TRIPS
 # =========================================================
 
 with tab2:
-    templates = db.get_trip_templates(active_only=False)
-    if templates:
-        st.write("**Saved Templates:**")
-        for t in templates:
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.write(f"**{t['name']}**")
-                if not t.get("is_active", 1):
-                    st.caption("⚠️ Inactive")
-                st.caption(f"Created: {fmt_date(t['created_at'])}")
-                if st.button(f"👁️ Preview", key=f"preview_{t['id']}"):
-                    st.session_state[f"preview_template_{t['id']}"] = True
-                if st.session_state.get(f"preview_template_{t['id']}", False):
-                    template_data = db.get_trip_template(t["id"])
-                    if template_data:
-                        st.write("**Departure:**")
-                        st.write(f"City: {template_data.get('departure_city', 'N/A')}")
-                        st.write(f"Region: {template_data.get('departure_region', 'N/A')}")
-                        st.write(f"Country: {template_data.get('departure_country', 'N/A')}")
-                        st.write("**Stops:**")
-                        for stop in template_data.get("stops", []):
-                            st.write(f"- {stop.get('city', '')}")
-                        st.write("**Items:**")
-                        for item in template_data.get("items", []):
-                            st.write(f"- {item.get('item_type', '')}: {item.get('description', '')}")
-                        if st.button("Close Preview", key=f"close_preview_{t['id']}"):
-                            st.session_state[f"preview_template_{t['id']}"] = False
-                            st.rerun()
-            with col2:
-                if t.get("is_active", 1):
-                    if st.button("🚫", key=f"deactivate_tpl_{t['id']}",
-                        help="Deactivate — hides it from the template picker."):
-                        db.update_trip_template(t["id"], is_active=0)
-                        st.rerun()
-                else:
-                    if st.button("✅", key=f"reactivate_tpl_{t['id']}",
-                        help="Reactivate — makes it selectable again."):
-                        db.update_trip_template(t["id"], is_active=1)
-                        st.rerun()
-                if st.button("🗑️", key=f"del_template_tab_{t['id']}"):
-                    db.delete_trip_template(t["id"])
-                    st.rerun()
-    else:
-        st.caption("No templates yet. Save a trip as a template from its edit modal.")
+    col_title, col_from_tpl = st.columns([5, 1.4], vertical_alignment="bottom")
+    with col_from_tpl:
+        if st.button(
+            "📋 From Template",
+            use_container_width=True,
+            key="trips_from_template_btn",
+            help="Jump to Library → 📋 Trip Templates to create a trip "
+                 "from an existing template.",
+        ):
+            st.session_state["active_tab"] = "📚 Library"
+            st.session_state["lib_hint_templates"] = True
+            st.rerun()
 
-    templates_active = db.get_trip_templates(active_only=True)
-    if templates_active:
-        st.divider()
-        st.subheader("🚀 Create Trip from Template")
-        template_options = {t["name"]: t["id"] for t in templates_active}
-        selected_template_name = st.selectbox("Select Template",
-            list(template_options.keys()), key="template_selector_tab")
-        selected_template_id = template_options[selected_template_name]
-        if selected_template_id:
-            template_data = db.get_trip_template(selected_template_id)
-            if template_data:
-                with st.form("apply_template_form_tab"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        new_trip_name = st.text_input("Trip Name*",
-                            value=f"{selected_template_name} - {datetime.now().strftime('%Y-%m-%d')}")
-                        new_start = st.date_input("Start Date*", value=datetime.now() + timedelta(days=7))
-                    with col2:
-                        new_budget = st.number_input("Budget", min_value=0.0, step=100.0, value=1000.0)
-                        new_end = st.date_input("End Date*", value=datetime.now() + timedelta(days=10))
-                    submitted = st.form_submit_button("🚀 Create Trip from Template")
-                    if submitted:
-                        if new_trip_name and new_start and new_end:
-                            new_trip_id = db.apply_trip_template(selected_template_id, exec_id,
-                                new_trip_name, new_start, new_end, new_budget)
-                            if new_trip_id:
-                                db.update_trip_status(new_trip_id, "draft")
-                                st.session_state["current_trip_id"] = new_trip_id
-                                st.success(f"✅ Trip '{new_trip_name}' created from template!")
-                                st.rerun()
-                            else:
-                                st.error("Failed to create trip from template.")
-                        else:
-                            st.warning("Please fill in all required fields.")
-
-
-# =========================================================
-# TAB 3: ALL TRIPS
-# =========================================================
-
-with tab3:
-    st.subheader("Filter & View Trips")
     search_trip = st.text_input("🔍 Search Trips",
         placeholder="Destination, purpose, or executive name...", key="dash_search")
 
@@ -2543,10 +2469,10 @@ with tab3:
 
 
 # =========================================================
-# TAB 4: COMPANIES
+# TAB 3: COMPANIES
 # =========================================================
 
-with tab4:
+with tab3:
     with st.expander("➕ Add New Company", expanded=False):
         with st.form("add_company_manager_form"):
             new_name = st.text_input("Company Name*", key="mgr_comp_name")
@@ -2712,10 +2638,10 @@ with tab4:
 
 
 # =========================================================
-# TAB 5: CONTACTS
+# TAB 4: CONTACTS
 # =========================================================
 
-with tab5:
+with tab4:
     st.caption(
         "Manage contacts: local support, staff, partners, and other. "
         "These appear in the travel pack and can be assigned to specific "
@@ -3240,10 +3166,10 @@ with tab5:
 
 
 # =========================================================
-# TAB 6: VENUES
+# TAB 5: VENUES
 # =========================================================
 
-with tab6:
+with tab5:
     st.caption(
         "Manage reusable venues. Each venue can be attached to specific "
         "itinerary items."
@@ -3498,26 +3424,132 @@ with tab6:
 
 
 # =========================================================
-# TAB 7: LIBRARY
+# TAB 6: LIBRARY
 # =========================================================
 
-with tab7:
-    # st.header("📚 Travel Library")
-    st.caption(
-        "Reusable content: destination guides, visa rules, checklists, "
-        "packing templates, and hospitals."
-    )
+with tab6:
+    st.header("📚 Travel Library")
+    st.caption("Reusable content: destination guides, visa rules, checklists, "
+               "packing templates, and hospitals.")
 
-    lib1, lib2, lib3, lib4, lib5 = st.tabs(
-        [
-            "🌍 Destination Guides",
-            "🛂 Visa Rules",
-            "✅ Checklist Templates",
-            "🎒 Packing Templates",
-            "🚨 Hospitals",
-        ]
-    )
+    # One-shot hint shown when arriving from ✈️ Trips → 📋 From Template
+    if st.session_state.pop("lib_hint_templates", False):
+        st.info(
+            "📋 You're here to create a trip from a template. "
+            "Open the **📋 Trip Templates** sub-tab (first one on the left) → "
+            "scroll to **🚀 Create Trip from Template**."
+        )
 
+    lib_templates, lib1, lib2, lib3, lib4, lib5 = st.tabs([
+        "📋 Trip Templates",
+        "🌍 Destination Guides", "🛂 Visa Rules",
+        "✅ Checklist Templates", "🎒 Packing Templates",
+        "🚨 Emergency Directory"])
+
+
+    # =========================================================
+    # LIBRARY SUB-TAB: Trip Templates
+    # =========================================================
+    with lib_templates:
+        st.subheader("📋 Trip Templates")
+        st.caption("Reusable trip skeletons. Save any trip as a template from "
+                   "its edit modal, then create new trips from here.")
+
+        templates = db.get_trip_templates(active_only=False)
+        if templates:
+            st.write("**Saved Templates:**")
+            for t in templates:
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.write(f"**{t['name']}**")
+                    if not t.get("is_active", 1):
+                        st.caption("⚠️ Inactive")
+                    st.caption(f"Created: {fmt_date(t['created_at'])}")
+                    if st.button("👁️ Preview", key=f"preview_{t['id']}"):
+                        st.session_state[f"preview_template_{t['id']}"] = True
+                    if st.session_state.get(f"preview_template_{t['id']}", False):
+                        template_data = db.get_trip_template(t["id"])
+                        if template_data:
+                            st.write("**Departure:**")
+                            st.write(f"City: {template_data.get('departure_city', 'N/A')}")
+                            st.write(f"Region: {template_data.get('departure_region', 'N/A')}")
+                            st.write(f"Country: {template_data.get('departure_country', 'N/A')}")
+                            st.write("**Stops:**")
+                            for stop in template_data.get("stops", []):
+                                st.write(f"- {stop.get('city', '')}")
+                            st.write("**Items:**")
+                            for item in template_data.get("items", []):
+                                st.write(f"- {item.get('item_type', '')}: "
+                                         f"{item.get('description', '')}")
+                            if st.button("Close Preview", key=f"close_preview_{t['id']}"):
+                                st.session_state[f"preview_template_{t['id']}"] = False
+                                st.rerun()
+                with col2:
+                    if t.get("is_active", 1):
+                        if st.button("🚫", key=f"deactivate_tpl_{t['id']}",
+                                     help="Deactivate — hides it from the template picker."):
+                            db.update_trip_template(t["id"], is_active=0)
+                            st.rerun()
+                    else:
+                        if st.button("✅", key=f"reactivate_tpl_{t['id']}",
+                                     help="Reactivate — makes it selectable again."):
+                            db.update_trip_template(t["id"], is_active=1)
+                            st.rerun()
+                    if st.button("🗑️", key=f"del_template_tab_{t['id']}"):
+                        db.delete_trip_template(t["id"])
+                        st.rerun()
+        else:
+            st.info("No templates yet. Save a trip as a template from its edit modal.")
+
+        st.divider()
+        st.subheader("🚀 Create Trip from Template")
+
+        if not exec_id:
+            st.warning("Select an executive in the sidebar first.")
+        else:
+            templates_active = db.get_trip_templates(active_only=True)
+            if not templates_active:
+                st.caption("No active templates available.")
+            else:
+                template_options = {t["name"]: t["id"] for t in templates_active}
+                selected_template_name = st.selectbox(
+                    "Select Template", list(template_options.keys()),
+                    key="template_selector_tab")
+                selected_template_id = template_options[selected_template_name]
+                template_data = db.get_trip_template(selected_template_id)
+                if template_data:
+                    with st.form("apply_template_form_tab"):
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            new_trip_name = st.text_input("Trip Name*",
+                                value=f"{selected_template_name} - "
+                                      f"{datetime.now().strftime('%Y-%m-%d')}")
+                            new_start = st.date_input("Start Date*",
+                                value=datetime.now() + timedelta(days=7))
+                        with col2:
+                            new_budget = st.number_input("Budget",
+                                min_value=0.0, step=100.0, value=1000.0)
+                            new_end = st.date_input("End Date*",
+                                value=datetime.now() + timedelta(days=10))
+                        submitted = st.form_submit_button(
+                            "🚀 Create Trip from Template")
+                        if submitted:
+                            if new_trip_name and new_start and new_end:
+                                new_trip_id = db.apply_trip_template(
+                                    selected_template_id, exec_id,
+                                    new_trip_name, new_start, new_end, new_budget)
+                                if new_trip_id:
+                                    db.update_trip_status(new_trip_id, "draft")
+                                    st.session_state["current_trip_id"] = new_trip_id
+                                    st.success(f"✅ Trip '{new_trip_name}' "
+                                               "created from template!")
+                                    st.rerun()
+                                else:
+                                    st.error("Failed to create trip from template.")
+                            else:
+                                st.warning("Please fill in all required fields.")
+
+                                
     # ---- Guides ----
     with lib1:
         # st.subheader("🌍 Destination Guides")
