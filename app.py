@@ -2995,13 +2995,24 @@ with tab5:
                 except Exception as e:
                     st.error(f"Import failed: {e}")
 
+        # Precompute default-contact IDs per company (one query per company)
+        default_ids_by_company = {}
+        for c in all_contacts:
+            cid_company = c.get("company_id")
+            if cid_company and cid_company not in default_ids_by_company:
+                default_ids_by_company[cid_company] = set(
+                    db.get_company_default_contacts(cid_company)
+                )
+
         for contact in all_contacts:
             cid = contact["id"]
-            comp_name = (
-                db.get_company(contact["company_id"])["name"]
-                if contact.get("company_id")
-                else "—"
+            comp_name = (db.get_company(contact["company_id"])["name"]
+                if contact.get("company_id") else "—")
+            is_default = (
+                contact.get("company_id")
+                and cid in default_ids_by_company.get(contact["company_id"], set())
             )
+
             # Dark saturated hues — AA contrast with white text on any theme
             type_color_map = {
                 "Local Support": "#1e40af",  # blue-800
@@ -3015,8 +3026,12 @@ with tab5:
             col1, col2, col3, col4, col5, col6 = st.columns(
                 [1.5, 1.5, 1.5, 1.5, 0.8, 0.8]
             )
+
             with col1:
-                st.write(f"**{contact['name']}**")
+                star = " ⭐" if is_default else ""
+                st.write(f"**{contact['name']}**{star}")
+                if is_default:
+                    st.caption("Default for this company")
                 if not contact.get("is_active", 1):
                     st.caption("⚠️ Inactive")
                 if contact.get("role"):
