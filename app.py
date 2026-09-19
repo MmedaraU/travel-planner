@@ -917,6 +917,46 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
     with st.form(key=f"edit_trip_form_{trip_id_modal}"):
         new_purpose = st.text_input("Trip Name", value=trip_modal_data.get("purpose", ""),
             key=f"modal_purpose_{trip_id_modal}", disabled=is_locked)
+
+        # --- Trip dates (parity with the create form) ---
+        col_date1, col_date2 = st.columns(2)
+        with col_date1:
+            try:
+                current_start = (
+                    datetime.fromisoformat(trip_modal_data["start_date"]).date()
+                    if trip_modal_data.get("start_date")
+                    else datetime.now().date()
+                )
+            except Exception:
+                current_start = datetime.now().date()
+            new_start_date = st.date_input(
+                "Start Date*",
+                value=current_start,
+                key=f"modal_start_date_{trip_id_modal}",
+                disabled=is_locked,
+            )
+        with col_date2:
+            try:
+                current_end = (
+                    datetime.fromisoformat(trip_modal_data["end_date"]).date()
+                    if trip_modal_data.get("end_date")
+                    else datetime.now().date()
+                )
+            except Exception:
+                current_end = datetime.now().date()
+            new_end_date = st.date_input(
+                "End Date*",
+                value=current_end,
+                key=f"modal_end_date_{trip_id_modal}",
+                disabled=is_locked,
+            )
+        if new_start_date and new_end_date and new_end_date < new_start_date:
+            st.warning("End date must be on or after start date.")
+
+        col_dep1, col_dep2 = st.columns(2)
+        with col_dep1:
+            new_dep_city = st.text_input("Departure City", value=trip_modal_data.get("departure_city", ""),
+                key=f"modal_dep_city_{trip_id_modal}", disabled=is_locked)
         col_dep1, col_dep2 = st.columns(2)
         with col_dep1:
             new_dep_city = st.text_input("Departure City", value=trip_modal_data.get("departure_city", ""),
@@ -987,8 +1027,19 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
             submitted = st.form_submit_button("💾 Save Changes")
             if submitted:
                 db.update_trip_purpose(trip_id_modal, new_purpose)
+                # Persist date changes; reuse the existing destination since
+                # update_trip_dates() also writes to the destination column.
+                if new_start_date and new_end_date:
+                    db.update_trip_dates(
+                        trip_id_modal,
+                        new_start_date.isoformat(),
+                        new_end_date.isoformat(),
+                        trip_modal_data.get("destination", ""),
+                    )
                 db.update_trip_budget(trip_id_modal, new_budget)
-                db.update_trip_departure_details(trip_id_modal, new_dep_city, new_dep_region, new_dep_country)
+                db.update_trip_departure_details(
+                    trip_id_modal, new_dep_city, new_dep_region, new_dep_country
+                )
                 db.update_trip_base_currency(trip_id_modal, new_base_currency)
                 db.update_trip_display_currency(trip_id_modal, new_base_currency)
                 db.update_trip_status(trip_id_modal, new_status)
@@ -1850,7 +1901,7 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
 # TABS
 # =========================================================
 
-tab_names = ["✈️ Trip Planner", "✈️ Trips", "🏢 Companies",
+tab_names = ["✈️ Trip Planner", "✈️ All Trips", "🏢 Companies",
              "👥 Contacts", "🏢 Venues", "📚 Library"]
 default_tab = st.session_state.get("active_tab", "✈️ Trip Planner")
 default_index = tab_names.index(default_tab) if default_tab in tab_names else 0
@@ -1904,8 +1955,19 @@ with tab1:
         with col_dep_region:
             departure_region = st.text_input("Region / State (optional)", key="create_departure_region")
         country_list = sorted([c.name for c in pycountry.countries])
-        departure_country = st.selectbox("Country (optional)", options=[""] + country_list,
-            key="create_departure_country")
+        departure_country = st.selectbox(
+            "Country (optional)",
+            options=[""] + country_list,
+            key="create_departure_country",
+        )
+
+        receipt_upload_folder = st.text_input(
+            "📥 Receipt Upload Folder URL (optional)",
+            placeholder="https://drive.google.com/drive/folders/…",
+            key="create_receipt_folder",
+            help="Shared folder for delegation members to drop receipt photos. "
+            "Will appear in the travel pack.",
+        )
 
         col_budget, col_currency = st.columns(2)
         with col_budget:
@@ -2253,11 +2315,18 @@ with tab1:
                 st.session_state["create_trip_items"] = []
                 st.session_state["create_trip_delegation_ids"] = []
                 st.session_state["create_trip_contact_ids"] = []
-                for key in ["create_trip_purpose", "create_departure_city",
-                            "create_departure_region", "create_departure_country",
-                            "create_trip_budget", "create_base_currency",
-                            "create_trip_status", "create_overall_start",
-                            "create_overall_end"]:
+                for key in [
+                    "create_trip_purpose",
+                    "create_departure_city",
+                    "create_departure_region",
+                    "create_departure_country",
+                    "create_trip_budget",
+                    "create_base_currency",
+                    "create_trip_status",
+                    "create_overall_start",
+                    "create_overall_end",
+                    "create_receipt_folder",
+                ]:
                     st.session_state.pop(key, None)
                 st.rerun()
 
@@ -2292,6 +2361,7 @@ with tab1:
                         db.update_trip_budget(trip_id, budget_base)
                         db.update_trip_departure_details(trip_id, departure_city, departure_region, departure_country)
                         db.update_trip_status(trip_id, trip_status)
+                        db.update_trip_receipt_folder(trip_id, receipt_upload_folder)
                         db.set_trip_delegation(trip_id, delegation_contact_ids)
 
                         db.delete_all_trip_stops(trip_id)

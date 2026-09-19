@@ -96,3 +96,5 @@ migrate_delegation.py
 travel_planner.db.bak_20260912_095710
 travel_planner.db-wal
 travel_planner.db-shm
+diagnose_db.py
+repair_migration.py
