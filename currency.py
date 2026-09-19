@@ -2,31 +2,142 @@ import requests
 import json
 import time
 import os
+from datetime import datetime
 
 CACHE_FILE = "exchange_rates_cache.json"
 CACHE_DURATION = 3600  # 1 hour in seconds
 
 
-# --- Add this helper function ---
+# =========================================================
+# SUPPORTED CURRENCIES
+# =========================================================
+# Central source of truth for every currency dropdown in the app.
+# Add or remove a code here and the change applies everywhere.
+
+CURRENCIES_SUPPORTED = [
+    # --- Major reserve / invoice currencies ---
+    "USD",
+    "EUR",
+    "GBP",
+    "JPY",
+    "CHF",
+    # --- Americas ---
+    "CAD",
+    "MXN",
+    "BRL",
+    "ARS",
+    "CLP",
+    "COP",
+    # --- Europe (non-EUR) ---
+    "NOK",
+    "SEK",
+    "DKK",
+    "PLN",
+    "CZK",
+    "HUF",
+    "RON",
+    "TRY",
+    "RUB",
+    # --- Middle East ---
+    "AED",
+    "SAR",
+    "QAR",
+    "KWD",
+    "ILS",
+    "EGP",
+    # --- Africa ---
+    "NGN",
+    "ZAR",
+    "KES",
+    "GHS",
+    "MAD",
+    # --- Asia-Pacific ---
+    "CNY",
+    "HKD",
+    "SGD",
+    "TWD",
+    "KRW",
+    "INR",
+    "PKR",
+    "THB",
+    "MYR",
+    "IDR",
+    "PHP",
+    "VND",
+    # --- Oceania ---
+    "AUD",
+    "NZD",
+]
+
+
+# Symbol map. Anything not listed here falls back to the code
+# itself — that's safer than guessing "$", which is wrong for
+# AUD, CAD, HKD, etc.
+_CURRENCY_SYMBOLS = {
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "JPY": "¥",
+    "CHF": "Fr",
+    "CAD": "C$",
+    "MXN": "MX$",
+    "BRL": "R$",
+    "ARS": "AR$",
+    "CLP": "CLP$",
+    "COP": "COL$",
+    "NOK": "kr",
+    "SEK": "kr",
+    "DKK": "kr",
+    "PLN": "zł",
+    "CZK": "Kč",
+    "HUF": "Ft",
+    "RON": "lei",
+    "TRY": "₺",
+    "RUB": "₽",
+    "AED": "AED",
+    "SAR": "SAR",
+    "QAR": "QAR",
+    "KWD": "KWD",
+    "ILS": "₪",
+    "EGP": "EGP",
+    "NGN": "₦",
+    "ZAR": "R",
+    "KES": "KSh",
+    "GHS": "₵",
+    "MAD": "MAD",
+    "CNY": "¥",
+    "HKD": "HK$",
+    "SGD": "S$",
+    "TWD": "NT$",
+    "KRW": "₩",
+    "INR": "₹",
+    "PKR": "₨",
+    "THB": "฿",
+    "MYR": "RM",
+    "IDR": "Rp",
+    "PHP": "₱",
+    "VND": "₫",
+    "AUD": "A$",
+    "NZD": "NZ$",
+}
+
+
 def get_currency_symbol(currency):
-    """Return the symbol for a given currency code."""
-    symbols = {
-        "USD": "$",
-        "EUR": "€",
-        "GBP": "£",
-        "NGN": "₦",
-        "JPY": "¥",
-        "BRL": "R$",
-        "CAD": "C$",
-        "AUD": "A$",
-        "CHF": "Fr",
-        "CNY": "¥",
-        "INR": "₹",
-    }
-    return symbols.get(currency, "$")
+    """
+    Return the symbol for a given currency code.
+
+    Falls back to the code itself for currencies without a mapped
+    symbol — that's clearer than returning "$", which would be
+    wrong for many currencies.
+    """
+    if not currency:
+        return ""
+    return _CURRENCY_SYMBOLS.get(currency.upper(), currency.upper())
 
 
-# --- Existing functions ---
+# =========================================================
+# HTTP CACHE
+# =========================================================
 
 
 def get_exchange_rates(base_currency="USD"):
@@ -47,28 +158,23 @@ def get_exchange_rates(base_currency="USD"):
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
             rates = response.json()["rates"]
-            # Save to cache
             with open(CACHE_FILE, "w") as f:
                 json.dump({"timestamp": time.time(), "rates": rates}, f)
             return rates
         else:
-            # Fallback to cached (even if expired)
             if os.path.exists(CACHE_FILE):
                 with open(CACHE_FILE, "r") as f:
                     data = json.load(f)
                     return data["rates"]
-            else:
-                raise Exception(
-                    f"API returned {response.status_code} and no cache available."
-                )
+            raise Exception(
+                f"API returned {response.status_code} and no cache available."
+            )
     except Exception as e:
-        # On any error, use cache if available
         if os.path.exists(CACHE_FILE):
             with open(CACHE_FILE, "r") as f:
                 data = json.load(f)
                 return data["rates"]
-        else:
-            raise e
+        raise e
 
 
 def convert(amount, from_currency, to_currency, rates=None):
@@ -84,31 +190,16 @@ def convert(amount, from_currency, to_currency, rates=None):
 
 
 def get_snapshot_rate(base_currency, foreign_currency):
-    """
-    Fetch the current exchange rate to store as a snapshot.
-    """
+    """Fetch the current exchange rate to store as a snapshot."""
     if base_currency == foreign_currency:
         return 1.0
     rates = get_exchange_rates(base_currency)
     return rates.get(foreign_currency, 1.0)
 
-# =========================================================
-# STAGE 2 – Seed rates into the DB (exchange_rates table)
-# =========================================================
 
-CURRENCIES_SUPPORTED = [
-    "USD",
-    "EUR",
-    "GBP",
-    "NGN",
-    "JPY",
-    "BRL",
-    "CAD",
-    "AUD",
-    "CHF",
-    "CNY",
-    "INR",
-]
+# =========================================================
+# STAGE 2 — Seed rates into the DB (exchange_rates table)
+# =========================================================
 
 
 def seed_rates_for_date(on_date=None, base_currency="USD"):
@@ -116,8 +207,8 @@ def seed_rates_for_date(on_date=None, base_currency="USD"):
     Fetch current rates for all supported currencies and store them
     in the exchange_rates table.
 
-    - For each target currency, stores the direct pair (base -> target)
-      and the reverse pair (target -> base).
+    For each target currency, stores the direct pair (base -> target)
+    and the reverse pair (target -> base).
 
     Parameters
     ----------
@@ -171,8 +262,9 @@ def seed_rates_for_date(on_date=None, base_currency="USD"):
 
     return {"stored": stored, "skipped": skipped, "date": on_date}
 
-    # =========================================================
-# STAGE 3 – Conversion core
+
+# =========================================================
+# STAGE 3 — Conversion core
 # =========================================================
 
 
@@ -180,27 +272,15 @@ def get_rate(from_currency, to_currency, on_date=None, base_currency="USD"):
     """
     Return the exchange rate from `from_currency` to `to_currency` on `on_date`.
 
-    Parameters
-    ----------
-    from_currency : str
-        Currency code to convert FROM, e.g. 'EUR'.
-    to_currency : str
-        Currency code to convert TO, e.g. 'USD'.
-    on_date : str, date, or datetime, optional
-        The date the rate applies to (historical accuracy).
-        Defaults to today.
-    base_currency : str
-        The base currency used for cross-rate fallbacks. Defaults to 'USD'.
+    Resolution order:
+      1. Direct in DB
+      2. Reverse in DB
+      3. Cross via base currency
+      4. Fetch from API for that date, then retry
+      5. Nearest date within ±7 days
+      6. Raise ValueError
 
-    Returns
-    -------
-    float
-        The rate such that: amount_in_from * rate = amount_in_to.
-
-    Raises
-    ------
-    ValueError
-        If no rate can be determined for the pair and date.
+    Returns a float such that: amount_in_from * rate = amount_in_to.
     """
     import database as db  # local import to avoid circular dependency
 
@@ -273,8 +353,8 @@ def convert_amount(
     """
     Convert `amount` from one currency to another.
 
-    Returns 0.0 if amount is None. Returns the same amount if currencies match.
-    Raises ValueError if no rate can be determined.
+    Returns 0.0 if amount is None. Returns the same amount if currencies
+    match. Raises ValueError if no rate can be determined.
     """
     if amount is None:
         return 0.0
@@ -297,10 +377,12 @@ def _fetch_rates_for_date(on_date, base_currency="USD"):
     Fetch and store rates for a specific date.
 
     Note: The free exchangerate-api.com tier only provides TODAY's rates,
-    not historical data. If `on_date` is not today, we fall back to fetching
-    today's rates and store them under `on_date` so the app remains functional.
+    not historical data. If `on_date` is not today, we fall back to
+    fetching today's rates and store them under `on_date` so the app
+    remains functional.
 
-    For historically accurate rates, a paid API (or manual entry) is needed.
+    For historically accurate rates, a paid API (or manual entry) is
+    needed.
     """
     today = datetime.now().date().isoformat()
 

@@ -1017,8 +1017,7 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
         with col_bud2:
             st.write(f"Base Currency: {base_cur}")
 
-        base_currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL",
-            "CAD", "AUD", "CHF", "CNY", "INR"]
+        base_currency_options = currency.CURRENCIES_SUPPORTED
         new_base_currency = st.selectbox("Base Currency", options=base_currency_options,
             index=(base_currency_options.index(trip_modal_data.get("base_currency", "USD"))
                    if trip_modal_data.get("base_currency") in base_currency_options else 0),
@@ -1300,7 +1299,7 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
 
     # Items
     st.write("**📋 Itinerary Items**")
-    currency_options_all = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL", "CAD", "AUD", "CHF", "CNY", "INR"]
+    base_currency_options = currency.CURRENCIES_SUPPORTED
     items = st.session_state[f"modal_items_{trip_id_modal}"]
     exec_tz_modal = (exec_profile_modal.get("timezone", "America/New_York") if exec_profile_modal else "America/New_York")
     display_mode_modal = st.session_state.get(f"modal_tz_display_{trip_id_modal}", "Home")
@@ -1350,9 +1349,9 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                         key=f"modal_e_loc_{trip_id_modal}_{idx}")
                     e_cost = st.number_input("Cost", value=float(item.get("cost", 0)),
                         key=f"modal_e_cost_{trip_id_modal}_{idx}")
-                    e_currency = st.selectbox("Currency", options=currency_options_all,
-                        index=(currency_options_all.index(item.get("cost_currency", "USD"))
-                               if item.get("cost_currency", "USD") in currency_options_all else 0),
+                    e_currency = st.selectbox("Currency", options=base_currency_options,
+                        index=(base_currency_options.index(item.get("cost_currency", "USD"))
+                               if item.get("cost_currency", "USD") in base_currency_options else 0),
                         key=f"modal_e_currency_{trip_id_modal}_{idx}")
                     default_cost_date_modal = item.get("cost_date")
                     if default_cost_date_modal:
@@ -1459,7 +1458,7 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
             n_loc = st.text_input("Location", key=f"modal_n_loc_{trip_id_modal}", disabled=is_locked)
             n_cost = st.number_input("Cost", min_value=0.0, value=0.0,
                 key=f"modal_n_cost_{trip_id_modal}", disabled=is_locked)
-            n_currency = st.selectbox("Currency", options=currency_options_all,
+            n_currency = st.selectbox("Currency", options=base_currency_options,
                 key=f"modal_n_currency_{trip_id_modal}", disabled=is_locked)
             n_cost_date = st.date_input("Cost Date", value=datetime.now(),
                 key=f"modal_n_cost_date_{trip_id_modal}", disabled=is_locked)
@@ -2094,8 +2093,7 @@ with tab1:
             budget = st.number_input("Budget Amount (in Base Currency)",
                 min_value=0.0, step=100.0, value=0.0, key="create_trip_budget")
         with col_currency:
-            base_currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL",
-                "CAD", "AUD", "CHF", "CNY", "INR"]
+            base_currency_options = currency.CURRENCIES_SUPPORTED
             trip_base_currency = st.selectbox("Base Currency", options=base_currency_options,
                 index=0, key="create_base_currency")
 
@@ -2319,11 +2317,10 @@ with tab1:
                                 key=f"create_e_end_{idx}")
                             e_loc = st.text_input("Location", value=item.get("location", ""), key=f"create_e_loc_{idx}")
                             e_cost = st.number_input("Cost", value=float(item.get("cost", 0)), key=f"create_e_cost_{idx}")
-                            currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL",
-                                "CAD", "AUD", "CHF", "CNY", "INR"]
-                            e_currency = st.selectbox("Currency", options=currency_options,
-                                index=(currency_options.index(item.get("cost_currency", "USD"))
-                                       if item.get("cost_currency", "USD") in currency_options else 0),
+                            base_currency_options = currency.CURRENCIES_SUPPORTED
+                            e_currency = st.selectbox("Currency", options=base_currency_options,
+                                index=(base_currency_options.index(item.get("cost_currency", "USD"))
+                                       if item.get("cost_currency", "USD") in base_currency_options else 0),
                                 key=f"create_e_currency_{idx}")
                             default_cost_date = item.get("cost_date")
                             if default_cost_date:
@@ -2425,9 +2422,8 @@ with tab1:
                 n_end = st.datetime_input("End", value=datetime.now(), key="create_n_end")
                 n_loc = st.text_input("Location", key="create_n_loc")
                 n_cost = st.number_input("Cost", min_value=0.0, value=0.0, key="create_n_cost")
-                currency_options = ["USD", "EUR", "GBP", "NGN", "JPY", "BRL",
-                    "CAD", "AUD", "CHF", "CNY", "INR"]
-                n_currency = st.selectbox("Currency", options=currency_options, key="create_n_currency")
+                base_currency_options = currency.CURRENCIES_SUPPORTED
+                n_currency = st.selectbox("Currency", options=base_currency_options, key="create_n_currency")
                 n_cost_date = st.date_input("Cost Date", value=datetime.now(), key="create_n_cost_date")
                 tz_display_names, tz_map = get_timezone_dropdown_options()
                 if profile and profile.get("timezone"):
