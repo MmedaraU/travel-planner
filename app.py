@@ -1883,6 +1883,11 @@ with tab1:
             overall_end = st.date_input("End Date*",
                 value=st.session_state.get("create_overall_end", datetime.now() + timedelta(days=1)),
                 key="create_overall_end")
+        if overall_start and overall_start < datetime.now().date() - timedelta(days=1):
+            st.warning(
+                f"⚠️ The start date ({fmt_date(overall_start.isoformat())}) is in the past. "
+                "This is fine for logging a past trip — but double-check the year."
+            )
         if overall_start and overall_end and overall_end >= overall_start:
             duration = (overall_end - overall_start).days
             st.caption(f"⏱️ Duration: {duration} day(s)")
@@ -2365,20 +2370,42 @@ with tab2:
     search_trip = st.text_input("🔍 Search Trips",
         placeholder="Destination, purpose, or executive name...", key="dash_search")
 
-    col_dash1, col_dash2 = st.columns(2)
+    col_dash1, col_dash2, col_dash3 = st.columns([2, 2, 1])
     with col_dash1:
-        exec_filter_options = ["All"] + [f"{e['name']} (ID: {e['id']})"
-            for e in db.get_all_executives(active_only=False)]
-        exec_filter = st.selectbox("Filter by Executive", exec_filter_options, key="dash_filter_tab")
-        exec_id_filter = (None if exec_filter == "All"
-            else int(exec_filter.split("(ID: ")[1].rstrip(")")))
+        exec_filter_options = ["All"] + [
+            f"{e['name']} (ID: {e['id']})"
+            for e in db.get_all_executives(active_only=False)
+        ]
+        exec_filter = st.selectbox(
+            "Filter by Executive", exec_filter_options, key="dash_filter_tab"
+        )
+        exec_id_filter = (
+            None
+            if exec_filter == "All"
+            else int(exec_filter.split("(ID: ")[1].rstrip(")"))
+        )
     with col_dash2:
-        date_range = st.date_input("Date Range (optional)", value=[], key="dash_date_tab")
+        date_range = st.date_input(
+            "Date Range (optional)", value=[], key="dash_date_tab"
+        )
+    with col_dash3:
+        st.write("")
+        st.write("")
+        show_past = st.checkbox("Include past trips", value=True, key="dash_show_past")
     start_filter = date_range[0].isoformat() if len(date_range) > 0 else None
     end_filter = date_range[1].isoformat() if len(date_range) > 1 else None
 
     summary_data = db.get_spending_summary(exec_id=exec_id_filter,
         start_date=start_filter, end_date=end_filter)
+
+    # ---- Filter out past trips when the toggle is off
+    if not show_past:
+        today_iso = datetime.now().date().isoformat()
+        summary_data = [
+            trip
+            for trip in summary_data
+            if not (trip.get("end_date") and trip["end_date"][:10] < today_iso)
+        ]
 
     if search_trip:
         sl = search_trip.lower()
@@ -2442,6 +2469,11 @@ with tab2:
         for trip in summary_data:
             trip_base_currency = trip.get("base_currency", "USD")
             trip_id = trip["trip_id"]
+            # Flag trips that ended before today so past-dated drafts stand out
+            trip_end = trip.get("end_date")
+            is_past = bool(
+                trip_end and trip_end[:10] < datetime.now().date().isoformat()
+            )
             with st.container():
                 cols = st.columns(cols_widths)
                 with cols[0]:
@@ -2466,15 +2498,17 @@ with tab2:
                     st.write(fmt_money(trip["estimated_spent"], trip_base_currency))
                 with cols[8]:
                     status = trip["status"]
-                    st.write(
-                        "📝 Draft"
-                        if status == "draft"
-                        else (
-                            "✅ Approved"
-                            if status == "approved"
-                            else "📄 Final" if status == "final" else status
-                        )
-                    )
+                    if is_past and status == "draft":
+                        st.write("🕒 Past (draft)")
+                    elif is_past:
+                        base_label = ("✅ Approved" if status == "approved"
+                                      else "📄 Final" if status == "final"
+                                      else status)
+                        st.write(f"🕒 {base_label}")
+                    else:
+                        st.write("📝 Draft" if status == "draft"
+                                 else "✅ Approved" if status == "approved"
+                                 else "📄 Final" if status == "final" else status)
                 with cols[9]:
                     with st.popover("📂 Edit", use_container_width=True):
                         _render_trip_edit_modal(trip_id, country_list)
