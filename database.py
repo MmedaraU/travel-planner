@@ -919,7 +919,34 @@ def get_contacts_for_delegation(company_id, active_only=True):
     finally:
         conn.close()
 
-        
+
+def get_contacts_for_local_support(company_id, active_only=True):
+    """
+    Contacts available as local support for a trip:
+    - all active contacts of the given company, OR
+    - active contacts with no company (universal / freelance)
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        c = conn.cursor()
+        conditions, params = [], []
+        if active_only:
+            conditions.append("is_active = 1")
+        if company_id:
+            conditions.append("(company_id = ? OR company_id IS NULL)")
+            params.append(company_id)
+        else:
+            conditions.append("company_id IS NULL")
+        q = "SELECT * FROM contacts"
+        if conditions:
+            q += " WHERE " + " AND ".join(conditions)
+        q += " ORDER BY (company_id IS NULL), name"
+        c.execute(q, params)
+        return [dict(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+
 # =========================================================
 # TRIP DELEGATION
 # =========================================================
