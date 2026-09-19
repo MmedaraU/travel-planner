@@ -353,10 +353,38 @@ if profile:
         mems = db.get_memberships(exec_id)
         if mems:
             st.caption(f"✈️ {len(mems)} memberships")
+
+        # --- Passport expiry warning ---
+        # Most countries require ≥6 months validity at entry. Warn on any
+        # passport expiring within 180 days, escalate at 90 and on expiry.
+        passports = db.get_passports(exec_id)
+        today = datetime.now().date()
+        for p in passports:
+            exp = p.get("expiry_date")
+            if not exp:
+                continue
+            try:
+                exp_date = datetime.fromisoformat(exp).date()
+            except Exception:
+                continue
+            days_left = (exp_date - today).days
+            country = p.get("country") or "Passport"
+
+            if days_left < 0:
+                st.error(f"🛂 {country}: **EXPIRED** " f"({fmt_date(exp)})")
+            elif days_left < 90:
+                st.error(
+                    f"🛂 {country}: expires in **{days_left} days** "
+                    f"({fmt_date(exp)})"
+                )
+            elif days_left < 180:
+                st.warning(
+                    f"🛂 {country}: expires in {days_left} days " f"({fmt_date(exp)})"
+                )
+
         if st.button("👤 View Full Profile", use_container_width=True):
             st.session_state["show_full_profile"] = True
             st.session_state["profile_edit_mode"] = False
-
 
 if st.session_state.get("show_full_profile", False):
     with st.popover("👤 Full Profile", use_container_width=True):
