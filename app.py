@@ -1342,9 +1342,13 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
     # Delegation
     st.write("**👥 Delegation**")
     if company_id_modal:
-        all_company_contacts = db.get_contacts(company_id_modal, active_only=True)
-        contact_options = {f"{c['name']} ({c.get('role', '')})".strip(): c["id"]
-            for c in all_company_contacts}
+        all_company_contacts = db.get_contacts_for_delegation(company_id_modal)
+        contact_options = {}
+        for c in all_company_contacts:
+            role = c.get("role", "") or ""
+            suffix = " · freelance" if not c.get("company_id") else ""
+            label = f"{c['name']} ({role}){suffix}".strip()
+            contact_options[label] = c["id"]
         existing_trip_delegation = db.get_trip_delegation_members(trip_id_modal)
         existing_ids = [m["id"] for m in existing_trip_delegation]
         existing_labels = [label for label, cid in contact_options.items() if cid in existing_ids]
@@ -2001,9 +2005,14 @@ with tab1:
 
         st.subheader("👥 Delegation")
         if company_id:
-            all_company_contacts = db.get_contacts(company_id, active_only=True)
-            contact_options = {f"{c['name']} ({c.get('role', '')})".strip(): c["id"]
-                for c in all_company_contacts}
+            all_company_contacts = db.get_contacts_for_delegation(company_id)
+            contact_options = {}
+            for c in all_company_contacts:
+                role = c.get("role", "") or ""
+                # Tag unaffiliated contacts so it's obvious in the dropdown
+                suffix = " · freelance" if not c.get("company_id") else ""
+                label = f"{c['name']} ({role}){suffix}".strip()
+                contact_options[label] = c["id"]
             current_ids = st.session_state.get("create_trip_delegation_ids", [])
             current_labels = [label for label, cid in contact_options.items() if cid in current_ids]
             selected_labels = st.multiselect("Select delegation members for this trip",
@@ -2107,10 +2116,14 @@ with tab1:
                                 e_venue_id = venue_labels[selected_venue_label]
 
                             if st.session_state.get("create_trip_delegation_ids"):
-                                delegation_options = {
-                                    f"{c['name']} ({c.get('role', '')})".strip(): c["id"]
-                                    for c in db.get_contacts(company_id, active_only=True)
-                                    if c["id"] in st.session_state["create_trip_delegation_ids"]}
+                                delegation_options = {}
+                                for c in db.get_contacts_for_delegation(company_id):
+                                    if c["id"] not in st.session_state["create_trip_delegation_ids"]:
+                                        continue
+                                    role = c.get("role", "") or ""
+                                    suffix = " · freelance" if not c.get("company_id") else ""
+                                    label = f"{c['name']} ({role}){suffix}".strip()
+                                    delegation_options[label] = c["id"]
                                 current_delegation = item.get("delegation_ids", [])
                                 current_labels = [label for label, cid in delegation_options.items()
                                     if cid in current_delegation]
@@ -2193,10 +2206,14 @@ with tab1:
                     n_venue_id = venue_labels[selected_venue_label]
 
                 if company_id and st.session_state.get("create_trip_delegation_ids"):
-                    delegation_options = {
-                        f"{c['name']} ({c.get('role', '')})".strip(): c["id"]
-                        for c in db.get_contacts(company_id, active_only=True)
-                        if c["id"] in st.session_state["create_trip_delegation_ids"]}
+                    delegation_options = {}
+                    for c in db.get_contacts_for_delegation(company_id):
+                        if c["id"] not in st.session_state["create_trip_delegation_ids"]:
+                            continue
+                        role = c.get("role", "") or ""
+                        suffix = " · freelance" if not c.get("company_id") else ""
+                        label = f"{c['name']} ({role}){suffix}".strip()
+                        delegation_options[label] = c["id"]
                     selected_delegation = st.multiselect("Assign Delegation Members",
                         options=list(delegation_options.keys()), key="create_item_delegation")
                     selected_delegation_ids = [delegation_options[l] for l in selected_delegation]
