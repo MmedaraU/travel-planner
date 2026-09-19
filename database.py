@@ -530,6 +530,32 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )""")
 
+        # --- Embassies / Consulates ---
+        c.execute("""CREATE TABLE IF NOT EXISTS embassies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            host_country TEXT NOT NULL,
+            city TEXT,
+            representing_country TEXT NOT NULL,
+            name TEXT,
+            address TEXT,
+            phone TEXT,
+            email TEXT,
+            website TEXT,
+            maps_url TEXT,
+            hours TEXT,
+            notes TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )""")
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_embassies_host "
+            "ON embassies(host_country)"
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_embassies_rep "
+            "ON embassies(representing_country)"
+        )
+
         for idx in [
             "CREATE INDEX IF NOT EXISTS idx_per_diem_trip ON per_diem(trip_id)",
             "CREATE INDEX IF NOT EXISTS idx_expenses_trip ON expenses(trip_id)",
@@ -3751,6 +3777,173 @@ def get_hospitals_for_trip(trip_id):
             (trip_id,),
         )
         return [dict(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+
+# =========================================================
+# EMBASSIES / CONSULATES
+# =========================================================
+
+
+def add_embassy(
+    host_country,
+    representing_country,
+    city=None,
+    name=None,
+    address=None,
+    phone=None,
+    email=None,
+    website=None,
+    maps_url=None,
+    hours=None,
+    notes=None,
+    is_active=1,
+):
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        c = conn.cursor()
+        c.execute(
+            """INSERT INTO embassies
+               (host_country, city, representing_country, name, address,
+                phone, email, website, maps_url, hours, notes, is_active)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                host_country,
+                city,
+                representing_country,
+                name,
+                address,
+                phone,
+                email,
+                website,
+                maps_url,
+                hours,
+                notes,
+                1 if is_active else 0,
+            ),
+        )
+        conn.commit()
+        return c.lastrowid
+    finally:
+        conn.close()
+
+
+def get_embassies(host_country=None, representing_country=None, active_only=True):
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        c = conn.cursor()
+        conditions, params = [], []
+        if active_only:
+            conditions.append("is_active = 1")
+        if host_country:
+            conditions.append("host_country = ?")
+            params.append(host_country)
+        if representing_country:
+            conditions.append("representing_country = ?")
+            params.append(representing_country)
+        q = "SELECT * FROM embassies"
+        if conditions:
+            q += " WHERE " + " AND ".join(conditions)
+        q += " ORDER BY host_country, representing_country, name"
+        c.execute(q, params)
+        return [dict(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_embassy(embassy_id):
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        c = conn.cursor()
+        c.execute("SELECT * FROM embassies WHERE id = ?", (embassy_id,))
+        row = c.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def update_embassy(embassy_id, **kwargs):
+    if not kwargs:
+        return
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        c = conn.cursor()
+        fields, params = [], []
+        for k, v in kwargs.items():
+            fields.append(f"{k} = ?")
+            params.append(v)
+        params.append(embassy_id)
+        c.execute(
+            f"UPDATE embassies SET {', '.join(fields)} WHERE id = ?",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_embassy_active(embassy_id, is_active):
+    update_embassy(embassy_id, is_active=1 if is_active else 0)
+
+
+def delete_embassy(embassy_id):
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        c = conn.cursor()
+        c.execute("DELETE FROM embassies WHERE id = ?", (embassy_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_embassies_for_trip(trip_id, representing_countries=None):
+    """
+    Return embassies relevant to a trip:
+    - host_country matches one of the trip's stop countries
+    - representing_country matches one of the executive's passport countries
+    """
+    if not representing_countries:
+        return []
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        c = conn.cursor()
+        c.execute(
+            """SELECT DISTINCT country FROM trip_stops
+               WHERE trip_id = ? AND country IS NOT NULL AND country != ''""",
+            (trip_id,),
+        )
+        host_countries = [row[0] for row in c.fetchall()]
+        if not host_countries:
+            return []
+        h_ph = ",".join(["?"] * len(host_countries))
+        r_ph = ",".join(["?"] * len(representing_countries))
+        c.execute(
+            f"""SELECT * FROM embassies
+                WHERE is_active = 1
+                  AND host_country IN ({h_ph})
+                  AND representing_country IN ({r_ph})
+                ORDER BY host_country, representing_country, name""",
+            host_countries + representing_countries,
+        )
+        return [dict(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_executive_passport_countries(exec_id):
+    """Return a list of country names from an executive's passports."""
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT DISTINCT country FROM executive_passports "
+            "WHERE exec_id = ? AND country IS NOT NULL AND country != ''",
+            (exec_id,),
+        )
+        return [row[0] for row in c.fetchall()]
     finally:
         conn.close()
 

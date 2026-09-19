@@ -1360,6 +1360,106 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
     else:
         st.warning("No company associated with this trip.")
 
+    # ---- Emergency Info ----
+    st.write("**🚨 Emergency Info**")
+
+    # Emergency contacts for this executive's company
+    emergency_contacts = []
+    if company_id_modal:
+        all_c = db.get_contacts(company_id_modal, active_only=True)
+        emergency_contacts = [c for c in all_c if c.get("type") == "Emergency"]
+
+    # Emergency numbers from destination guides
+    trip_emergency_numbers = {}
+    for stop in stops:
+        country = (stop.get("country") or "").strip()
+        if country and country not in trip_emergency_numbers:
+            dg = db.get_destination_guide_by_country(country)
+            if dg:
+                trip_emergency_numbers[country] = {
+                    "police": dg.get("emergency_police"),
+                    "ambulance": dg.get("emergency_ambulance"),
+                    "fire": dg.get("emergency_fire"),
+                }
+
+    # Hospitals for the trip's stop cities
+    trip_hospitals = db.get_hospitals_for_trip(trip_id_modal)
+
+    # Embassies matching (host country of stop) + (exec passport countries)
+    passport_countries = db.get_executive_passport_countries(trip_modal_data["exec_id"])
+    trip_embassies = db.get_embassies_for_trip(
+        trip_id_modal, representing_countries=passport_countries
+    )
+
+    with st.expander("View Emergency Details", expanded=False):
+
+        if emergency_contacts:
+            st.markdown("**🚨 Emergency Contacts**")
+            for ec in emergency_contacts:
+                col_a, col_b = st.columns([2, 3])
+                with col_a:
+                    st.write(f"**{ec['name']}**")
+                    if ec.get("role"):
+                        st.caption(ec["role"])
+                with col_b:
+                    if ec.get("phone"):
+                        st.write(f"📞 {ec['phone']}")
+                    if ec.get("email"):
+                        st.write(f"✉️ {ec['email']}")
+                st.divider()
+
+        if trip_emergency_numbers:
+            st.markdown("**☎️ Emergency Numbers**")
+            for loc, nums in trip_emergency_numbers.items():
+                st.write(f"**{loc}**")
+                parts = []
+                if nums.get("police"):
+                    parts.append(f"🚓 Police: {nums['police']}")
+                if nums.get("ambulance"):
+                    parts.append(f"🚑 Ambulance: {nums['ambulance']}")
+                if nums.get("fire"):
+                    parts.append(f"🚒 Fire: {nums['fire']}")
+                if parts:
+                    st.caption(" · ".join(parts))
+            st.divider()
+
+        if trip_hospitals:
+            st.markdown("**🏥 Hospitals**")
+            for h in trip_hospitals:
+                st.write(f"**{h['name']}** — {h.get('city', '')}")
+                if h.get("phone"):
+                    st.caption(f"📞 {h['phone']}")
+                if h.get("maps_url"):
+                    st.caption(f"[Open in Maps]({h['maps_url']})")
+            st.divider()
+
+        if trip_embassies:
+            st.markdown("**🏛️ Embassies / Consulates**")
+            for emb in trip_embassies:
+                st.write(
+                    f"**{emb.get('name') or emb['representing_country'] + ' Embassy'}** "
+                    f"in {emb['host_country']}"
+                )
+                if emb.get("address"):
+                    st.caption(f"🏠 {emb['address']}")
+                if emb.get("phone"):
+                    st.caption(f"📞 {emb['phone']}")
+                if emb.get("hours"):
+                    st.caption(f"🕐 {emb['hours']}")
+            st.divider()
+
+        if not (
+            emergency_contacts
+            or trip_emergency_numbers
+            or trip_hospitals
+            or trip_embassies
+        ):
+            st.caption(
+                "No emergency info available for this trip yet. "
+                "Add hospitals, embassies, or emergency contacts "
+                "to the Library or Contacts tab."
+            )
+
     # Per Diem & Expenses
     st.write("**💰 Per Diem & Expenses**")
     trip_members_for_expenses = db.get_trip_delegation_members(trip_id_modal)
@@ -2669,7 +2769,7 @@ with tab4:
         key="contact_search",
     )
 
-    type_options = ["All", "Local Support", "Staff", "Partner", "Other"]
+    type_options = ["All", "Emergency", "Local Support", "Staff", "Partner", "Other"]
     selected_type = st.radio(
         "Filter by Type",
         options=type_options,
@@ -2930,21 +3030,48 @@ with tab4:
                     db.get_company_default_contacts(cid_company)
                 )
 
-        for contact in all_contacts:
-            cid = contact["id"]
-            comp_name = (db.get_company(contact["company_id"])["name"]
-                if contact.get("company_id") else "—")
-            is_default = (
-                contact.get("company_id")
-                and cid in default_ids_by_company.get(contact["company_id"], set())
-            )
+        TYPE_ORDER = ["Emergency", "Local Support", "Staff", "Partner", "Other"]
+        TYPE_ICONS = {
+            "Emergency": "🚨",
+            "Local Support": "📍",
+            "Staff": "👤",
+            "Partner": "🤝",
+            "Other": "📌",
+        }
+        grouped = {}
+        for c in all_contacts:
+            t = c.get("type") or "Other"
+            grouped.setdefault(t, []).append(c)
+
+        for grp_type in TYPE_ORDER:
+            group = grouped.get(grp_type, [])
+            if not group:
+                continue
+            icon = TYPE_ICONS.get(grp_type, "📌")
+            # Emergency is expanded by default; other groups stay collapsed
+            with st.expander(
+                f"{icon} {grp_type} ({len(group)})", expanded=(grp_type == "Emergency")
+            ):
+                for contact in group:
+                    cid = contact["id"]
+                    comp_name = (
+                        db.get_company(contact["company_id"])["name"]
+                        if contact.get("company_id")
+                        else "—"
+                    )
+                    is_default = contact.get(
+                        "company_id"
+                    ) and cid in default_ids_by_company.get(
+                        contact["company_id"], set()
+                    )
 
             # Dark saturated hues — AA contrast with white text on any theme
             type_color_map = {
-                "Local Support": "#1e40af",  # blue-800
-                "Staff": "#166534",  # green-800
-                "Partner": "#92400e",  # amber-800
-                "Other": "#475569",  # slate-600
+                "Emergency": "#991b1b",
+                "Local Support": "#1e40af",
+                "Staff": "#166534",
+                "Partner": "#92400e",
+                "Other": "#475569",
             }
             contact_type = contact.get("type", "Local Support")
             badge_color = type_color_map.get(contact_type, "#94a3b8")
@@ -3440,12 +3567,16 @@ with tab6:
             "scroll to **🚀 Create Trip from Template**."
         )
 
-    lib_templates, lib1, lib2, lib3, lib4, lib5 = st.tabs([
-        "📋 Trip Templates",
-        "🌍 Destination Guides", "🛂 Visa Rules",
-        "✅ Checklist Templates", "🎒 Packing Templates",
-        "🚨 Emergency Directory"])
-
+    lib_templates, lib1, lib2, lib3, lib4, lib_emergency = st.tabs(
+        [
+            "📋 Trip Templates",
+            "🌍 Destination Guides",
+            "🛂 Visa Rules",
+            "✅ Checklist Templates",
+            "🎒 Packing Templates",
+            "🚨 Emergency Directory",
+        ]
+    )
 
     # =========================================================
     # LIBRARY SUB-TAB: Trip Templates
@@ -3549,7 +3680,6 @@ with tab6:
                             else:
                                 st.warning("Please fill in all required fields.")
 
-                                
     # ---- Guides ----
     with lib1:
         # st.subheader("🌍 Destination Guides")
@@ -4175,190 +4305,509 @@ with tab6:
                     )
                 st.divider()
 
-    # ---- Hospitals ----
-    with lib5:
-        # st.subheader("🚨 Hospitals")
-        with st.expander("➕ Add New Hospital", expanded=False):
-            with st.form("add_hospital_form"):
-                country_list = sorted([c.name for c in pycountry.countries])
-                col1, col2 = st.columns(2)
-                with col1:
-                    h_city = st.text_input("City*", key="h_city")
-                    h_name = st.text_input("Hospital Name*", key="h_name")
-                    h_phone = st.text_input("Phone", key="h_phone")
-                with col2:
-                    h_country = st.selectbox(
-                        "Country", options=[""] + country_list, key="h_country"
-                    )
-                    h_address = st.text_input("Address", key="h_address")
-                    h_maps = st.text_input("Google Maps URL", key="h_maps")
-                h_notes = st.text_area("Note", key="h_notes", height=80)
-                if st.form_submit_button("➕ Add Hospital"):
-                    if not h_city or not h_name:
-                        st.warning("City and Hospital Name are required.")
-                    else:
-                        db.add_hospital(
-                            city=h_city,
-                            country=h_country,
-                            name=h_name,
-                            address=h_address or None,
-                            phone=h_phone or None,
-                            maps_url=h_maps or None,
-                            notes=h_notes or None,
+    # =========================================================
+    # LIBRARY SUB-TAB: Emergency Directory
+    # =========================================================
+    with lib_emergency:
+        st.subheader("🚨 Emergency Directory")
+        st.caption(
+            "Hospitals, emergency numbers, and embassies / consulates — "
+            "everything you'd need in a crisis."
+        )
+
+        e_hosp, e_numbers, e_emb = st.tabs(
+            ["🏥 Hospitals", "☎️ Emergency Numbers", "🏛️ Embassies / Consulates"]
+        )
+
+        # ==================== Hospitals ====================
+        with e_hosp:
+            st.markdown("**🏥 Hospitals**")
+            with st.expander("➕ Add New Hospital", expanded=False):
+                with st.form("add_hospital_form"):
+                    country_list = sorted([c.name for c in pycountry.countries])
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        h_city = st.text_input("City*", key="h_city")
+                        h_name = st.text_input("Hospital Name*", key="h_name")
+                        h_phone = st.text_input("Phone", key="h_phone")
+                    with col2:
+                        h_country = st.selectbox(
+                            "Country", options=[""] + country_list, key="h_country"
                         )
-                        st.success(f"✅ Hospital '{h_name}' added!")
-                        st.rerun()
+                        h_address = st.text_input("Address", key="h_address")
+                        h_maps = st.text_input("Google Maps URL", key="h_maps")
+                    h_notes = st.text_area("Note", key="h_notes", height=80)
+                    if st.form_submit_button("➕ Add Hospital"):
+                        if not h_city or not h_name:
+                            st.warning("City and Hospital Name are required.")
+                        else:
+                            db.add_hospital(
+                                city=h_city,
+                                country=h_country,
+                                name=h_name,
+                                address=h_address or None,
+                                phone=h_phone or None,
+                                maps_url=h_maps or None,
+                                notes=h_notes or None,
+                            )
+                            st.success(f"✅ Hospital '{h_name}' added!")
+                            st.rerun()
 
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            hosp_search = st.text_input(
-                "🔍 Search", key="hosp_search", placeholder="City, country, name..."
-            )
-        with col_f2:
-            conn = sqlite3.connect(db.DB_PATH, timeout=30)
-            try:
-                c = conn.cursor()
-                c.execute(
-                    "SELECT DISTINCT country FROM hospitals "
-                    "WHERE country IS NOT NULL AND country != '' ORDER BY country"
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                hosp_search = st.text_input(
+                    "🔍 Search", key="hosp_search", placeholder="City, country, name..."
                 )
-                hosp_countries = [row[0] for row in c.fetchall()]
-            finally:
-                conn.close()
-            hosp_country_filter = st.selectbox(
-                "Filter by Country",
-                options=["All Countries"] + hosp_countries,
-                index=0,
-                key="hosp_country_filter",
-            )
-            hosp_filter_country = (
-                None if hosp_country_filter == "All Countries" else hosp_country_filter
-            )
-
-        all_hospitals = db.get_hospitals(country=hosp_filter_country, active_only=False)
-        if hosp_search:
-            s = hosp_search.lower()
-            all_hospitals = [
-                h
-                for h in all_hospitals
-                if s in (h.get("name") or "").lower()
-                or s in (h.get("city") or "").lower()
-                or s in (h.get("country") or "").lower()
-                or s in (h.get("address") or "").lower()
-            ]
-
-        if not all_hospitals:
-            st.info("No hospitals match the filters.")
-        else:
-            st.write(f"**{len(all_hospitals)} hospital(s)**")
-            for h in all_hospitals:
-                hid = h["id"]
-                col1, col2, col3 = st.columns([3, 3, 1.2])
-                with col1:
-                    st.write(f"**{h['name']}**")
-                    if not h.get("is_active", 1):
-                        st.caption("⚠️ Inactive")
-                    loc = ", ".join(p for p in [h.get("city"), h.get("country")] if p)
-                    if loc:
-                        st.caption(f"📍 {loc}")
-                with col2:
-                    if h.get("address"):
-                        st.caption(f"🏠 {h['address']}")
-                    if h.get("phone"):
-                        st.write(f"📞 {h['phone']}")
-                    if h.get("maps_url"):
-                        st.markdown(f"[Open in Maps]({h['maps_url']})")
-                with col3:
-                    if st.button("✏️", key=f"edit_hosp_{hid}"):
-                        st.session_state[f"editing_hosp_{hid}"] = True
-
-                if st.session_state.get(f"editing_hosp_{hid}", False):
-                    with st.expander(f"Edit {h['name']}", expanded=True):
-                        with st.form(key=f"edit_hosp_form_{hid}"):
-                            country_list = sorted([c.name for c in pycountry.countries])
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                e_city = st.text_input(
-                                    "City*", value=h["city"], key=f"e_h_city_{hid}"
-                                )
-                                e_name = st.text_input(
-                                    "Hospital Name*",
-                                    value=h["name"],
-                                    key=f"e_h_name_{hid}",
-                                )
-                                e_phone = st.text_input(
-                                    "Phone",
-                                    value=h.get("phone") or "",
-                                    key=f"e_h_phone_{hid}",
-                                )
-                            with col2:
-                                e_country = st.selectbox(
-                                    "Country",
-                                    options=[""] + country_list,
-                                    index=(
-                                        ([""] + country_list).index(
-                                            h.get("country") or ""
-                                        )
-                                        if (h.get("country") or "") in country_list
-                                        else 0
-                                    ),
-                                    key=f"e_h_country_{hid}",
-                                )
-                                e_address = st.text_input(
-                                    "Address",
-                                    value=h.get("address") or "",
-                                    key=f"e_h_addr_{hid}",
-                                )
-                                e_maps = st.text_input(
-                                    "Google Maps URL",
-                                    value=h.get("maps_url") or "",
-                                    key=f"e_h_maps_{hid}",
-                                )
-                            e_notes = st.text_area(
-                                "Note",
-                                value=h.get("notes") or "",
-                                key=f"e_h_notes_{hid}",
-                                height=80,
-                            )
-                            e_active = st.checkbox(
-                                "Active",
-                                value=bool(h.get("is_active", 1)),
-                                key=f"e_h_act_{hid}",
-                            )
-                            c1, c2, c3 = st.columns(3)
-                            with c1:
-                                if st.form_submit_button("💾 Save"):
-                                    db.update_hospital(
-                                        hid,
-                                        city=e_city,
-                                        country=e_country,
-                                        name=e_name,
-                                        address=e_address,
-                                        phone=e_phone,
-                                        maps_url=e_maps,
-                                        notes=e_notes,
-                                        is_active=1 if e_active else 0,
-                                    )
-                                    st.session_state.pop(f"editing_hosp_{hid}", None)
-                                    st.success("Hospital updated!")
-                                    st.rerun()
-                            with c2:
-                                if st.form_submit_button("🗑️ Delete"):
-                                    st.session_state[f"confirm_del_hosp_{hid}"] = True
-                            with c3:
-                                if st.form_submit_button("❌ Cancel"):
-                                    st.session_state.pop(f"editing_hosp_{hid}", None)
-                                    st.rerun()
-
-                if st.session_state.get(f"confirm_del_hosp_{hid}", False):
-
-                    def _del_hosp(hid=hid):
-                        db.delete_hospital(hid)
-                        st.session_state.pop(f"editing_hosp_{hid}", None)
-
-                    render_delete_confirmation(
-                        flag_key=f"confirm_del_hosp_{hid}",
-                        title=f"Permanently delete '{h['name']}'?",
-                        on_confirm=_del_hosp,
+            with col_f2:
+                conn = sqlite3.connect(db.DB_PATH, timeout=30)
+                try:
+                    c = conn.cursor()
+                    c.execute(
+                        "SELECT DISTINCT country FROM hospitals "
+                        "WHERE country IS NOT NULL AND country != '' "
+                        "ORDER BY country"
                     )
-                st.divider()
+                    hosp_countries = [row[0] for row in c.fetchall()]
+                finally:
+                    conn.close()
+                hosp_country_filter = st.selectbox(
+                    "Filter by Country",
+                    options=["All Countries"] + hosp_countries,
+                    index=0,
+                    key="hosp_country_filter",
+                )
+                hosp_filter_country = (
+                    None
+                    if hosp_country_filter == "All Countries"
+                    else hosp_country_filter
+                )
+
+            all_hospitals = db.get_hospitals(
+                country=hosp_filter_country, active_only=False
+            )
+            if hosp_search:
+                s = hosp_search.lower()
+                all_hospitals = [
+                    h
+                    for h in all_hospitals
+                    if s in (h.get("name") or "").lower()
+                    or s in (h.get("city") or "").lower()
+                    or s in (h.get("country") or "").lower()
+                    or s in (h.get("address") or "").lower()
+                ]
+
+            if not all_hospitals:
+                st.info("No hospitals match the filters.")
+            else:
+                st.write(f"**{len(all_hospitals)} hospital(s)**")
+                for h in all_hospitals:
+                    hid = h["id"]
+                    col1, col2, col3 = st.columns([3, 3, 1.2])
+                    with col1:
+                        st.write(f"**{h['name']}**")
+                        if not h.get("is_active", 1):
+                            st.caption("⚠️ Inactive")
+                        loc = ", ".join(
+                            p for p in [h.get("city"), h.get("country")] if p
+                        )
+                        if loc:
+                            st.caption(f"📍 {loc}")
+                    with col2:
+                        if h.get("address"):
+                            st.caption(f"🏠 {h['address']}")
+                        if h.get("phone"):
+                            st.write(f"📞 {h['phone']}")
+                        if h.get("maps_url"):
+                            st.markdown(f"[Open in Maps]({h['maps_url']})")
+                    with col3:
+                        if st.button("✏️", key=f"edit_hosp_{hid}"):
+                            st.session_state[f"editing_hosp_{hid}"] = True
+
+                    if st.session_state.get(f"editing_hosp_{hid}", False):
+                        with st.expander(f"Edit {h['name']}", expanded=True):
+                            with st.form(key=f"edit_hosp_form_{hid}"):
+                                country_list = sorted(
+                                    [c.name for c in pycountry.countries]
+                                )
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    e_city = st.text_input(
+                                        "City*", value=h["city"], key=f"e_h_city_{hid}"
+                                    )
+                                    e_name = st.text_input(
+                                        "Hospital Name*",
+                                        value=h["name"],
+                                        key=f"e_h_name_{hid}",
+                                    )
+                                    e_phone = st.text_input(
+                                        "Phone",
+                                        value=h.get("phone") or "",
+                                        key=f"e_h_phone_{hid}",
+                                    )
+                                with col2:
+                                    e_country = st.selectbox(
+                                        "Country",
+                                        options=[""] + country_list,
+                                        index=(
+                                            ([""] + country_list).index(
+                                                h.get("country") or ""
+                                            )
+                                            if (h.get("country") or "") in country_list
+                                            else 0
+                                        ),
+                                        key=f"e_h_country_{hid}",
+                                    )
+                                    e_address = st.text_input(
+                                        "Address",
+                                        value=h.get("address") or "",
+                                        key=f"e_h_addr_{hid}",
+                                    )
+                                    e_maps = st.text_input(
+                                        "Google Maps URL",
+                                        value=h.get("maps_url") or "",
+                                        key=f"e_h_maps_{hid}",
+                                    )
+                                e_notes = st.text_area(
+                                    "Note",
+                                    value=h.get("notes") or "",
+                                    key=f"e_h_notes_{hid}",
+                                    height=80,
+                                )
+                                e_active = st.checkbox(
+                                    "Active",
+                                    value=bool(h.get("is_active", 1)),
+                                    key=f"e_h_act_{hid}",
+                                )
+                                c1, c2, c3 = st.columns(3)
+                                with c1:
+                                    if st.form_submit_button("💾 Save"):
+                                        db.update_hospital(
+                                            hid,
+                                            city=e_city,
+                                            country=e_country,
+                                            name=e_name,
+                                            address=e_address,
+                                            phone=e_phone,
+                                            maps_url=e_maps,
+                                            notes=e_notes,
+                                            is_active=1 if e_active else 0,
+                                        )
+                                        st.session_state.pop(
+                                            f"editing_hosp_{hid}", None
+                                        )
+                                        st.success("Hospital updated!")
+                                        st.rerun()
+                                with c2:
+                                    if st.form_submit_button("🗑️ Delete"):
+                                        st.session_state[f"confirm_del_hosp_{hid}"] = (
+                                            True
+                                        )
+                                with c3:
+                                    if st.form_submit_button("❌ Cancel"):
+                                        st.session_state.pop(
+                                            f"editing_hosp_{hid}", None
+                                        )
+                                        st.rerun()
+
+                    if st.session_state.get(f"confirm_del_hosp_{hid}", False):
+
+                        def _del_hosp(hid=hid):
+                            db.delete_hospital(hid)
+                            st.session_state.pop(f"editing_hosp_{hid}", None)
+
+                        render_delete_confirmation(
+                            flag_key=f"confirm_del_hosp_{hid}",
+                            title=f"Permanently delete '{h['name']}'?",
+                            on_confirm=_del_hosp,
+                        )
+                    st.divider()
+
+        # ==================== Emergency Numbers ====================
+        with e_numbers:
+            st.markdown("**☎️ Emergency Numbers**")
+            st.caption(
+                "Emergency service numbers per country. "
+                "These come from the Destination Guides — edit them there."
+            )
+            numbers = []
+            for dg in db.get_destination_guides(active_only=False):
+                if (
+                    dg.get("emergency_police")
+                    or dg.get("emergency_ambulance")
+                    or dg.get("emergency_fire")
+                ):
+                    numbers.append(dg)
+            if not numbers:
+                st.info(
+                    "No emergency numbers yet. Add them via "
+                    "**Library → 🌍 Destination Guides**."
+                )
+            else:
+                for dg in numbers:
+                    col1, col2 = st.columns([2, 4])
+                    with col1:
+                        st.write(f"**{dg['country']}**")
+                        if not dg.get("is_active", 1):
+                            st.caption("⚠️ Inactive")
+                    with col2:
+                        bits = []
+                        if dg.get("emergency_police"):
+                            bits.append(f"🚓 Police: {dg['emergency_police']}")
+                        if dg.get("emergency_ambulance"):
+                            bits.append(f"🚑 Ambulance: {dg['emergency_ambulance']}")
+                        if dg.get("emergency_fire"):
+                            bits.append(f"🚒 Fire: {dg['emergency_fire']}")
+                        st.write("  ·  ".join(bits))
+                    st.divider()
+
+        # ==================== Embassies ====================
+        with e_emb:
+            st.markdown("**🏛️ Embassies / Consulates**")
+            with st.expander("➕ Add New Embassy", expanded=False):
+                with st.form("add_embassy_form"):
+                    country_list = sorted([c.name for c in pycountry.countries])
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        e_host = st.selectbox(
+                            "Host Country (where the " "executive is)*",
+                            options=country_list,
+                            key="emb_host",
+                        )
+                        e_city = st.text_input(
+                            "City", placeholder="e.g. Tokyo", key="emb_city"
+                        )
+                        e_hours = st.text_input(
+                            "Hours",
+                            placeholder="e.g. Mon-Fri 9:00-16:00",
+                            key="emb_hours",
+                        )
+                    with col2:
+                        e_rep = st.selectbox(
+                            "Representing Country (whose " "embassy it is)*",
+                            options=country_list,
+                            key="emb_rep",
+                        )
+                        e_name = st.text_input(
+                            "Embassy Name",
+                            placeholder="e.g. Embassy of Nigeria",
+                            key="emb_name",
+                        )
+                        e_phone = st.text_input("Phone", key="emb_phone")
+                    e_address = st.text_input("Address", key="emb_address")
+                    e_email = st.text_input("Email", key="emb_email")
+                    e_website = st.text_input("Website", key="emb_website")
+                    e_maps = st.text_input("Google Maps URL", key="emb_maps")
+                    e_notes = st.text_area("Notes", key="emb_notes", height=80)
+
+                    if st.form_submit_button("➕ Add Embassy"):
+                        if e_host and e_rep:
+                            db.add_embassy(
+                                host_country=e_host,
+                                representing_country=e_rep,
+                                city=e_city or None,
+                                name=e_name or None,
+                                address=e_address or None,
+                                phone=e_phone or None,
+                                email=e_email or None,
+                                website=e_website or None,
+                                maps_url=e_maps or None,
+                                hours=e_hours or None,
+                                notes=e_notes or None,
+                            )
+                            st.success(f"✅ Embassy added: {e_rep} in {e_host}.")
+                            st.rerun()
+                        else:
+                            st.warning(
+                                "Host Country and Representing " "Country are required."
+                            )
+
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                emb_search = st.text_input(
+                    "🔍 Search", key="emb_search", placeholder="Country, city, name..."
+                )
+            with col_f2:
+                emb_host_filter = st.selectbox(
+                    "Filter by Host Country",
+                    options=["All Countries"]
+                    + sorted([c.name for c in pycountry.countries]),
+                    index=0,
+                    key="emb_host_filter",
+                )
+                host_filter = (
+                    None if emb_host_filter == "All Countries" else emb_host_filter
+                )
+
+            all_embassies = db.get_embassies(
+                host_country=host_filter, active_only=False
+            )
+            if emb_search:
+                s = emb_search.lower()
+                all_embassies = [
+                    e
+                    for e in all_embassies
+                    if s in (e.get("name") or "").lower()
+                    or s in (e.get("city") or "").lower()
+                    or s in (e.get("host_country") or "").lower()
+                    or s in (e.get("representing_country") or "").lower()
+                    or s in (e.get("address") or "").lower()
+                ]
+
+            if not all_embassies:
+                st.info("No embassies match the filters.")
+            else:
+                st.write(f"**{len(all_embassies)} embassy / consulate entries**")
+                for emb in all_embassies:
+                    eid = emb["id"]
+                    col1, col2, col3 = st.columns([3, 3, 1.2])
+                    with col1:
+                        title = emb.get("name") or (
+                            f"{emb['representing_country']} Embassy"
+                        )
+                        st.write(f"**{title}**")
+                        if not emb.get("is_active", 1):
+                            st.caption("⚠️ Inactive")
+                        st.caption(
+                            f"{emb['representing_country']} → "
+                            f"{emb['host_country']}"
+                            + (f" · {emb['city']}" if emb.get("city") else "")
+                        )
+                    with col2:
+                        if emb.get("address"):
+                            st.caption(f"🏠 {emb['address']}")
+                        if emb.get("phone"):
+                            st.write(f"📞 {emb['phone']}")
+                        if emb.get("hours"):
+                            st.caption(f"🕐 {emb['hours']}")
+                        if emb.get("maps_url"):
+                            st.markdown(f"[Open in Maps]({emb['maps_url']})")
+                    with col3:
+                        if st.button("✏️", key=f"edit_emb_{eid}"):
+                            st.session_state[f"editing_emb_{eid}"] = True
+
+                    if st.session_state.get(f"editing_emb_{eid}", False):
+                        with st.expander("Edit Embassy", expanded=True):
+                            with st.form(key=f"edit_emb_form_{eid}"):
+                                country_list = sorted(
+                                    [c.name for c in pycountry.countries]
+                                )
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    ee_host = st.selectbox(
+                                        "Host Country*",
+                                        options=country_list,
+                                        index=(
+                                            country_list.index(emb["host_country"])
+                                            if emb["host_country"] in country_list
+                                            else 0
+                                        ),
+                                        key=f"ee_host_{eid}",
+                                    )
+                                    ee_city = st.text_input(
+                                        "City",
+                                        value=emb.get("city") or "",
+                                        key=f"ee_city_{eid}",
+                                    )
+                                    ee_hours = st.text_input(
+                                        "Hours",
+                                        value=emb.get("hours") or "",
+                                        key=f"ee_hours_{eid}",
+                                    )
+                                with col2:
+                                    ee_rep = st.selectbox(
+                                        "Representing Country*",
+                                        options=country_list,
+                                        index=(
+                                            country_list.index(
+                                                emb["representing_country"]
+                                            )
+                                            if emb["representing_country"]
+                                            in country_list
+                                            else 0
+                                        ),
+                                        key=f"ee_rep_{eid}",
+                                    )
+                                    ee_name = st.text_input(
+                                        "Embassy Name",
+                                        value=emb.get("name") or "",
+                                        key=f"ee_name_{eid}",
+                                    )
+                                    ee_phone = st.text_input(
+                                        "Phone",
+                                        value=emb.get("phone") or "",
+                                        key=f"ee_phone_{eid}",
+                                    )
+                                ee_address = st.text_input(
+                                    "Address",
+                                    value=emb.get("address") or "",
+                                    key=f"ee_addr_{eid}",
+                                )
+                                ee_email = st.text_input(
+                                    "Email",
+                                    value=emb.get("email") or "",
+                                    key=f"ee_email_{eid}",
+                                )
+                                ee_website = st.text_input(
+                                    "Website",
+                                    value=emb.get("website") or "",
+                                    key=f"ee_website_{eid}",
+                                )
+                                ee_maps = st.text_input(
+                                    "Google Maps URL",
+                                    value=emb.get("maps_url") or "",
+                                    key=f"ee_maps_{eid}",
+                                )
+                                ee_notes = st.text_area(
+                                    "Notes",
+                                    value=emb.get("notes") or "",
+                                    key=f"ee_notes_{eid}",
+                                    height=80,
+                                )
+                                ee_active = st.checkbox(
+                                    "Active",
+                                    value=bool(emb.get("is_active", 1)),
+                                    key=f"ee_act_{eid}",
+                                )
+                                c1, c2, c3 = st.columns(3)
+                                with c1:
+                                    if st.form_submit_button("💾 Save"):
+                                        db.update_embassy(
+                                            eid,
+                                            host_country=ee_host,
+                                            representing_country=ee_rep,
+                                            city=ee_city or None,
+                                            name=ee_name or None,
+                                            address=ee_address or None,
+                                            phone=ee_phone or None,
+                                            email=ee_email or None,
+                                            website=ee_website or None,
+                                            maps_url=ee_maps or None,
+                                            hours=ee_hours or None,
+                                            notes=ee_notes or None,
+                                            is_active=1 if ee_active else 0,
+                                        )
+                                        st.session_state.pop(f"editing_emb_{eid}", None)
+                                        st.success("Embassy updated!")
+                                        st.rerun()
+                                with c2:
+                                    if st.form_submit_button("🗑️ Delete"):
+                                        st.session_state[f"confirm_del_emb_{eid}"] = (
+                                            True
+                                        )
+                                with c3:
+                                    if st.form_submit_button("❌ Cancel"):
+                                        st.session_state.pop(f"editing_emb_{eid}", None)
+                                        st.rerun()
+
+                    if st.session_state.get(f"confirm_del_emb_{eid}", False):
+
+                        def _del_emb(eid=eid):
+                            db.delete_embassy(eid)
+                            st.session_state.pop(f"editing_emb_{eid}", None)
+
+                        render_delete_confirmation(
+                            flag_key=f"confirm_del_emb_{eid}",
+                            title=f"Permanently delete this embassy record?",
+                            on_confirm=_del_emb,
+                        )
+                    st.divider()
