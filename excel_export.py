@@ -184,7 +184,7 @@ def export_expense_to_excel(items, trip_data, currency_symbol, base_currency="US
         ("Total Budget", f"{trip_budget:.2f} {base_currency}"),
         ("Total Spent", f"{total_spent:.2f} {base_currency}"),
         ("Confirmed (Booked)", f"{confirmed_spent:.2f} {base_currency}"),
-        ("Estimated (Quoted)", f"{estimated_spent:.2f} {base_currency}"),
+        ("Pending (Quoted)", f"{estimated_spent:.2f} {base_currency}"),
         ("Remaining", f"{trip_budget - total_spent:.2f} {base_currency}"),
     ]
     ws.append([])
@@ -265,7 +265,7 @@ def export_spending_to_excel(summary_data, base_currency="USD"):
         "Budget (Base Currency)",
         "Total Spent (Base Currency)",
         "Confirmed (Base Currency)",
-        "Estimated (Base Currency)",
+        "Pending (Base Currency)",
         "Status",
         "Currency",
     ]

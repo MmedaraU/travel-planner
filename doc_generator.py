@@ -237,7 +237,7 @@ def generate_expense_report_doc(
             f"{display_symbol}{confirmed_spent:.2f} {base_currency}",
         ),
         (
-            "Estimated (Quoted)",
+            "Pending (Quoted)",
             f"{display_symbol}{estimated_spent:.2f} {base_currency}",
         ),
         (
@@ -409,7 +409,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
     trip_venues = db.get_venues_for_trip(trip_id)
     expense_summary = db.get_expense_summary(trip_id)
 
-        # ---- Emergency info ----
+    # ---- Emergency info ----
     emergency_hospitals = db.get_hospitals_for_trip(trip_id)
 
     # Country-level emergency numbers from Destination Guides
@@ -425,15 +425,23 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
                     "fire": dg.get("emergency_fire"),
                 }
 
-    # ---- Weather (from cache only, no live API call) ----
+    # ---- Weather for the trip's full date range ----
     weather_data = None
     if stops:
         try:
             import weather as weather_module
-            weather_data = weather_module.get_weather(stops[0]["city"])
+
+            first_start = stops[0].get("start_date")
+            last_end = stops[-1].get("end_date")
+            if first_start and last_end:
+                weather_data = weather_module.get_weather_for_range(
+                    stops[0]["city"], first_start, last_end
+                )
+            if not weather_data:
+                # Fallback: current + 5-day forecast
+                weather_data = weather_module.get_weather(stops[0]["city"])
         except Exception:
             weather_data = None
-
 
         # ---- Packing lists (per member) ----
     packing_lists = []
@@ -767,7 +775,7 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
         ("Budget", f"{trip.get('budget', 0):.2f} {trip.get('base_currency', 'USD')}"),
         ("Total Spent", f"{total_spent:.2f} {trip.get('base_currency', 'USD')}"),
         ("Confirmed", f"{confirmed_spent:.2f} {trip.get('base_currency', 'USD')}"),
-        ("Estimated", f"{estimated_spent:.2f} {trip.get('base_currency', 'USD')}"),
+        ("Pending", f"{estimated_spent:.2f} {trip.get('base_currency', 'USD')}"),
     ]
     for label, value in overview_rows:
         row = overview_table.add_row().cells
@@ -1053,25 +1061,45 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
                     p.add_run(f"\nNotes: {h['notes']}")
 
     # ---- Weather ----
+    # ---- Weather for the trip's full date range ----
     weather_data = None
     if stops:
         try:
             import weather as weather_module
 
-            weather_data = weather_module.get_weather(stops[0]["city"])
+            first_start = stops[0].get("start_date")
+            last_end = stops[-1].get("end_date")
+            if first_start and last_end:
+                weather_data = weather_module.get_weather_for_range(
+                    stops[0]["city"], first_start, last_end
+                )
+            if not weather_data:
+                weather_data = weather_module.get_weather(stops[0]["city"])
         except Exception:
             weather_data = None
 
     if weather_data:
         doc.add_heading("Weather", level=1)
-        doc.add_paragraph(
-            f"Location: {weather_data['location']}  ·  Fetched: {weather_data['fetched_at'][:16]}"
+
+        subtitle = (
+            f"Location: {weather_data['location']}  ·  "
+            f"Fetched: {weather_data['fetched_at'][:16]}"
         )
-        cur = weather_data["current"]
-        doc.add_paragraph(
-            f"Now: {cur['icon']} {cur['temp']}°C — {cur['desc']}  ·  "
-            f"Humidity: {cur['humidity']}%  ·  Wind: {cur['wind']} km/h"
-        )
+        if weather_data.get("start_date") and weather_data.get("end_date"):
+            subtitle += (
+                f"  ·  Range: {weather_data['start_date']} → "
+                f"{weather_data['end_date']}"
+            )
+        doc.add_paragraph(subtitle)
+
+        # Only show the "Now" row when the range overlaps today
+        cur = weather_data.get("current")
+        if cur:
+            doc.add_paragraph(
+                f"Now: {cur['icon']} {cur['temp']}°C — {cur['desc']}  ·  "
+                f"Humidity: {cur['humidity']}%  ·  Wind: {cur['wind']} km/h"
+            )
+
         table = doc.add_table(rows=1, cols=5)
         table.style = "Table Grid"
         hdr = table.rows[0].cells

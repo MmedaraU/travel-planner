@@ -2000,6 +2000,34 @@ def delete_trip_stop(stop_id):
         conn.close()
 
 
+def reorder_trip_stops(trip_id, new_order_ids):
+    """
+    Persist a new ordering for a trip's stops. `new_order_ids` is a list
+    of stop IDs in the desired top-to-bottom order. Uses a two-pass
+    negate-then-restore strategy so a UNIQUE(trip_id, stop_order) index
+    never collides mid-update.
+    """
+    if not new_order_ids:
+        return False
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        c = conn.cursor()
+        for new_pos, stop_id in enumerate(new_order_ids, start=1):
+            c.execute(
+                "UPDATE trip_stops SET stop_order = ? WHERE id = ? AND trip_id = ?",
+                (-new_pos, stop_id, trip_id),
+            )
+        for new_pos, stop_id in enumerate(new_order_ids, start=1):
+            c.execute(
+                "UPDATE trip_stops SET stop_order = ? WHERE id = ? AND trip_id = ?",
+                (new_pos, stop_id, trip_id),
+            )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 def delete_all_trip_stops(trip_id):
     conn = sqlite3.connect(DB_PATH, timeout=30)
     try:

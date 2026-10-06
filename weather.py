@@ -196,3 +196,158 @@ def get_weather(city_name):
         return result
     except Exception:
         return None
+
+
+def get_weather_for_range(city_name, start_date, end_date):
+    """
+    Fetch weather for a specific date range. Handles past, present, and
+    future dates.
+
+    Uses:
+      - archive-api.open-meteo.com/v1/archive for ranges entirely in the
+        deep past (older than ~92 days) — data goes back to 1940.
+      - api.open-meteo.com/v1/forecast with past_days + forecast_days for
+        recent past, present, and near-future ranges (past_days up to 92,
+        forecast_days up to 16).
+
+    Returns a dict with 'daily' list. Includes a 'current' block only when
+    the range overlaps today. Returns None if the city can't be geocoded or
+    no data is available.
+    """
+    geo = geocode_city(city_name)
+    if not geo:
+        return None
+
+    # Normalize date arguments to ISO strings
+    if hasattr(start_date, "isoformat") and not isinstance(start_date, str):
+        start_date = start_date.isoformat()
+    if hasattr(end_date, "isoformat") and not isinstance(end_date, str):
+        end_date = end_date.isoformat()
+    start_date = str(start_date)[:10]
+    end_date = str(end_date)[:10]
+
+    try:
+        start = datetime.fromisoformat(start_date).date()
+        end = datetime.fromisoformat(end_date).date()
+    except Exception:
+        return None
+
+    if end < start:
+        start, end = end, start
+        start_date, end_date = end_date, start_date
+
+    today = datetime.now().date()
+
+    # Cache lookup
+    cache = _load_cache()
+    key = f"weather_range_{city_name.lower()}_{start_date}_{end_date}"
+    cached = cache.get(key)
+    if cached:
+        age = time.time() - cached.get("_ts", 0)
+        # Historical ranges cache for 30 days; anything touching today or
+        # the future caches for the normal 1 hour.
+        is_historical = end < today - timedelta(days=5)
+        ttl = (60 * 60 * 24 * 30) if is_historical else CACHE_DURATION
+        if age < ttl:
+            return cached.get("data")
+
+    days_back = (today - end).days  # positive if range is in the past
+
+    try:
+        if days_back > 92:
+            # Entirely in the deep past → archive API
+            url = "https://archive-api.open-meteo.com/v1/archive"
+            params = {
+                "latitude": geo["latitude"],
+                "longitude": geo["longitude"],
+                "start_date": start_date,
+                "end_date": end_date,
+                "daily": (
+                    "temperature_2m_max,temperature_2m_min,"
+                    "precipitation_sum,uv_index_max,weather_code"
+                ),
+                "timezone": "auto",
+            }
+        else:
+            # Recent past, present, or future → forecast API
+            url = "https://api.open-meteo.com/v1/forecast"
+            past_days = max(0, min(92, (today - start).days))
+            forecast_days = max(1, min(16, (end - today).days + 1))
+            params = {
+                "latitude": geo["latitude"],
+                "longitude": geo["longitude"],
+                "daily": (
+                    "temperature_2m_max,temperature_2m_min,"
+                    "precipitation_sum,uv_index_max,weather_code"
+                ),
+                "timezone": "auto",
+                "past_days": past_days,
+                "forecast_days": forecast_days,
+            }
+            # Only fetch current conditions if the range overlaps today
+            if start <= today <= end:
+                params["current"] = (
+                    "temperature_2m,relative_humidity_2m," "weather_code,wind_speed_10m"
+                )
+
+        r = requests.get(url, params=params, timeout=12)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+    except Exception:
+        return None
+
+    # Parse the daily block
+    daily = data.get("daily") or {}
+    dates = daily.get("time") or []
+
+    def _at(lst, i):
+        lst = lst or []
+        return lst[i] if i < len(lst) else None
+
+    daily_forecast = []
+    for i, date_str in enumerate(dates):
+        if date_str < start_date or date_str > end_date:
+            continue
+        d_code = _at(daily.get("weather_code"), i) or 0
+        d_desc, d_icon = WMO_CODES.get(d_code, ("Unknown", "❓"))
+        daily_forecast.append(
+            {
+                "date": date_str,
+                "max": _at(daily.get("temperature_2m_max"), i),
+                "min": _at(daily.get("temperature_2m_min"), i),
+                "precip": _at(daily.get("precipitation_sum"), i),
+                "uv": _at(daily.get("uv_index_max"), i),
+                "desc": d_desc,
+                "icon": d_icon,
+            }
+        )
+
+    if not daily_forecast:
+        return None
+
+    result = {
+        "location": f"{geo['name']}, {geo.get('country') or ''}".strip(", "),
+        "timezone": geo.get("timezone"),
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily": daily_forecast,
+        "fetched_at": datetime.now().isoformat(),
+    }
+
+    # Attach current block if the API returned one
+    cur = data.get("current") or {}
+    if cur:
+        cur_code = cur.get("weather_code", 0)
+        cur_desc, cur_icon = WMO_CODES.get(cur_code, ("Unknown", "❓"))
+        result["current"] = {
+            "temp": cur.get("temperature_2m"),
+            "humidity": cur.get("relative_humidity_2m"),
+            "wind": cur.get("wind_speed_10m"),
+            "desc": cur_desc,
+            "icon": cur_icon,
+        }
+
+    cache[key] = {"_ts": time.time(), "data": result}
+    _save_cache(cache)
+    return result
