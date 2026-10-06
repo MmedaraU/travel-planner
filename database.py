@@ -919,7 +919,22 @@ def get_contacts_for_delegation(company_id, active_only=True):
     finally:
         conn.close()
 
+def get_delegation_members(company_id, active_only=True):
+    """
+    Alias for get_contacts_for_delegation().
 
+    Kept because doc_generator.py calls this name in four places:
+      - generate_travel_pack_html
+      - generate_travel_pack_docx
+      - generate_company_profile_html
+      - generate_company_profile_docx
+
+    Same semantics as the function it delegates to — contacts of the
+    given company plus unaffiliated (freelance) contacts.
+    """
+    return get_contacts_for_delegation(company_id, active_only=active_only)
+
+    
 def get_contacts_for_local_support(company_id, active_only=True):
     """
     Contacts available as local support for a trip:

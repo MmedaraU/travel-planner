@@ -59,6 +59,98 @@ def _sum_items_in_base(items, trip_base_currency):
             estimated += converted
     return total, confirmed, estimated
 
+def _build_weather_by_stop(stops):
+    """
+    Fetch weather per stop, one entry per stop that has a city and dates.
+
+    Each entry carries:
+      city, country, region, start_date, end_date,
+      location, fetched_at, is_current, is_past, available,
+      current (only populated for the stop containing today),
+      daily  (filtered to the stop's own date window)
+
+    Falls back to the base get_weather() snapshot when the range function
+    is missing or returns nothing. Stops outside the forecast horizon or
+    in the past come back with available=False and empty daily.
+    """
+    result = []
+    if not stops:
+        return result
+
+    try:
+        import weather as weather_module
+    except ImportError:
+        return result
+
+    today = datetime.now().date()
+
+    for stop in stops:
+        city = (stop.get("city") or "").strip()
+        start_raw = stop.get("start_date")
+        end_raw = stop.get("end_date")
+        if not (city and start_raw and end_raw):
+            continue
+
+        start_iso = str(start_raw)[:10]
+        end_iso = str(end_raw)[:10]
+
+        try:
+            start_d = datetime.fromisoformat(start_iso).date()
+            end_d = datetime.fromisoformat(end_iso).date()
+        except Exception:
+            continue
+
+        is_current = start_d <= today <= end_d
+        is_past = end_d < today
+
+        # Try range-aware fetch first
+        data = None
+        if hasattr(weather_module, "get_weather_for_range"):
+            try:
+                data = weather_module.get_weather_for_range(
+                    city, start_iso, end_iso
+                )
+            except Exception:
+                data = None
+
+        # Fall back to base snapshot
+        if not data and hasattr(weather_module, "get_weather"):
+            try:
+                data = weather_module.get_weather(city)
+            except Exception:
+                data = None
+
+        # Filter the daily array to the stop's own window. Some weather
+        # sources return a week regardless of what was asked for.
+        raw_daily = (data or {}).get("daily") or []
+        in_window = [
+            d for d in raw_daily
+            if start_iso <= (d.get("date") or "") <= end_iso
+        ]
+
+        # "Now" is only meaningful for the stop we're currently at.
+        current = (data or {}).get("current") if is_current else None
+
+        available = bool(in_window or current)
+        if is_past:
+            available = False
+
+        result.append({
+            "city": city,
+            "country": stop.get("country") or "",
+            "region": stop.get("region") or "",
+            "start_date": start_iso,
+            "end_date": end_iso,
+            "location": (data or {}).get("location") or city,
+            "fetched_at": (data or {}).get("fetched_at") or "",
+            "is_current": is_current,
+            "is_past": is_past,
+            "available": available,
+            "current": current,
+            "daily": in_window,
+        })
+
+    return result
 
 def generate_executive_profile_doc(profile_data, exec_id, currency_symbol="$"):
     """
@@ -408,6 +500,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
 
     trip_venues = db.get_venues_for_trip(trip_id)
     expense_summary = db.get_expense_summary(trip_id)
+    stops = db.get_trip_stops(trip_id)
 
     # ---- Emergency info ----
     emergency_hospitals = db.get_hospitals_for_trip(trip_id)
@@ -425,64 +518,52 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
                     "fire": dg.get("emergency_fire"),
                 }
 
-    # ---- Weather for the trip's full date range ----
-    weather_data = None
-    if stops:
-        try:
-            import weather as weather_module
+    # ---- Weather per stop ----
+    weather_by_stop = _build_weather_by_stop(stops)
 
-            first_start = stops[0].get("start_date")
-            last_end = stops[-1].get("end_date")
-            if first_start and last_end:
-                weather_data = weather_module.get_weather_for_range(
-                    stops[0]["city"], first_start, last_end
-                )
-            if not weather_data:
-                # Fallback: current + 5-day forecast
-                weather_data = weather_module.get_weather(stops[0]["city"])
-        except Exception:
-            weather_data = None
-
-        # ---- Packing lists (per member) ----
+    # ---- Packing lists (per member) ----
     packing_lists = []
     for member in db.get_trip_delegation_members(trip_id):
         plist = db.get_packing_list(trip_id, member["id"])
         if not plist:
             continue
-        items = db.get_packing_items(plist["id"])
-        if not items:
+        packing_items_local = db.get_packing_items(plist["id"])
+        if not packing_items_local:
             continue
         packing_lists.append({
             "member_name": member["name"],
             "role": member.get("role", ""),
-            "total_count": len(items),
-            "packed_count": sum(1 for it in items if it["packed"]),
-            "items": items,
+            "total_count": len(packing_items_local),
+            "packed_count": sum(
+                1 for it in packing_items_local if it["packed"]
+            ),
+            "items": packing_items_local,
         })
 
     # ---- Trip checklists ----
     trip_checklists = []
     for cl in db.get_trip_checklists(trip_id):
-        items = db.get_checklist_items(cl["id"])
-        if not items:
+        cl_items_local = db.get_checklist_items(cl["id"])
+        if not cl_items_local:
             continue
         trip_checklists.append({
             "name": cl["name"],
             "description": cl.get("description", ""),
-            "total_count": len(items),
-            "done_count": sum(1 for it in items if it["is_done"]),
-            "items": items,
+            "total_count": len(cl_items_local),
+            "done_count": sum(1 for it in cl_items_local if it["is_done"]),
+            "items": cl_items_local,
         })
+
     total_allowance = sum(s["allowance"] for s in expense_summary)
     total_spent_expenses = sum(s["spent"] for s in expense_summary)
-    stops = db.get_trip_stops(trip_id)
     items = db.get_items_for_trip(trip_id)
     contacts = db.get_trip_contacts(trip_id)
-    trip_venues = db.get_venues_for_trip(trip_id)
     memberships = db.get_memberships(trip["exec_id"])
 
     # ---- Delegation: only members assigned to items on this trip ----
-    company_id_for_delegation = executive.get("company_id") if executive else None
+    company_id_for_delegation = (
+        executive.get("company_id") if executive else None
+    )
     delegation = []
     if company_id_for_delegation:
         assigned_ids = set()
@@ -495,7 +576,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
             )
             delegation = [m for m in all_members if m["id"] in assigned_ids]
 
-        # ---- Budget totals (converted to trip base currency – Stage 6) ----
+    # ---- Budget totals (converted to trip base currency – Stage 6) ----
     base_cur = trip.get("base_currency", "USD")
     total_spent, confirmed_spent, estimated_spent = _sum_items_in_base(
         items, base_cur
@@ -527,12 +608,15 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         # Delegation members assigned to this item
         delegation_members = db.get_item_delegation_members(item["id"])
         delegation_names = (
-            [m["name"] for m in delegation_members] if delegation_members else []
+            [m["name"] for m in delegation_members]
+            if delegation_members else []
         )
 
         # Contacts assigned to this item
         item_contacts = db.get_item_contacts(item["id"])
-        contact_names = [c["name"] for c in item_contacts] if item_contacts else []
+        contact_names = (
+            [c["name"] for c in item_contacts] if item_contacts else []
+        )
 
         # ---- Venue lookup for this item ----
         venue_name_for_item = None
@@ -553,10 +637,9 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
             "is_confirmed": item.get("is_confirmed", 0),
             "formatted_time": formatted_time,
             "participants": delegation_names,  # used for Agenda attendees
-            "contacts": contact_names,  # for future use
+            "contacts": contact_names,          # for future use
             "venue_id": item.get("venue_id"),
             "venue_name": venue_name_for_item,
-            "venue_id": item.get("venue_id"),
         }
         formatted_items.append(item_dict)
 
@@ -570,7 +653,9 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
                 mime = (
                     "image/png"
                     if ext == ".png"
-                    else "image/jpeg" if ext in [".jpg", ".jpeg"] else "application/pdf"
+                    else "image/jpeg"
+                    if ext in [".jpg", ".jpeg"]
+                    else "application/pdf"
                 )
                 data_uri = f"data:{mime};base64,{b64}"
                 receipts.append(
@@ -599,7 +684,7 @@ def generate_travel_pack_html(trip_id, exec_timezone, display_mode="Home"):
         "trip_checklists": trip_checklists,
         "emergency_hospitals": emergency_hospitals,
         "trip_emergency_numbers": trip_emergency_numbers,
-        "weather": weather_data,
+        "weather_by_stop": weather_by_stop,
     }
 
     env = Environment(loader=FileSystemLoader("templates"))
@@ -1060,60 +1145,62 @@ def generate_travel_pack_docx(trip_id, exec_timezone, display_mode="Home"):
                 if h.get("notes"):
                     p.add_run(f"\nNotes: {h['notes']}")
 
-    # ---- Weather ----
-    # ---- Weather for the trip's full date range ----
-    weather_data = None
-    if stops:
-        try:
-            import weather as weather_module
-
-            first_start = stops[0].get("start_date")
-            last_end = stops[-1].get("end_date")
-            if first_start and last_end:
-                weather_data = weather_module.get_weather_for_range(
-                    stops[0]["city"], first_start, last_end
-                )
-            if not weather_data:
-                weather_data = weather_module.get_weather(stops[0]["city"])
-        except Exception:
-            weather_data = None
-
-    if weather_data:
+    # ---- Weather per stop ----
+    weather_by_stop = _build_weather_by_stop(stops)
+    if weather_by_stop:
         doc.add_heading("Weather", level=1)
 
-        subtitle = (
-            f"Location: {weather_data['location']}  ·  "
-            f"Fetched: {weather_data['fetched_at'][:16]}"
-        )
-        if weather_data.get("start_date") and weather_data.get("end_date"):
-            subtitle += (
-                f"  ·  Range: {weather_data['start_date']} → "
-                f"{weather_data['end_date']}"
-            )
-        doc.add_paragraph(subtitle)
+        for entry in weather_by_stop:
+            # Sub-heading: "London, United Kingdom  (2026-10-12 → 2026-10-14)"
+            header = entry["city"]
+            if entry["country"]:
+                header += f", {entry['country']}"
+            header += f"  ({entry['start_date']} → {entry['end_date']})"
+            doc.add_heading(header, level=2)
 
-        # Only show the "Now" row when the range overlaps today
-        cur = weather_data.get("current")
-        if cur:
-            doc.add_paragraph(
-                f"Now: {cur['icon']} {cur['temp']}°C — {cur['desc']}  ·  "
-                f"Humidity: {cur['humidity']}%  ·  Wind: {cur['wind']} km/h"
-            )
+            if entry["is_past"]:
+                doc.add_paragraph("This stop has already passed.")
+                continue
 
-        table = doc.add_table(rows=1, cols=5)
-        table.style = "Table Grid"
-        hdr = table.rows[0].cells
-        headers = ["Date", "Condition", "High / Low", "Precipitation", "UV Index"]
-        for i, h in enumerate(headers):
-            hdr[i].text = h
-            hdr[i].paragraphs[0].runs[0].bold = True
-        for d in weather_data["daily"]:
-            row = table.add_row().cells
-            row[0].text = d["date"]
-            row[1].text = f"{d['icon']} {d['desc']}"
-            row[2].text = f"{d['max']}° / {d['min']}°"
-            row[3].text = f"{d['precip']} mm"
-            row[4].text = f"{d['uv']}"
+            if not entry["available"]:
+                doc.add_paragraph(
+                    "Forecast not yet available for these dates — "
+                    "check back closer to departure."
+                )
+                continue
+
+            cur = entry.get("current")
+            if cur:
+                doc.add_paragraph(
+                    f"Now: {cur['icon']} {cur['temp']}°C — {cur['desc']}  ·  "
+                    f"Humidity: {cur['humidity']}%  ·  "
+                    f"Wind: {cur['wind']} km/h"
+                )
+
+            daily = entry.get("daily") or []
+            if daily:
+                table = doc.add_table(rows=1, cols=5)
+                table.style = "Table Grid"
+                hdr = table.rows[0].cells
+                headers = [
+                    "Date",
+                    "Condition",
+                    "High / Low",
+                    "Precipitation",
+                    "UV Index",
+                ]
+                for i, h in enumerate(headers):
+                    hdr[i].text = h
+                    hdr[i].paragraphs[0].runs[0].bold = True
+                for d in daily:
+                    row = table.add_row().cells
+                    row[0].text = d["date"]
+                    row[1].text = f"{d['icon']} {d['desc']}"
+                    row[2].text = f"{d['max']}° / {d['min']}°"
+                    row[3].text = f"{d['precip']} mm"
+                    row[4].text = f"{d['uv']}"
+            else:
+                doc.add_paragraph("No daily forecast available.")
 
     # ---- Receipts ----
     receipt_items = [

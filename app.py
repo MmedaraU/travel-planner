@@ -192,6 +192,25 @@ def fmt_datetime(dt, fmt="%d-%m-%Y %H:%M"):
     except Exception:
         return str(dt)
 
+def _swap_item_times(a, b):
+    """
+    Return (a', b') — copies of two item dicts with their datetime_start,
+    datetime_end, and cost_date swapped. Everything else is preserved.
+    Used by the create-tab ↑/↓ reorder buttons, where items live in
+    session state and have no DB IDs yet.
+    """
+    a2 = dict(a)
+    b2 = dict(b)
+    a2["datetime_start"], b2["datetime_start"] = (
+        b.get("datetime_start"), a.get("datetime_start")
+    )
+    a2["datetime_end"], b2["datetime_end"] = (
+        b.get("datetime_end"), a.get("datetime_end")
+    )
+    a2["cost_date"], b2["cost_date"] = (
+        b.get("cost_date"), a.get("cost_date")
+    )
+    return a2, b2
 
 # --- Phase 2 Stage C: standard delete-confirmation UI ---
 
@@ -386,13 +405,40 @@ def _should_show_backup_reminder():
         return True
     return days >= 25
 
-def _render_bulk_paste_itinerary(container_key, default_timezone,
-                                 on_import, is_locked=False):
+# Module-level registry tracking which container_keys have been mounted
+# in the current Streamlit script run. Streamlit reruns the whole script
+# top-to-bottom on every interaction, so this dict is rebuilt each run —
+# it only exists to catch same-run collisions, not cross-run ones.
+_BULK_PASTE_MOUNTS_THIS_RUN = set()
+
+
+def _render_bulk_paste_itinerary(
+    container_key, default_timezone, on_import, is_locked=False
+):
     """
     Bulk paste UI for itinerary items. `on_import(items)` is called with
-    the parsed list when the user confirms. `container_key` must be unique
-    per mount point to avoid widget-key collisions.
+    the parsed list when the user confirms.
+
+    `container_key` MUST be unique per mount point. All internal widget
+    keys are prefixed with it, so two mounts sharing a key would collide
+    inside Streamlit's widget cache and raise a confusing duplicate-key
+    error at an arbitrary downstream line. Mounts today:
+
+      - Tab 1 → "create_bulk_paste"
+      - Trip modal → f"modal_bulk_paste_{trip_id_modal}"
+
+    The registry below enforces this in development; the mount fails
+    loudly here rather than silently misbehaving later.
     """
+    if container_key in _BULK_PASTE_MOUNTS_THIS_RUN:
+        raise RuntimeError(
+            f"Bulk paste mounted twice with the same container_key "
+            f"({container_key!r}) in one script run. Each mount point "
+            f"needs a unique key — see _render_bulk_paste_itinerary "
+            f"docstring."
+        )
+    _BULK_PASTE_MOUNTS_THIS_RUN.add(container_key)
+
     with st.expander("📋 Paste from spreadsheet", expanded=False):
         st.caption(
             "Paste rows copied from Excel, Google Sheets, or a CSV file. "
@@ -1758,6 +1804,7 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                     for iid in list(st.session_state[sel_key]):
                         db.delete_itinerary_item(iid)
                     st.session_state[sel_key] = set()
+                    st.session_state.pop(f"select_all_items_{trip_id_modal}", None)   # ← new
                     st.session_state[f"modal_items_{trip_id_modal}"] = db.get_items_for_trip(trip_id_modal)
                     st.rerun()
             else:
@@ -1777,10 +1824,14 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                 is_checked = item["id"] in st.session_state[sel_key]
                 new_state = st.checkbox("", value=is_checked,
                                         key=f"modal_sel_item_{trip_id_modal}_{item['id']}")
-                if new_state and not is_checked:
-                    st.session_state[sel_key].add(item["id"])
-                elif not new_state and is_checked:
-                    st.session_state[sel_key].discard(item["id"])
+                if new_state != is_checked:
+                    if new_state:
+                        st.session_state[sel_key].add(item["id"])
+                    else:
+                        st.session_state[sel_key].discard(item["id"])
+                    # Reset the Select-All checkbox so its stored True
+                    # doesn't re-select what the user just unticked.
+                    st.session_state.pop(f"select_all_items_{trip_id_modal}", None)
         with col_i1:
             st.write(f"{item['description']} ({item['item_type']})")
             st.caption(f"🕐 {dt_display}")
@@ -2789,15 +2840,17 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                 continue
 
             list_id = plist["id"]
-            items = db.get_packing_items(list_id)
-            total = len(items)
-            packed = sum(1 for it in items if it["packed"])
+            packing_items_local = db.get_packing_items(list_id)
+            total = len(packing_items_local)
+            packed = sum(1 for it in packing_items_local if it["packed"])
 
-            with st.expander(f"🎒 {member['name']} ({packed} of {total} packed)", expanded=False):
+            with st.expander(
+                f"🎒 {member['name']} ({packed} of {total} packed)", expanded=False
+            ):
                 progress_val = packed / total if total else 0
                 st.progress(progress_val)
                 categories = {}
-                for it in items:
+                for it in packing_items_local:
                     cat = it.get("category") or "Other"
                     categories.setdefault(cat, []).append(it)
                 for cat_name, cat_items in categories.items():
@@ -3602,6 +3655,19 @@ with tab1:
             if "create_selected_item_indices" not in st.session_state:
                 st.session_state["create_selected_item_indices"] = set()
 
+            # --- Self-healing: drop any stale indices ---
+            # The selection set holds positions, not IDs. If the item list
+            # ever shrinks without the mutation site resetting the set, any
+            # out-of-range index would silently point at the wrong row on
+            # the next render. Filtering here keeps the invariant without
+            # relying on every future edit site remembering to reset.
+            _n_items = len(st.session_state["create_trip_items"])
+            st.session_state["create_selected_item_indices"] = {
+                _i
+                for _i in st.session_state["create_selected_item_indices"]
+                if 0 <= _i < _n_items
+            }
+
             # --- Batch toolbar ---
             col_selall, col_delsel, _spacer = st.columns([1.2, 1.6, 4])
             with col_selall:
@@ -3635,6 +3701,7 @@ with tab1:
                         ):
                             st.session_state["create_trip_items"].pop(i)
                         st.session_state["create_selected_item_indices"] = set()
+                        st.session_state.pop("create_select_all_items", None)   # ← new
                         st.success(f"Deleted {n_sel} item(s).")
                         st.rerun()
                 else:
@@ -3644,9 +3711,11 @@ with tab1:
 
             for idx, item in enumerate(st.session_state["create_trip_items"]):
                 dt_display = format_item_datetime(item, exec_tz, display_mode)
-                col_cb, col_i1, col_i2, col_i3, col_i4, col_i5, col_i6 = st.columns(
-                    [0.4, 2, 2, 2, 1, 1, 1]
-                )
+                (
+                    col_cb, col_i1, col_i2,
+                    col_up, col_dn,
+                    col_i3, col_i4, col_i5,
+                ) = st.columns([0.4, 2, 2, 0.4, 0.4, 1, 1, 1])
                 with col_cb:
                     is_checked = idx in st.session_state["create_selected_item_indices"]
                     new_state = st.checkbox(
@@ -3654,10 +3723,12 @@ with tab1:
                         value=is_checked,
                         key=f"create_sel_item_{idx}",
                     )
-                    if new_state and not is_checked:
-                        st.session_state["create_selected_item_indices"].add(idx)
-                    elif not new_state and is_checked:
-                        st.session_state["create_selected_item_indices"].discard(idx)
+                    if new_state != is_checked:
+                        if new_state:
+                            st.session_state["create_selected_item_indices"].add(idx)
+                        else:
+                            st.session_state["create_selected_item_indices"].discard(idx)
+                        st.session_state.pop("create_select_all_items", None)
                 with col_i1:
                     st.write(f"{item['description']} ({item['item_type']})")
                     st.caption(f"🕐 {dt_display}")
@@ -3673,14 +3744,42 @@ with tab1:
                         contact_names = get_contact_names(item["contact_ids"])
                         if contact_names:
                             st.caption(f"📞 {contact_names}")
+                with col_up:
+                    if idx > 0:
+                        if st.button(
+                            "↑",
+                            key=f"create_item_up_{idx}",
+                            help="Swap times with the item above",
+                        ):
+                            lst = st.session_state["create_trip_items"]
+                            lst[idx - 1], lst[idx] = _swap_item_times(
+                                lst[idx - 1], lst[idx]
+                            )
+                            st.rerun()
+                with col_dn:
+                    lst_len = len(st.session_state["create_trip_items"])
+                    if idx < lst_len - 1:
+                        if st.button(
+                            "↓",
+                            key=f"create_item_dn_{idx}",
+                            help="Swap times with the item below",
+                        ):
+                            lst = st.session_state["create_trip_items"]
+                            lst[idx], lst[idx + 1] = _swap_item_times(
+                                lst[idx], lst[idx + 1]
+                            )
+                            st.rerun()
                 with col_i3:
                     if st.button(
                         "✏️", key=f"create_edit_item_{idx}", help="Edit this item"
                     ):
                         st.session_state[f"create_editing_item_{idx}"] = True
                 with col_i4:
-                    if st.button("📄", key=f"create_dup_item_{idx}",
-                                 help="Duplicate this item (+1 day)"):
+                    if st.button(
+                        "📄",
+                        key=f"create_dup_item_{idx}",
+                        help="Duplicate this item (+1 day)",
+                    ):
                         original = st.session_state["create_trip_items"][idx]
                         try:
                             orig_start = datetime.fromisoformat(
@@ -3688,7 +3787,8 @@ with tab1:
                             )
                             orig_end = (
                                 datetime.fromisoformat(original["datetime_end"])
-                                if original.get("datetime_end") else None
+                                if original.get("datetime_end")
+                                else None
                             )
                         except Exception:
                             orig_start, orig_end = datetime.now(), None
@@ -3702,19 +3802,16 @@ with tab1:
                         ).isoformat()
                         duplicate["datetime_end"] = (
                             (orig_end + timedelta(days=1)).isoformat()
-                            if orig_end else None
+                            if orig_end
+                            else None
                         )
                         # Copy assignment lists (safe: they're lists of ints)
                         duplicate["delegation_ids"] = list(
                             original.get("delegation_ids", [])
                         )
-                        duplicate["contact_ids"] = list(
-                            original.get("contact_ids", [])
-                        )
+                        duplicate["contact_ids"] = list(original.get("contact_ids", []))
                         st.session_state["create_trip_items"].append(duplicate)
-                        st.success(
-                            f"✅ Duplicated: {duplicate['description']}"
-                        )
+                        st.success(f"✅ Duplicated: {duplicate['description']}")
                         st.rerun()
                 with col_i5:
                     if st.button("🗑️", key=f"create_del_item_{idx}",
@@ -4224,16 +4321,19 @@ with tab2:
     if "selected_trip_ids" not in st.session_state:
         st.session_state.selected_trip_ids = set()
 
-    # Defensive: dedupe trips by trip_id, in case the summary query
-    # returns duplicates for any reason.
+    # Defensive: dedupe trips by trip_id. Coerce the key to a stable
+    # string so `5` and `"5"` collapse, and drop rows with no ID.
     if summary_data:
         seen = set()
         deduped = []
         for t in summary_data:
-            tid = t.get("trip_id")
-            if tid in seen:
+            raw_id = t.get("trip_id")
+            if raw_id is None:
                 continue
-            seen.add(tid)
+            tid_key = str(raw_id)
+            if tid_key in seen:
+                continue
+            seen.add(tid_key)
             deduped.append(t)
         summary_data = deduped
 
@@ -4286,9 +4386,23 @@ with tab2:
                 if label:
                     st.write(f"**{label}**")
 
+        _rendered_trip_ids = set()
+        _rendered_trip_ids = set()
         for trip in summary_data:
             trip_base_currency = trip.get("base_currency", "USD")
             trip_id = trip["trip_id"]
+            # Final guard: if upstream produced a duplicate, skip it
+            # here rather than emitting a colliding widget key.
+            _tid_key = str(trip_id)
+            if _tid_key in _rendered_trip_ids:
+                continue
+            _rendered_trip_ids.add(_tid_key)
+            # Final safety net: if upstream dedupe missed a duplicate,
+            # skip it here rather than emitting a colliding widget key.
+            _tid_key = str(trip_id)
+            if _tid_key in _rendered_trip_ids:
+                continue
+            _rendered_trip_ids.add(_tid_key)
             # Flag trips that ended before today so past-dated drafts stand out
             trip_end = trip.get("end_date")
             is_past = bool(
@@ -4297,6 +4411,17 @@ with tab2:
             with st.container():
                 cols = st.columns(cols_widths)
                 with cols[0]:
+                    is_checked = trip_id in st.session_state.selected_trip_ids
+                    if st.checkbox(
+                        "", value=is_checked, key=f"sel_{trip_id}_{idx}"
+                    ):
+                        st.session_state.selected_trip_ids.add(trip_id)
+                    else:
+                        st.session_state.selected_trip_ids.discard(trip_id)
+                    # If the selection no longer matches "all", reset the
+                    # Select-All checkbox so its stored True doesn't re-select.
+                    if len(st.session_state.selected_trip_ids) != len(all_ids):
+                        st.session_state.pop("select_all_checkbox", None)
                     is_checked = trip_id in st.session_state.selected_trip_ids
                     if st.checkbox("", value=is_checked, key=f"sel_{trip_id}"):
                         st.session_state.selected_trip_ids.add(trip_id)
@@ -4463,7 +4588,7 @@ with tab2:
 
 
 # =========================================================
-# TAB -  COMPANIES
+# TAB: COMPANIES
 # =========================================================
 
 with tab3:
@@ -4632,7 +4757,7 @@ with tab3:
 
 
 # =========================================================
-# TAB - CONTACTS
+# TAB: CONTACTS
 # =========================================================
 
 with tab4:

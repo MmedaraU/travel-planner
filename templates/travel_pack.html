@@ -537,48 +537,77 @@
     </div>
     {% endif %}
 
-    <!-- Weather (as of generation time) -->
-    {% if weather %}
+    <!-- Weather (per stop) -->
+    {% if weather_by_stop %}
     <div class="card">
       <h2>🌦️ Weather</h2>
-      <div class="subhead">
-        <span class="label">Location:</span> {{ weather.location }}
-        &nbsp;|&nbsp; <span class="label">Fetched:</span> {{ weather.fetched_at[:16] }}
+
+      {% for entry in weather_by_stop %}
+      <div class="venue-block">
+        <h3 style="margin-bottom: 6px;">
+          {{ entry.city }}{% if entry.country %}, {{ entry.country }}{% endif %}
+          <span class="text-muted" style="font-weight: normal; font-size: 0.9rem;">
+            ({{ entry.start_date }} → {{ entry.end_date }})
+          </span>
+        </h3>
+
+        {% if entry.is_past %}
+        <div class="text-muted">This stop has already passed.</div>
+
+        {% elif not entry.available %}
+        <div class="text-muted">
+          Forecast not yet available for these dates — check back closer
+          to departure.
+        </div>
+
+        {% else %}
+
+        {% if entry.current %}
+        <div class="row">
+          <div class="col">
+            <span class="label">Now:</span>
+            {{ entry.current.icon }} {{ entry.current.temp }}°C —
+            {{ entry.current.desc }}
+          </div>
+          <div class="col">
+            <span class="label">Humidity:</span> {{ entry.current.humidity }}%
+          </div>
+          <div class="col">
+            <span class="label">Wind:</span> {{ entry.current.wind }} km/h
+          </div>
+        </div>
+        {% endif %}
+
+        {% if entry.daily %}
+        <table style="margin-top: 12px;">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Condition</th>
+              <th>High / Low</th>
+              <th>Precipitation</th>
+              <th>UV Index</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for d in entry.daily %}
+            <tr>
+              <td>{{ d.date }}</td>
+              <td>{{ d.icon }} {{ d.desc }}</td>
+              <td>{{ d.max }}° / {{ d.min }}°</td>
+              <td>{{ d.precip }} mm</td>
+              <td>{{ d.uv }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="text-muted">No daily forecast available.</div>
+        {% endif %}
+
+        {% endif %}
       </div>
-      <div class="row">
-        <div class="col">
-          <span class="label">Now:</span>
-          {{ weather.current.icon }} {{ weather.current.temp }}°C — {{ weather.current.desc }}
-        </div>
-        <div class="col">
-          <span class="label">Humidity:</span> {{ weather.current.humidity }}%
-        </div>
-        <div class="col">
-          <span class="label">Wind:</span> {{ weather.current.wind }} km/h
-        </div>
-      </div>
-      <table style="margin-top: 12px;">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Condition</th>
-            <th>High / Low</th>
-            <th>Precipitation</th>
-            <th>UV Index</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for d in weather.daily %}
-          <tr>
-            <td>{{ d.date }}</td>
-            <td>{{ d.icon }} {{ d.desc }}</td>
-            <td>{{ d.max }}° / {{ d.min }}°</td>
-            <td>{{ d.precip }} mm</td>
-            <td>{{ d.uv }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      {% endfor %}
     </div>
     {% endif %}
 
