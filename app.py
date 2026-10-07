@@ -1388,6 +1388,7 @@ with st.sidebar.expander("💱 Exchange Rates", expanded=False):
 # TRIP EDIT MODAL (defined before tabs)
 # =========================================================
 
+@st.dialog("✈️ Edit Trip", width="large")
 def _render_trip_edit_modal(trip_id_modal, country_list):
     trip_modal_data = db.get_trip(trip_id_modal)
     if not trip_modal_data:
@@ -3103,15 +3104,21 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
             st.error("Failed to generate travel pack.")
 
     if st.session_state.get(f"confirm_del_modal_{trip_id_modal}", False):
+
+        def _delete_and_close():
+            db.delete_trip(trip_id_modal)
+            st.session_state.pop("dialog_trip_id", None)
+
         render_delete_confirmation(
             flag_key=f"confirm_del_modal_{trip_id_modal}",
             title="Permanently delete this trip?",
-            on_confirm=lambda: db.delete_trip(trip_id_modal),
+            on_confirm=_delete_and_close,
         )
 
     if st.button("Close", key=f"close_modal_{trip_id_modal}"):
         st.session_state.pop(f"modal_stops_{trip_id_modal}", None)
         st.session_state.pop(f"modal_items_{trip_id_modal}", None)
+        st.session_state.pop("dialog_trip_id", None)   # ← new
         st.rerun()
 
 
@@ -4367,26 +4374,18 @@ with tab2:
                 on_confirm=lambda: db.delete_trips(list(st.session_state.selected_trip_ids)),
             )
 
-        cols_widths = [0.5, 1.5, 1.5, 1.5, 1.2, 1, 1, 1, 1, 0.8, 0.8]
+        cols_widths = [0.4, 5, 0.8, 0.8]
         header_cols = st.columns(cols_widths)
         for label, idx in [
             ("", 0),
-            ("Executive", 1),
-            ("Company", 2),
-            ("Destination", 3),
-            ("Budget (Base)", 4),
-            ("Total Spent (Base)", 5),
-            ("Pending (Base)", 6),
-            ("Estimated (Base)", 7),
-            ("Status", 8),
-            ("Open", 9),
-            ("Delete", 10),
+            ("Trip", 1),
+            ("Open", 2),
+            ("Delete", 3),
         ]:
             with header_cols[idx]:
                 if label:
                     st.write(f"**{label}**")
 
-        _rendered_trip_ids = set()
         _rendered_trip_ids = set()
         for trip in summary_data:
             trip_base_currency = trip.get("base_currency", "USD")
@@ -4397,67 +4396,61 @@ with tab2:
             if _tid_key in _rendered_trip_ids:
                 continue
             _rendered_trip_ids.add(_tid_key)
-            # Final safety net: if upstream dedupe missed a duplicate,
-            # skip it here rather than emitting a colliding widget key.
-            _tid_key = str(trip_id)
-            if _tid_key in _rendered_trip_ids:
-                continue
-            _rendered_trip_ids.add(_tid_key)
-            # Flag trips that ended before today so past-dated drafts stand out
             trip_end = trip.get("end_date")
             is_past = bool(
                 trip_end and trip_end[:10] < datetime.now().date().isoformat()
             )
+
+            status = trip.get("status", "draft")
+            if is_past and status == "draft":
+                status_label = "🕒 Past (draft)"
+            elif is_past:
+                base_label = (
+                    "✅ Approved" if status == "approved"
+                    else "📄 Final" if status == "final"
+                    else status
+                )
+                status_label = f"🕒 {base_label}"
+            else:
+                status_label = (
+                    "📝 Draft" if status == "draft"
+                    else "✅ Approved" if status == "approved"
+                    else "📄 Final" if status == "final"
+                    else status
+                )
+
             with st.container():
                 cols = st.columns(cols_widths)
+
                 with cols[0]:
-                    is_checked = trip_id in st.session_state.selected_trip_ids
-                    if st.checkbox(
-                        "", value=is_checked, key=f"sel_{trip_id}_{idx}"
-                    ):
-                        st.session_state.selected_trip_ids.add(trip_id)
-                    else:
-                        st.session_state.selected_trip_ids.discard(trip_id)
-                    # If the selection no longer matches "all", reset the
-                    # Select-All checkbox so its stored True doesn't re-select.
-                    if len(st.session_state.selected_trip_ids) != len(all_ids):
-                        st.session_state.pop("select_all_checkbox", None)
                     is_checked = trip_id in st.session_state.selected_trip_ids
                     if st.checkbox("", value=is_checked, key=f"sel_{trip_id}"):
                         st.session_state.selected_trip_ids.add(trip_id)
                     else:
                         st.session_state.selected_trip_ids.discard(trip_id)
+
                 with cols[1]:
-                    st.write(trip["executive_name"])
+                    st.write(f"**{trip['executive_name']}** · {trip['company_name']}")
+                    st.write(
+                        f"📍 {trip['destination']}  ·  "
+                        f"{status_label}"
+                    )
+                    st.caption(
+                        f"Budget: {fmt_money(trip['budget'], trip_base_currency)}  ·  "
+                        f"Spent: {fmt_money(trip['total_spent'], trip_base_currency)}  ·  "
+                        f"Confirmed: {fmt_money(trip['confirmed_spent'], trip_base_currency)}  ·  "
+                        f"Estimated: {fmt_money(trip['estimated_spent'], trip_base_currency)}"
+                    )
+
                 with cols[2]:
-                    st.write(trip["company_name"])
+                    if st.button(
+                        "📂 Edit",
+                        key=f"open_trip_{trip_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["dialog_trip_id"] = trip_id
+
                 with cols[3]:
-                    st.write(trip["destination"])
-                with cols[4]:
-                    st.write(fmt_money(trip["budget"], trip_base_currency))
-                with cols[5]:
-                    st.write(fmt_money(trip["total_spent"], trip_base_currency))
-                with cols[6]:
-                    st.write(fmt_money(trip["confirmed_spent"], trip_base_currency))
-                with cols[7]:
-                    st.write(fmt_money(trip["estimated_spent"], trip_base_currency))
-                with cols[8]:
-                    status = trip["status"]
-                    if is_past and status == "draft":
-                        st.write("🕒 Past (draft)")
-                    elif is_past:
-                        base_label = ("✅ Approved" if status == "approved"
-                                      else "📄 Final" if status == "final"
-                                      else status)
-                        st.write(f"🕒 {base_label}")
-                    else:
-                        st.write("📝 Draft" if status == "draft"
-                                 else "✅ Approved" if status == "approved"
-                                 else "📄 Final" if status == "final" else status)
-                with cols[9]:
-                    with st.popover("📂 Edit", use_container_width=True):
-                        _render_trip_edit_modal(trip_id, country_list)
-                with cols[10]:
                     if st.button("🗑️", key=f"del_trip_dash_{trip_id}"):
                         st.session_state[f"confirm_del_trip_{trip_id}"] = True
 
@@ -4585,6 +4578,15 @@ with tab2:
                         st.error("Failed to generate calendar file.")
     else:
         st.info("No trips match the filters.")
+
+    # ---- Open the trip edit dialog (if a trip is selected) ----
+    # This runs once per script, regardless of how many trips are listed.
+    # The dialog only appears when "dialog_trip_id" is set, which happens
+    # when the user clicks a row's 📂 Edit button above.
+    if st.session_state.get("dialog_trip_id"):
+        _render_trip_edit_modal(
+            st.session_state["dialog_trip_id"], country_list
+        )
 
 
 # =========================================================

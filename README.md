@@ -4,17 +4,20 @@
 
 **Version 4.0** – *Per-Stop Weather, Bulk Import, Templates, Reorderable Stops & Items, Inline Add, and Mobile-Ready Travel Packs*
 
+<img src="docs/screenshots/img-1.png" alt="Executive Travel Planner — app header" width="100%">
+
 ---
 
 ## 📋 Table of Contents
 
 - [Overview](#overview)
+- [Screenshots](#-screenshots)
 - [What's New](#-whats-new-v40)
 - [Full Feature Breakdown](#-full-feature-breakdown)
 - [Tech Stack](#️-tech-stack)
 - [Installation & Setup](#-installation--setup)
 - [Running the App](#️-running-the-app)
-- [How the PA Uses It (Daily Workflow)](#-how-the-pa-uses-it-daily-workflow)
+- [How the PA/EA Uses It (Daily Workflow)](#-how-the-paea-uses-it-daily-workflow)
 - [Complete Export Matrix](#-complete-export-matrix)
 - [What Each Export Looks Like](#-what-each-export-looks-like)
 - [File Structure](#-file-structure)
@@ -28,13 +31,51 @@
 
 ## Overview
 
-Stop juggling between spreadsheets, Word docs, and calendar invites. This single Python application lets **one Personal Assistant** manage **multiple executives across multiple companies** – from storing detailed travel profiles to generating polished itineraries, expense reports, and a mobile-ready travel pack the executive can actually use on the road.
+Stop juggling between spreadsheets, Word docs, and calendar invites. This single Python application lets **one PA/EA** manage **multiple executives across multiple companies** – from storing detailed travel profiles to generating polished itineraries, expense reports, and a mobile-ready travel pack the executive can actually use on the road.
 
 **Best of all:** 100% local. No cloud fees. No API subscriptions. All data stays on your machine.
 
 ---
 
+## 📸 Screenshots
+
+<table>
+<tr>
+<td width="50%">
+<img src="docs/screenshots/img-2.png" alt="Dashboard with metrics and spending snapshot">
+<p align="center"><em>Dashboard — at-a-glance metrics</em></p>
+</td>
+<td width="50%">
+<img src="docs/screenshots/img-3.png" alt="Trip Planner form with stops and itinerary">
+<p align="center"><em>Trip Planner — multi-city creation</em></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="docs/screenshots/img-4.png" alt="Trip edit modal with reorderable stops and items">
+<p align="center"><em>Trip edit modal — full itinerary control</em></p>
+</td>
+<td width="50%">
+<img src="docs/screenshots/img-5.png" alt="All Trips dashboard with filters and export buttons">
+<p align="center"><em>All Trips — filters, mass actions, exports</em></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="docs/screenshots/img-6.png" alt="Contacts grouped by type with tags">
+<p align="center"><em>Contacts — grouped by type, filterable</em></p>
+</td>
+<td width="50%">
+<img src="docs/screenshots/img-7.png" alt="Library with destination guides, visa rules, templates">
+<p align="center"><em>Library — guides, visa rules, templates</em></p>
+</td>
+</tr>
+</table>
+
+---
+
 ## 🚀 What's New (v4.0)
+
 
 | Feature                             | Description                                                                                                                                                                                          |
 | :---------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -58,6 +99,8 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 
 ### 🏠 1. Dashboard
 
+<img src="docs/screenshots/01-dashboard.png" alt="Dashboard" width="100%">
+
 - **Top metrics**: active executives, companies, contacts, total trips.
 - **Trip status split**: upcoming (next 30 days), in progress, past.
 - **Spending snapshot**: this month, this quarter, this year-to-date.
@@ -67,6 +110,19 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 
 ### 👤 2. Executive & Company Management
 
+<table>
+<tr>
+<td width="50%">
+<img src="docs/screenshots/img-8.png" alt="Companies tab">
+<p align="center"><em>Companies — cost centers, policy notes, default contacts</em></p>
+</td>
+<td width="50%">
+<img src="docs/screenshots/img-9.png" alt="Contacts tab">
+<p align="center"><em>Contacts — grouped by type, filterable</em></p>
+</td>
+</tr>
+</table>
+
 - **Executives**: rich profiles with timezone, seat preference, dietary, meal preference, preferred airline, TSA PreCheck, passport(s), and unlimited memberships.
 - **Passports**: multiple per executive, with expiry warnings that escalate at 90 / 180 days and can be dismissed for 90 days.
 - **Memberships**: airline, hotel, car rental, lounge, rail, ferry, ride-share, credit card.
@@ -75,6 +131,8 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 
 ### 🗺️ 3. Trip Planning (Multi-City)
 
+<img src="docs/screenshots/02-trip-planner.png" alt="Trip Planner" width="100%">
+
 - **Departure location**: Home Base with City, Region, Country.
 - **Stops**: unlimited, with **↑ ↓ reorder**, edit, and delete.
 - **Inline venue add**: create a new venue without leaving the stop or item form.
@@ -82,6 +140,8 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 - **Timezone display mode**: Home (executive's timezone) or Destination (each item's own timezone).
 
 ### 📋 4. Itinerary Builder
+
+<img src="docs/screenshots/03-trip-edit-modal.png" alt="Trip edit modal" width="100%">
 
 - **Add items individually** or **bulk paste from a spreadsheet** (auto-detects headers, previews before import).
 - **Per-item fields**: type, description, start / end, location, cost, currency, cost date, timezone, venue, confirmation code, notes, delegation members, local support contacts.
@@ -102,6 +162,8 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 
 ### 📊 6. All Trips (Spending Dashboard)
 
+<img src="docs/screenshots/04-all-trips.png" alt="All Trips dashboard" width="100%">
+
 - **Filters**: executive, date range, free-text search, "include past trips" toggle.
 - **Trip-level breakdown**: budget, total spent, confirmed, estimated, status.
 - **Mass select and delete** trips in one action.
@@ -117,11 +179,15 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 
 ### 🏢 8. Venues
 
+<img src="docs/screenshots/07-venues.png" alt="Venues tab" width="100%">
+
 - Reusable venue library with address, city, country, WiFi credentials, badge info, dress code, and notes.
 - Attach any venue to a session-type itinerary item (Meeting, Conference, Dinner, Site Visit, Tour, Activity).
 - Filter by country, search by name / address / city.
 
 ### 📚 9. Library
+
+<img src="docs/screenshots/08-library.png" alt="Library tab" width="100%">
 
 Six sub-tabs of reusable content:
 
@@ -133,6 +199,7 @@ Six sub-tabs of reusable content:
 - **🚨 Emergency Directory** — hospitals (by city / country), emergency numbers per country (sourced from Destination Guides), embassies and consulates (by host and representing country).
 
 ### 📄 10. Exports & Reporting
+
 
 | Export                | Formats                | Description                                                                                                                                                                             |
 | :-------------------- | :--------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -171,15 +238,39 @@ Six sub-tabs of reusable content:
 ### 1. Prerequisites
 
 - Python **3.10** or higher
+
 - **WeasyPrint system libraries** for PDF export:
+
   - **macOS**: `brew install pango libffi`
-  - **Ubuntu / Debian**: `sudo apt install libpango-1.0-0 libpangoft2-1.0-0`
-  - **Windows**: WeasyPrint ships wheels for recent versions; if PDF export fails, install the GTK runtime and add it to PATH
+
+  - **Ubuntu / Debian**:
+    `sudo apt install libpango-1.0-0 libpangoft2-1.0-0`
+
+  - **Windows (MSYS2 UCRT64)** — required. WeasyPrint on Windows needs
+    the Pango / Cairo / GDK-Pixbuf DLLs, which MSYS2 supplies. Install
+    MSYS2 from <https://www.msys2.org/> (default location `C:\msys64`),
+    then open the **UCRT64** shell and run:
+
+    ```bash
+    pacman -Syu
+    pacman -S mingw-w64-ucrt-x86_64-pango \
+              mingw-w64-ucrt-x86_64-gdk-pixbuf2 \
+              mingw-w64-ucrt-x86_64-cairo
+    ```
+
+    The bundled `run.bat` adds `C:\msys64\ucrt64\bin` to `PATH` and sets
+    `WEASYPRINT_DLL_DIRECTORIES` so Python can find these DLLs. If your
+    MSYS2 lives somewhere other than `C:\msys64`, edit `run.bat`
+    accordingly.
+
+    Without this step, PDF exports fail with an error like
+    `OSError: cannot load library 'gobject-2.0-0'`.
 
 ### 2. Download the Project
 
 ```
 travel-planner/
+├── run.bat
 ├── app.py
 ├── database.py
 ├── doc_generator.py
@@ -191,6 +282,8 @@ travel-planner/
 ├── templates/
 │   ├── travel_pack.html
 │   └── company_profile.html
+├── docs/
+│   └── screenshots/
 ├── requirements.txt
 └── README.md
 ```
@@ -208,21 +301,81 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 4. Launch
+
+**Windows:** double-click **`run.bat`** — see the *Running the App*
+section below for details.
+
+**macOS / Linux:** `streamlit run app.py` from an activated venv.
+
 ---
 
 ## ▶️ Running the App
 
+### Windows — recommended
+
+Double-click **`run.bat`** in the project folder. It handles three things at once:
+
+```bat
+@echo off
+set PATH=C:\msys64\ucrt64\bin;%PATH%
+set WEASYPRINT_DLL_DIRECTORIES=C:\msys64\ucrt64\bin
+venv\Scripts\python.exe -m streamlit run app.py
+```
+
+- Prepends MSYS2's UCRT64 `bin` folder to `PATH` so WeasyPrint's native
+  libraries (Pango, Cairo, GDK-Pixbuf) are discoverable.
+- Sets `WEASYPRINT_DLL_DIRECTORIES` — WeasyPrint's own fallback location
+  hint for those DLLs.
+- Runs the venv's Python directly, so no `activate` step is needed.
+
+Your browser opens at `http://localhost:8501`. On first run,
+`travel_planner.db` is created and all tables are set up automatically.
+Migrations run on every start, so schema updates are applied without
+manual work.
+
+> **Path dependency:** `run.bat` assumes MSYS2 is installed at
+> `C:\msys64`. If yours lives elsewhere, edit both lines and point them
+> at your own `ucrt64\bin`.
+
+> **Why a launcher instead of a plain `streamlit run app.py`?**
+> On Windows, WeasyPrint loads several native DLLs at import time. Those
+> DLLs live in MSYS2's UCRT64 `bin` folder, which is not on the default
+> Windows `PATH`. `run.bat` sets both `PATH` and
+> `WEASYPRINT_DLL_DIRECTORIES` in a single keystroke so the app works the
+> same way every time — without touching system-wide environment
+> variables or needing an activated shell.
+
+### Windows — from an activated shell
+
+If you prefer running from an interactive terminal (useful while
+debugging), the same environment variables must be set before Streamlit
+starts:
+
+```bat
+set PATH=C:\msys64\ucrt64\bin;%PATH%
+set WEASYPRINT_DLL_DIRECTORIES=C:\msys64\ucrt64\bin
+venv\Scripts\activate
+python -m streamlit run app.py
+```
+
+### macOS / Linux
+
 ```bash
+source venv/bin/activate
 streamlit run app.py
 ```
 
-Your browser opens at `http://localhost:8501`. On first run, `travel_planner.db` is created and all tables are set up automatically. Migrations run on every start, so updates to the schema are applied without manual work.
-
-> **Pro Tip:** If `streamlit` isn't on your PATH, use `python -m streamlit run app.py`.
+Native PDF rendering on macOS and Linux needs no extra environment
+setup once the system libraries from the Installation section are
+installed.
 
 ---
 
-## 🧠 How the PA Uses It (Daily Workflow)
+## 🧠 How the PA/EA Uses It (Daily Workflow)
+
+**Launch:** double-click `run.bat`. The app opens in your browser at
+`http://localhost:8501`.
 
 1. **Select Executive** — choose from the sidebar. Their timezone, preferences, and passport warnings load immediately.
 2. **Create Trip** — enter purpose, dates, departure city, budget, and base currency. Status starts as Draft.
@@ -263,6 +416,8 @@ Your browser opens at `http://localhost:8501`. On first run, `travel_planner.db`
 
 ### 📄 Word Documents
 
+<img src="docs/screenshots/img-11.png" alt="Word export sample" width="100%">
+
 - **Itinerary** — title, route summary, executive profile, sorted daily agenda, conflict warnings, spending summary.
 - **Expense Report** — days as headings, tables with Time / Description / Type / Cost / Receipt, embedded receipt thumbnails, daily totals, grand totals.
 - **Executive Profile** — company header, preference table, memberships, and finance details.
@@ -270,6 +425,8 @@ Your browser opens at `http://localhost:8501`. On first run, `travel_planner.db`
 - **Company Profile** — company header, executive roster, contact list, policy notes.
 
 ### 📊 Excel Spreadsheets
+
+<img src="docs/screenshots/img-10.png" alt="Excel export sample" width="100%">
 
 - **Executive Profile** — key/value table + separate memberships sheet.
 - **Itinerary** — 3 sheets: Trip Summary, Stops, Itinerary Items.
@@ -292,6 +449,8 @@ Standard iCalendar format. Double-click to import into Google Calendar, Apple Ca
 
 ```
 travel-planner/
+├── run.bat                         # Windows launcher — sets MSYS2 paths,
+│                                   # then starts Streamlit via the venv
 ├── app.py                          # Streamlit UI — every tab and form
 ├── database.py                     # SQLite schema, migrations, CRUD
 ├── doc_generator.py                # Travel Pack (HTML / PDF / Word),
@@ -304,6 +463,8 @@ travel-planner/
 ├── templates/
 │   ├── travel_pack.html            # Jinja2 template for the HTML travel pack
 │   └── company_profile.html        # Jinja2 template for the HTML company profile
+├── docs/
+│   └── screenshots/                # README images
 ├── requirements.txt
 ├── travel_planner.db               # SQLite database (auto-created)
 ├── app_state.json                  # Backup reminder state (auto-created)
@@ -365,6 +526,15 @@ Two parsers already exist in `utils.py`:
 
 Both return `(parsed_rows, errors)`. Follow the same shape for any new bulk-import UI.
 
+### Updating Screenshots
+
+Screenshots live in `docs/screenshots/`. To refresh one:
+
+1. Open the app in a browser at a **consistent window size** (recommended: 1440 × 900).
+2. Use your OS screenshot tool or a browser extension (Firefox's built-in, Chrome DevTools "Capture screenshot").
+3. Save with the same filename — the README will pick up the new image automatically.
+4. Keep PNG for UI screenshots; PNG keeps text crisp. For exports (Word/Excel previews), PNG or JPG both work.
+
 ---
 
 ## 🔒 Data Backup
@@ -381,20 +551,23 @@ For extra safety, sync `travel_planner.db` to a cloud drive (Dropbox, OneDrive, 
 
 ## 🐞 Troubleshooting
 
-| Issue                                      | Solution                                                                                                                       |
-| :----------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------- |
-| **`No module named 'streamlit'`**          | Activate the venv, then `pip install -r requirements.txt`.                                                                     |
-| **Port 8501 is busy**                      | `streamlit run app.py --server.port 8502`.                                                                                     |
-| **`StreamlitDuplicateElementKey`**         | Fixed in v4.0. If you still see it, run the diagnostic in the "Duplicate key" section below.                                   |
-| **`No module named 'utils'`**              | Ensure all `.py` files sit in the same folder as `app.py`.                                                                     |
-| **`No module named 'weather'`**            | Add `weather.py` (used by the trip modal and the travel pack).                                                                 |
-| **Excel export fails**                     | Check `openpyxl` is installed.                                                                                                 |
-| **PDF export fails**                       | Install WeasyPrint system libraries (see Installation).                                                                        |
-| **Travel pack is empty / broken layout**   | Confirm `templates/travel_pack.html` exists and is valid HTML.                                                                 |
-| **Weather section missing in travel pack** | Check the city names on the trip's stops; some spellings may not resolve. If all cities fail, the section is silently omitted. |
-| **Database is locked**                     | Only one PA uses it — restart the app. WAL mode reduces this to near-zero.                                                     |
-| **`bash: streamlit: command not found`**   | Use `python -m streamlit run app.py`.                                                                                          |
-| **VS Code shows import errors**            | Select the venv interpreter: `venv\Scripts\python.exe`.                                                                        |
+| Issue                                              | Solution                                                                                                                                                                               |
+| :------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`No module named 'streamlit'`**                  | Activate the venv, then `pip install -r requirements.txt`.                                                                                                                             |
+| **Port 8501 is busy**                              | `streamlit run app.py --server.port 8502`.                                                                                                                                             |
+| **`StreamlitDuplicateElementKey`**                 | Fixed in v4.0. If you still see it, run the diagnostic in the "Duplicate key" section below.                                                                                           |
+| **`No module named 'utils'`**                      | Ensure all `.py` files sit in the same folder as `app.py`.                                                                                                                             |
+| **`No module named 'weather'`**                    | Add `weather.py` (used by the trip modal and the travel pack).                                                                                                                         |
+| **Excel export fails**                             | Check `openpyxl` is installed.                                                                                                                                                         |
+| **PDF export fails**                               | Install WeasyPrint system libraries (see Installation). On Windows, confirm `run.bat` points at a valid MSYS2 install and that the Pango package is present.                           |
+| **`OSError: cannot load library 'gobject-2.0-0'`** | MSYS2's UCRT64 `bin` folder isn't on `PATH`. Use `run.bat`, or set `PATH` and `WEASYPRINT_DLL_DIRECTORIES` manually as shown in *Running the App*.                                     |
+| **`bash: streamlit: command not found`**           | Use `python -m streamlit run app.py`, or just run `run.bat`.                                                                                                                           |
+| **`run.bat` opens and immediately closes**         | Something failed before the browser opened. Run `run.bat` from an existing `cmd` window instead of double-clicking it — the window won't close on error, and you'll see the traceback. |
+| **`run.bat` runs the wrong Python**                | Confirm `venv\Scripts\python.exe` exists. If your venv lives elsewhere, edit the last line of `run.bat`.                                                                               |
+| **Travel pack is empty / broken layout**           | Confirm `templates/travel_pack.html` exists and is valid HTML.                                                                                                                         |
+| **Weather section missing in travel pack**         | Check the city names on the trip's stops; some spellings may not resolve. If all cities fail, the section is silently omitted.                                                         |
+| **Database is locked**                             | Only one PA/EA uses it — restart the app. WAL mode reduces this to near-zero.                                                                                                          |
+| **VS Code shows import errors**                    | Select the venv interpreter: `venv\Scripts\python.exe`.                                                                                                                                |
 
 ### Duplicate key diagnostic
 
@@ -423,28 +596,10 @@ If a `DUPLICATE` line appears, `get_spending_summary()` is returning two rows fo
 
 This tool is proprietary and built specifically for internal administrative use. You are free to use and modify it for your own company workflows.
 
-**Happy Planning! ✈️**  
-*Built with ❤️ for Executive Assistants everywhere.*
+---
 
+**Happy Planning! ✈️**
 
 ---
 
-## Summary of what changed
-
-| Section                 | Change                                                                                                                         |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| **Title**               | Version 3.0 → 4.0; new subtitle highlighting the v4.0 features                                                                 |
-| **Table of contents**   | Updated anchors for the renamed "What's New" section                                                                           |
-| **What's New**          | Complete rewrite — all 13 new features vs. the old 8                                                                           |
-| **Feature breakdown**   | Split into 10 sections (was 7); added Dashboard, Contacts, Venues, Library, Travel Pack; refreshed Budgeting, Trips, Itinerary |
-| **Tech stack**          | Python 3.9 → 3.10; Streamlit version removed (unpinned); added WeasyPrint, Jinja2, Open-Meteo                                  |
-| **Installation**        | Added WeasyPrint system libraries per OS; updated file structure to include `weather.py` and `templates/`                      |
-| **Daily workflow**      | Rewritten to reflect the actual flow: stops with reorder, bulk paste, per diem, travel pack, templates                         |
-| **Export matrix**       | Now includes HTML and PDF; Travel Pack row added                                                                               |
-| **Export descriptions** | Travel Pack section added; Company Profile section added; Calendar section updated for multi-trip export                       |
-| **File structure**      | Added `weather.py`, `templates/`, `app_state.json`, `dismissed_warnings.json`; corrected `receipts/` path                      |
-| **Currency section**    | Added historical cost-date conversion note and timezone shortlist mention                                                      |
-| **Extending section**   | Added "New Itinerary Category" and "Bulk Import Parser" subsections                                                            |
-| **Backup section**      | Updated to reflect the monthly reminder and Mark as Backed Up button                                                           |
-| **Troubleshooting**     | Added weather, PDF, template, and duplicate-key entries; added diagnostic script                                               |
-| **License**             | Unchanged                                                                                                                      |
+*Built with ❤️ for Executive Assistants and Personal Assistants everywhere.*
