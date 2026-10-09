@@ -7,7 +7,7 @@ import requests
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 CACHE_FILE = "weather_cache.json"
 CACHE_DURATION = 3600  # 1 hour
@@ -324,6 +324,26 @@ def get_weather_for_range(city_name, start_date, end_date):
         )
 
     if not daily_forecast:
+        # If the range sits entirely beyond the 16-day forecast window,
+        # fall back to the archive API for the same month/day last year,
+        # so the user sees typical conditions rather than an empty panel.
+        if start > today + timedelta(days=16):
+            try:
+                ly_start = start.replace(year=start.year - 1)
+                ly_end = end.replace(year=end.year - 1)
+            except ValueError:
+                # Feb 29 with no Feb 29 last year — skip the fallback
+                return None
+            last = get_weather_for_range(
+                city_name,
+                ly_start.isoformat(),
+                ly_end.isoformat(),
+            )
+            if last:
+                last["is_historical_fallback"] = True
+                last["original_start_date"] = start_date
+                last["original_end_date"] = end_date
+            return last
         return None
 
     result = {

@@ -94,6 +94,11 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 | **🧩 Library Tab**                   | Destination Guides, Visa Rules, Checklist Templates, Packing Templates, Trip Templates, and an Emergency Directory (hospitals, embassy / consulate records, per-country emergency numbers).          |
 
 ---
+> **⚠️ Note:** All names, email addresses, phone numbers, passport details, hotel
+> confirmations, flight numbers, and any other information shown in these
+> screenshots are **fictional** and were generated for demonstration purposes
+> only. They do not correspond to any real person, company, or booking.
+
 
 ## ✨ Full Feature Breakdown
 

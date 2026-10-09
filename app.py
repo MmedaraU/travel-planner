@@ -8,6 +8,7 @@ import io
 import pytz
 import os
 import json
+import re
 import pycountry
 from openpyxl import Workbook
 from excel_export import (
@@ -192,6 +193,123 @@ def fmt_datetime(dt, fmt="%d-%m-%Y %H:%M"):
     except Exception:
         return str(dt)
 
+
+def _validate_item_times(start_iso, end_iso):
+    """
+    Return (ok, msg). ok=False when end is strictly before start.
+    Equal start and end is allowed (zero-duration item like a status
+    marker). Missing or unparseable values pass — those are caught by
+    the "Start required" check elsewhere.
+
+    Not a hard block: cross-dateline or cross-timezone entries can
+    legitimately produce raw strings where end < start, so callers
+    pair this with a "Save anyway?" override.
+    """
+    if not start_iso or not end_iso:
+        return True, ""
+    try:
+        s = datetime.fromisoformat(start_iso)
+        e = datetime.fromisoformat(end_iso)
+    except Exception:
+        return True, ""
+    if e < s:
+        return False, (
+            f"End time ({e.strftime('%d-%m-%Y %H:%M')}) is before "
+            f"start time ({s.strftime('%d-%m-%Y %H:%M')})."
+        )
+    return True, ""
+
+
+def _find_duplicate_items(
+    existing_items, new_desc, new_start_iso, new_confirmation_code=None, exclude_id=None
+):
+    """
+    Return items on the same trip that look like duplicates of a proposed
+    one. Match criteria:
+      - same description (case-insensitive) AND same start datetime, OR
+      - matching confirmation_code (if both are non-empty).
+
+    `exclude_id` skips an item by DB id, used by the edit handler to
+    avoid warning against itself.
+    """
+    d = (new_desc or "").strip().lower()
+    cc = (new_confirmation_code or "").strip().lower()
+    matches = []
+    for it in existing_items:
+        if exclude_id and it.get("id") == exclude_id:
+            continue
+        same_start = it.get("datetime_start") == new_start_iso
+        same_desc = (it.get("description") or "").strip().lower() == d
+        same_conf = (
+            cc
+            and it.get("confirmation_code")
+            and it.get("confirmation_code").strip().lower() == cc
+        )
+        if (same_start and same_desc) or same_conf:
+            matches.append(it)
+    return matches
+
+
+def _find_stop_conflicts(
+    existing_stops, new_city, new_start_iso, new_end_iso, exclude_idx=None
+):
+    """
+    Return (same_city, other_city) conflicts for a proposed stop.
+
+    same_city  — same city, dates touch or overlap. Likely a duplicate.
+    other_city — different city, dates overlap *strictly*. Physically
+                 impossible (can't be in two places at once).
+
+    A touching boundary (London ends 17 Oct, Paris starts 17 Oct) is only
+    a conflict for the same city — for different cities that's a normal
+    travel day. `exclude_idx` skips a stop by its position, used by the
+    edit handler to avoid warning against itself.
+    """
+    cl = new_city.strip().lower()
+    same_city = []
+    other_city = []
+    for i, s in enumerate(existing_stops):
+        if exclude_idx is not None and i == exclude_idx:
+            continue
+        s_city = s["city"].strip().lower()
+        if s_city == cl:
+            if s["start_date"] <= new_end_iso and s["end_date"] >= new_start_iso:
+                same_city.append(s)
+        else:
+            if s["start_date"] < new_end_iso and s["end_date"] > new_start_iso:
+                other_city.append(s)
+    return same_city, other_city
+
+def _find_stop_conflicts(existing_stops, new_city, new_start_iso, new_end_iso,
+                         exclude_idx=None):
+    """
+    Return (same_city, other_city) conflicts for a proposed stop.
+
+    same_city  — same city, dates touch or overlap. Likely a duplicate.
+    other_city — different city, dates overlap *strictly*. Physically
+                 impossible (can't be in two places at once).
+
+    A touching boundary (London ends 17 Oct, Paris starts 17 Oct) is only
+    a conflict for the same city — for different cities that's a normal
+    travel day. `exclude_idx` skips a stop by its position, used by the
+    edit handler to avoid warning against itself.
+    """
+    cl = new_city.strip().lower()
+    same_city = []
+    other_city = []
+    for i, s in enumerate(existing_stops):
+        if exclude_idx is not None and i == exclude_idx:
+            continue
+        s_city = s["city"].strip().lower()
+        if s_city == cl:
+            if s["start_date"] <= new_end_iso and s["end_date"] >= new_start_iso:
+                same_city.append(s)
+        else:
+            if s["start_date"] < new_end_iso and s["end_date"] > new_start_iso:
+                other_city.append(s)
+    return same_city, other_city
+
+
 def _swap_item_times(a, b):
     """
     Return (a', b') — copies of two item dicts with their datetime_start,
@@ -214,17 +332,19 @@ def _swap_item_times(a, b):
 
 # --- Phase 2 Stage C: standard delete-confirmation UI ---
 
+
 def render_delete_confirmation(flag_key, title, on_confirm, extra_msg=None):
     """
     Render a standard delete confirmation block.
 
-    Usage:
-        if st.session_state.get(f"confirm_del_venue_{vid}"):
-            render_delete_confirmation(
-                flag_key=f"confirm_del_venue_{vid}",
-                title=f"Permanently delete venue '{v['name']}'?",
-                on_confirm=lambda: db.delete_venue(vid),
-            )
+    `on_confirm` may return either:
+      - None                      → treated as success, reruns immediately
+      - (ok: bool, msg: str)      → message is shown; rerun only on success
+
+    The tuple form exists so callers like delete_company() — which can
+    legitimately refuse to delete (e.g. company still has executives) —
+    can surface the refusal to the user instead of having the message
+    wiped by the immediate rerun.
     """
     st.warning(f"⚠️ {title}")
     if extra_msg:
@@ -232,13 +352,259 @@ def render_delete_confirmation(flag_key, title, on_confirm, extra_msg=None):
     col_yes, col_no = st.columns(2)
     with col_yes:
         if st.button("✅ Yes, Delete", key=f"{flag_key}_yes"):
-            on_confirm()
+            result = on_confirm()
             st.session_state.pop(flag_key, None)
-            st.rerun()
+            if isinstance(result, tuple) and len(result) == 2:
+                ok, msg = result
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+                    # Do NOT rerun — let the user read the refusal.
+            else:
+                st.rerun()
     with col_no:
         if st.button("❌ Cancel", key=f"{flag_key}_no"):
             st.session_state.pop(flag_key, None)
             st.rerun()
+
+
+def _render_executive_form_fields(
+    prefix, defaults, companies, tz_display_names, tz_map, disable_active=False
+):
+    """
+    Renders the shared 9-10 field block used by both the Add Executive
+    form and the Edit Executive form. Returns a dict of the current
+    values.
+
+    `prefix` — unique string for widget keys (e.g. "add" or "edit").
+    `defaults` — dict with the current values, or {} for a fresh form.
+    `companies` — list of company dicts for the dropdown.
+    `disable_active` — if True, the Active checkbox is hidden (Add form).
+    """
+    values = {}
+    company_options = {c["name"]: c["id"] for c in companies}
+    company_names = list(company_options.keys())
+
+    st.markdown("**👤 Identity**")
+    # --- Company & identity ---
+    current_company_id = defaults.get("company_id")
+    curr_company_name = next(
+        (n for n, cid in company_options.items() if cid == current_company_id),
+        company_names[0] if company_names else "",
+    )
+    values["company_label"] = st.selectbox(
+        "Company*",
+        options=company_names,
+        index=(
+            company_names.index(curr_company_name)
+            if curr_company_name in company_names
+            else 0
+        ),
+        key=f"{prefix}_company",
+    )
+    values["company_id"] = (
+        company_options.get(values["company_label"]) if company_names else None
+    )
+
+    values["name"] = st.text_input(
+        "Full Name*", value=defaults.get("name", ""), key=f"{prefix}_name"
+    )
+    values["email"] = st.text_input(
+        "Email", value=defaults.get("email", ""), key=f"{prefix}_email"
+    )
+
+    # --- Core travel preferences ---
+    st.markdown("**✈️ Travel Preferences**")
+    current_tz = defaults.get("timezone") or _last_used_timezone()
+    current_tz_display = next(
+        (n for n in tz_display_names if current_tz in n), tz_display_names[0]
+    )
+    values["tz_display"] = st.selectbox(
+        "Timezone",
+        options=tz_display_names,
+        index=tz_display_names.index(current_tz_display),
+        key=f"{prefix}_tz",
+    )
+    values["timezone"] = tz_map[values["tz_display"]]
+
+    seat_options = ["No Preference", "Aisle", "Window", "Middle"]
+    values["seat"] = st.selectbox(
+        "Seat Preference",
+        options=seat_options,
+        index=safe_index(
+            seat_options, defaults.get("seat_preference", "No Preference")
+        ),
+        key=f"{prefix}_seat",
+    )
+
+    meal_options = [
+        "No Preference",
+        "Vegetarian",
+        "Vegan",
+        "Kosher",
+        "Halal",
+        "Gluten-Free",
+    ]
+    values["meal"] = st.selectbox(
+        "Meal Preference",
+        options=meal_options,
+        index=safe_index(
+            meal_options, defaults.get("meal_preference", "No Preference")
+        ),
+        key=f"{prefix}_meal",
+    )
+
+    values["diet"] = st.text_input(
+        "Dietary Restrictions",
+        value=defaults.get("dietary_restrictions", ""),
+        key=f"{prefix}_diet",
+    )
+    values["airline"] = st.text_input(
+        "Preferred Airline",
+        value=defaults.get("preferred_airline", ""),
+        key=f"{prefix}_airline",
+    )
+    values["tsa"] = st.text_input(
+        "TSA PreCheck",
+        value=defaults.get("tsa_precheck", ""),
+        key=f"{prefix}_tsa",
+    )
+
+    # --- Active toggle (Edit only) ---
+    if not disable_active:
+        st.markdown("**📋 Status**")
+        values["active"] = st.checkbox(
+            "Active",
+            value=bool(defaults.get("is_active", 1)),
+            key=f"{prefix}_active",
+            help="Uncheck to archive. Archived executives are hidden from "
+            "pickers but their data is preserved.",
+        )
+
+    return values
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _is_valid_email(value):
+    """Rudimentary check — 'user@host.tld' shape. Empty strings pass
+    (email is optional)."""
+    if not value:
+        return True
+    return bool(_EMAIL_RE.match(value.strip()))
+
+
+def _last_used_timezone():
+    """Return the last timezone the user picked for a new exec, or NY."""
+    return st.session_state.get("_last_tz", "America/New_York")
+
+
+def _handle_add_executive_save(vals):
+    """Validate and persist a new executive from the shared form renderer."""
+    if not vals.get("name"):
+        st.error("Full Name is required.")
+        return
+    if not vals.get("company_id"):
+        st.error("Company is required.")
+        return
+    if not _is_valid_email(vals.get("email")):
+        st.error("Email doesn't look valid — check for a missing @ or domain.")
+        return
+
+    if vals.get("email"):
+        existing = duplicate_detection.find_duplicate_executive(
+            vals["email"], vals["name"], vals["company_id"]
+        )
+        if existing:
+            st.warning(
+                "⚠️ An executive with the same email or name+company " "already exists:"
+            )
+            for dup in existing:
+                st.write(f"- {dup['name']} (ID: {dup['id']})")
+            if not st.checkbox("Add anyway?", key="force_add_exec"):
+                st.info(
+                    "Tick **Add anyway?** above and click "
+                    "**💾 Create Executive** again to proceed."
+                )
+                return
+
+    db.add_executive(
+        vals["company_id"],
+        vals["name"],
+        vals.get("email") or "",
+        vals["timezone"],
+        vals["seat"] if vals["seat"] != "No Preference" else "",
+        vals.get("diet") or "",
+        vals.get("airline") or "",
+        vals.get("tsa") or "",
+        vals["meal"] if vals["meal"] != "No Preference" else "",
+    )
+
+    # Remember timezone for the next new exec
+    st.session_state["_last_tz"] = vals["timezone"]
+
+    st.success(
+        f"✅ Executive '{vals['name']}' created! "
+        "Add passports and memberships in the edit modal."
+    )
+    st.session_state["show_add_executive"] = False
+    st.rerun()
+
+
+def _handle_edit_executive_save(exec_id, vals):
+    """Validate and persist edits to an existing executive."""
+    if not vals.get("name"):
+        st.error("Full Name is required.")
+        return
+    if not vals.get("company_id"):
+        st.error("Company is required.")
+        return
+    if not _is_valid_email(vals.get("email")):
+        st.error("Email doesn't look valid — check for a missing @ or domain.")
+        return
+
+    if vals.get("email"):
+        duplicates = duplicate_detection.find_duplicate_executive(
+            vals["email"], vals["name"], vals["company_id"]
+        )
+        # Exclude the exec we're currently editing
+        duplicates = [d for d in duplicates if d["id"] != exec_id]
+        if duplicates:
+            st.warning(
+                "⚠️ Another executive with the same email or name+company "
+                "already exists:"
+            )
+            for dup in duplicates:
+                st.write(f"- {dup['name']} (ID: {dup['id']})")
+            if not st.checkbox("Save anyway?", key="force_save_exec_edit"):
+                st.info(
+                    "Tick **Save anyway?** above and click "
+                    "**💾 Save Changes** again to proceed."
+                )
+                return
+
+    db.update_executive(
+        exec_id,
+        vals["company_id"],
+        vals["name"],
+        vals.get("email") or "",
+        vals["timezone"],
+        vals["seat"] if vals["seat"] != "No Preference" else "",
+        vals.get("diet") or "",
+        vals.get("airline") or "",
+        vals.get("tsa") or "",
+        vals["meal"] if vals["meal"] != "No Preference" else "",
+        is_active=1 if vals.get("active", 1) else 0,
+    )
+
+    st.success(f"✅ Executive '{vals['name']}' updated!")
+    st.session_state["profile_edit_mode"] = False
+    st.session_state["show_full_profile"] = False
+    st.rerun()
+
 
 # =========================================================
 # DASHBOARD HELPERS
@@ -430,14 +796,6 @@ def _render_bulk_paste_itinerary(
     The registry below enforces this in development; the mount fails
     loudly here rather than silently misbehaving later.
     """
-    if container_key in _BULK_PASTE_MOUNTS_THIS_RUN:
-        raise RuntimeError(
-            f"Bulk paste mounted twice with the same container_key "
-            f"({container_key!r}) in one script run. Each mount point "
-            f"needs a unique key — see _render_bulk_paste_itinerary "
-            f"docstring."
-        )
-    _BULK_PASTE_MOUNTS_THIS_RUN.add(container_key)
 
     with st.expander("📋 Paste from spreadsheet", expanded=False):
         st.caption(
@@ -464,6 +822,17 @@ def _render_bulk_paste_itinerary(
             parsed, errors = utils.parse_itinerary_paste(
                 raw, default_timezone=default_timezone
             )
+            # --- Post-parse validation: flag rows where end < start ---
+            # Rows are still imported; the warning surfaces in the
+            # existing "N warning(s)" expander so the user can spot
+            # and fix them afterward.
+            for _it in parsed:
+                _ok, _msg = _validate_item_times(
+                    _it.get("datetime_start"), _it.get("datetime_end")
+                )
+                if not _ok:
+                    _desc = _it.get("description", "") or "(no description)"
+                    errors.append(f"'{_desc}': {_msg}")
 
         if parsed:
             st.success(f"✅ Parsed {len(parsed)} item(s).")
@@ -519,12 +888,14 @@ def get_company_contact_options(company_id):
     return options
 
 
-def get_non_local_support_contacts(company_id):
+def get_local_support_options(company_id):
+    """
+    Contacts available as Local Support for a trip.
+    Company contacts + freelance (no-company) contacts, active only.
+    """
     contacts = db.get_contacts_for_local_support(company_id)
     options = {}
     for c in contacts:
-        if c.get("type") == "Local Support":
-            continue
         role = c.get("role", "") or ""
         suffix = " · freelance" if not c.get("company_id") else ""
         options[f"{c['name']} ({role}){suffix}".strip()] = c["id"]
@@ -696,51 +1067,31 @@ if st.session_state.get("show_add_executive", False):
 
         with st.form("add_executive_form"):
             companies = db.get_all_companies(active_only=True)
-            company_options = {c["name"]: c["id"] for c in companies}
-            company_names = list(company_options.keys())
-            if company_names:
-                sel_company_label = st.selectbox("Company*", company_names, key="add_company_sel")
-                sel_company_id = company_options[sel_company_label]
-            else:
+            if not companies:
                 st.warning("No companies available. Add one using the expander above.")
-                sel_company_id = None
+                st.form_submit_button("💾 Create Executive", disabled=True)
+            else:
+                tz_display_names, tz_map = get_timezone_dropdown_options()
+                vals = _render_executive_form_fields(
+                    prefix="add",
+                    defaults={},
+                    companies=companies,
+                    tz_display_names=tz_display_names,
+                    tz_map=tz_map,
+                    disable_active=True,
+                )
+                col_save, col_cancel = st.columns(2)
+                with col_save:
+                    submitted = st.form_submit_button("💾 Create Executive")
+                with col_cancel:
+                    cancelled = st.form_submit_button("❌ Cancel")
 
-            exec_name = st.text_input("Full Name*", key="add_exec_name")
-            exec_email = st.text_input("Email", key="add_exec_email")
-            tz_display_names, tz_map = get_timezone_dropdown_options()
-            default_tz = next((n for n in tz_display_names if "America/New_York" in n), tz_display_names[0])
-            sel_tz = st.selectbox("Timezone", tz_display_names, index=tz_display_names.index(default_tz), key="add_exec_tz")
-            exec_tz = tz_map[sel_tz]
-            exec_seat = st.selectbox("Seat Preference", ["No Preference", "Aisle", "Window", "Middle"], key="add_exec_seat")
-            exec_diet = st.text_input("Dietary Restrictions", key="add_exec_diet")
-            exec_airline = st.text_input("Preferred Airline", key="add_exec_airline")
-            exec_tsa = st.text_input("TSA PreCheck", key="add_exec_tsa")
-            exec_meal = st.selectbox("Meal Preference", ["No Preference", "Vegetarian", "Vegan", "Kosher", "Halal", "Gluten-Free"], key="add_exec_meal")
+                if cancelled:
+                    st.session_state["show_add_executive"] = False
+                    st.rerun()
 
-            if st.form_submit_button("💾 Create Executive"):
-                if exec_name and sel_company_id:
-                    proceed = True
-                    if exec_email:
-                        existing = duplicate_detection.find_duplicate_executive(exec_email, exec_name, sel_company_id)
-                        if existing:
-                            st.warning("⚠️ An executive with the same email or name+company already exists:")
-                            for dup in existing:
-                                st.write(f"- {dup['name']} (ID: {dup['id']})")
-                            if not st.checkbox("Add anyway?", key="force_add_exec"):
-                                proceed = False
-                                st.info("Tick **Add anyway?** above and click **💾 Create Executive** again to proceed.")
-                    if proceed:
-                        db.add_executive(sel_company_id, exec_name, exec_email, exec_tz,
-                            exec_seat if exec_seat != "No Preference" else "",
-                            exec_diet, exec_airline, exec_tsa,
-                            exec_meal if exec_meal != "No Preference" else "")
-                        st.success(f"✅ Executive '{exec_name}' created! Add passports and memberships in the edit modal.")
-                        st.session_state["show_add_executive"] = False
-                        st.rerun()
-                else:
-                    st.warning("Name and Company are required.")
-
-
+                if submitted:
+                    _handle_add_executive_save(vals)
 if profile:
     with st.sidebar.expander("📋 Quick Profile", expanded=False):
         st.write(f"**{profile['name']}**")
@@ -806,74 +1157,36 @@ if st.session_state.get("show_full_profile", False):
     with st.popover("👤 Full Profile", use_container_width=True):
         if st.session_state.get("profile_edit_mode", False):
             st.subheader(f"✏️ Editing: {profile['name']}")
+            st.caption(
+                f"Company: {profile.get('company_name', '—')}  ·  "
+                f"ID: {exec_id}  ·  "
+                f"{'Active' if profile.get('is_active', 1) else '⚠️ Inactive'}"
+            )
             with st.form("edit_exec_popover"):
                 companies = db.get_all_companies(active_only=False)
-                company_options = {c["name"]: c["id"] for c in companies}
-                current_company_id = profile.get("company_id")
-                curr_comp_name = next((name for name, cid in company_options.items() if cid == current_company_id),
-                    list(company_options.keys())[0] if company_options else "")
-                new_company_label = st.selectbox("Company*", list(company_options.keys()),
-                    index=(list(company_options.keys()).index(curr_comp_name) if curr_comp_name in company_options else 0),
-                    key="edit_company_popover")
-                new_company_id = company_options[new_company_label]
-
-                new_name = st.text_input("Full Name*", value=profile.get("name", ""), key="edit_name_popover")
-                new_email = st.text_input("Email", value=profile.get("email", ""), key="edit_email_popover")
                 tz_display_names, tz_map = get_timezone_dropdown_options()
-                current_tz = profile.get("timezone", "America/New_York")
-                current_tz_display = next((n for n in tz_display_names if current_tz in n), tz_display_names[0])
-                new_tz_display = st.selectbox("Timezone", tz_display_names,
-                    index=tz_display_names.index(current_tz_display), key="edit_tz_popover")
-                new_tz = tz_map[new_tz_display]
-                seat_options = ["No Preference", "Aisle", "Window", "Middle"]
-                new_seat = st.selectbox("Seat Preference", seat_options,
-                    index=safe_index(seat_options, profile.get("seat_preference", "No Preference")),
-                    key="edit_seat_popover")
-                new_diet = st.text_input("Dietary Restrictions", value=profile.get("dietary_restrictions", ""), key="edit_diet_popover")
-                new_airline = st.text_input("Preferred Airline", value=profile.get("preferred_airline", ""), key="edit_airline_popover")
-                new_tsa = st.text_input("TSA PreCheck", value=profile.get("tsa_precheck", ""), key="edit_tsa_popover")
-                meal_options = ["No Preference", "Vegetarian", "Vegan", "Kosher", "Halal", "Gluten-Free"]
-                new_meal = st.selectbox("Meal Preference", meal_options,
-                    index=safe_index(meal_options, profile.get("meal_preference", "No Preference")),
-                    key="edit_meal_popover")
-                new_active = st.checkbox("Active",
-                    value=bool(profile.get("is_active", 1)),
-                    key="edit_active_popover",
-                    help="Uncheck to hide from pickers without deleting history.")
-
+                vals = _render_executive_form_fields(
+                    prefix="edit",
+                    defaults=profile,
+                    companies=companies,
+                    tz_display_names=tz_display_names,
+                    tz_map=tz_map,
+                    disable_active=False,
+                )
                 col_save, col_cancel, col_delete = st.columns(3)
                 with col_save:
                     submitted = st.form_submit_button("💾 Save Changes")
                 with col_cancel:
-                    cancel = st.form_submit_button("❌ Cancel")
+                    cancelled = st.form_submit_button("❌ Cancel")
                 with col_delete:
                     if st.form_submit_button("🗑️ Delete Executive", type="primary"):
                         st.session_state["show_delete_confirmation"] = True
 
+                if cancelled:
+                    st.session_state["profile_edit_mode"] = False
+                    st.rerun()
                 if submitted:
-                    db.update_executive(exec_id, new_company_id, new_name, new_email, new_tz,
-                        new_seat if new_seat != "No Preference" else "",
-                        new_diet, new_airline, new_tsa,
-                        new_meal if new_meal != "No Preference" else "",
-                        is_active=1 if new_active else 0)
-                    st.success(f"✅ Executive '{new_name}' updated!")
-                    st.session_state["profile_edit_mode"] = False
-                    st.session_state["show_full_profile"] = False
-                    st.rerun()
-                if cancel:
-                    st.session_state["profile_edit_mode"] = False
-                    st.rerun()
-
-                if st.session_state.get("show_delete_confirmation", False):
-                    trip_count = db.get_executive_trip_count(exec_id)
-                    extra = (f"This executive has {trip_count} trip(s). They will also be deleted."
-                             if trip_count > 0 else None)
-                    render_delete_confirmation(
-                        flag_key="show_delete_confirmation",
-                        title=f"Permanently delete executive '{profile['name']}'?",
-                        on_confirm=lambda: db.delete_executive(exec_id, force=True),
-                        extra_msg=extra,
-                    )
+                    _handle_edit_executive_save(exec_id, vals)
 
             # Passports (edit)
             st.subheader("🛂 Passports")
@@ -938,15 +1251,43 @@ if st.session_state.get("show_full_profile", False):
                 with col_i:
                     new_issued = st.date_input("Issued Date", value=None, key="edit_pass_issued")
                 new_notes_pass = st.text_area("Notes", key="edit_pass_notes")
+
                 if st.button("➕ Add Passport", key="edit_pass_btn"):
-                    if new_country and new_pass_num:
-                        db.add_passport(exec_id, new_country, new_pass_num,
-                            expiry_date=new_expiry.isoformat() if new_expiry else None,
-                            issued_date=new_issued.isoformat() if new_issued else None,
-                            notes=new_notes_pass)
-                        st.rerun()
-                    else:
+                    if not new_country or not new_pass_num:
                         st.warning("Country and Passport Number required.")
+                    else:
+                        proceed = True
+                        dupes = db.find_duplicate_passports(
+                            exec_id, new_country, new_pass_num
+                        )
+                        if dupes:
+                            st.warning(
+                                f"⚠️ This executive already has a "
+                                f"{new_country} passport on file:"
+                            )
+                            for d in dupes:
+                                st.write(
+                                    f"- {d['country']} · {d['passport_number']} "
+                                    f"(expires {d.get('expiry_date') or '—'})"
+                                )
+                            if not st.checkbox(
+                                "Add anyway?", key="force_add_passport"
+                            ):
+                                proceed = False
+                                st.info(
+                                    "Tick **Add anyway?** above and click "
+                                    "**➕ Add Passport** again to save the "
+                                    "additional passport."
+                                )
+                        if proceed:
+                            db.add_passport(
+                                exec_id, new_country, new_pass_num,
+                                expiry_date=new_expiry.isoformat() if new_expiry else None,
+                                issued_date=new_issued.isoformat() if new_issued else None,
+                                notes=new_notes_pass,
+                            )
+                            st.session_state.pop("force_add_passport", None)
+                            st.rerun()
 
             # Memberships (edit)
             st.subheader("✈️ Memberships")
@@ -1049,13 +1390,42 @@ if st.session_state.get("show_full_profile", False):
                             new_notes_mem = st.text_area("Notes", key="edit_mem_notes")
 
                 if st.button("➕ Add Membership", key="edit_mem_add_btn"):
-                    if new_name_mem and new_num_mem:
-                        db.add_membership(exec_id, new_cat.lower(), new_name_mem, new_num_mem,
-                            tier=new_tier, alliance=new_alliance,
-                            airport_code=new_airport, notes=new_notes_mem)
-                        st.rerun()
-                    else:
+                    if not new_name_mem or not new_num_mem:
                         st.warning("Program Name and Membership Number required.")
+                    else:
+                        proceed = True
+                        dupes = db.find_duplicate_memberships(
+                            exec_id, new_name_mem
+                        )
+                        if dupes:
+                            st.warning(
+                                f"⚠️ This executive already has a "
+                                f"'{new_name_mem}' membership on file:"
+                            )
+                            for d in dupes:
+                                st.write(
+                                    f"- {d['program_name']} · "
+                                    f"{d['membership_number']} "
+                                    f"({d.get('category') or '—'})"
+                                )
+                            if not st.checkbox(
+                                "Add anyway?", key="force_add_membership"
+                            ):
+                                proceed = False
+                                st.info(
+                                    "Tick **Add anyway?** above and click "
+                                    "**➕ Add Membership** again to save the "
+                                    "additional membership."
+                                )
+                        if proceed:
+                            db.add_membership(
+                                exec_id, new_cat.lower(),
+                                new_name_mem, new_num_mem,
+                                tier=new_tier, alliance=new_alliance,
+                                airport_code=new_airport, notes=new_notes_mem,
+                            )
+                            st.session_state.pop("force_add_membership", None)
+                            st.rerun()
 
         else:
             # Read-only
@@ -1388,7 +1758,16 @@ with st.sidebar.expander("💱 Exchange Rates", expanded=False):
 # TRIP EDIT MODAL (defined before tabs)
 # =========================================================
 
-@st.dialog("✈️ Edit Trip", width="large")
+
+def _clear_dialog_trip_id():
+    st.session_state.pop("dialog_trip_id", None)
+
+
+@st.dialog(
+    "✈️ Edit Trip",
+    width="large",
+    on_dismiss=_clear_dialog_trip_id,
+)
 def _render_trip_edit_modal(trip_id_modal, country_list):
     trip_modal_data = db.get_trip(trip_id_modal)
     if not trip_modal_data:
@@ -1488,11 +1867,16 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
             key=f"modal_status_{trip_id_modal}", disabled=is_locked)
 
         st.write("**Timezone Display**")
-        if f"modal_tz_display_{trip_id_modal}" not in st.session_state:
-            st.session_state[f"modal_tz_display_{trip_id_modal}"] = "Home"
-        modal_tz_display = st.radio("Show times in:", options=["Home", "Destination"],
-            index=(0 if st.session_state[f"modal_tz_display_{trip_id_modal}"] == "Home" else 1),
-            key=f"modal_tz_display_radio_{trip_id_modal}")
+        modal_tz_display = st.radio(
+            "Show times in:",
+            options=["Home", "Destination"],
+            index=0,
+            key=f"modal_tz_display_radio_{trip_id_modal}",
+        )
+        # Mirror the radio's value into the key the item list reads from,
+        # so display_mode_modal reflects the user's current choice.
+        st.session_state[f"modal_tz_display_{trip_id_modal}"] = modal_tz_display
+
         st.caption(
             "**Home** converts every item to the executive's home timezone. "
             "**Destination** shows each item in its own assigned timezone — "
@@ -1504,7 +1888,7 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
         exec_profile_modal = db.get_executive_profile(trip_modal_data["exec_id"])
         company_id_modal = exec_profile_modal.get("company_id") if exec_profile_modal else None
         if company_id_modal:
-            contact_options_modal = get_non_local_support_contacts(company_id_modal)
+            contact_options_modal = get_local_support_options(company_id_modal)
             existing_contact_ids = (json.loads(trip_modal_data.get("trip_contacts", "[]"))
                 if trip_modal_data.get("trip_contacts") else [])
             existing_labels = [label for label, cid in contact_options_modal.items()
@@ -1515,6 +1899,49 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
             selected_contact_ids_modal = [contact_options_modal[label] for label in selected_contacts_modal]
         else:
             selected_contact_ids_modal = []
+
+        st.write("**Travelers**")
+        if company_id_modal:
+            all_company_contacts = db.get_contacts_for_delegation(company_id_modal)
+            traveler_options = {}
+            for c in all_company_contacts:
+                role = c.get("role", "") or ""
+                suffix = " · freelance" if not c.get("company_id") else ""
+                label = f"{c['name']} ({role}){suffix}".strip()
+                traveler_options[label] = c["id"]
+
+            existing_members = db.get_trip_delegation_members(trip_id_modal)
+            existing_ids = [m["id"] for m in existing_members]
+            existing_labels = [
+                label for label, cid in traveler_options.items() if cid in existing_ids
+            ]
+            if not existing_labels:
+                default_ids = set(db.get_company_default_contacts(company_id_modal))
+                existing_labels = [
+                    label
+                    for label, cid in traveler_options.items()
+                    if cid in default_ids
+                ]
+
+            selected_travelers = st.multiselect(
+                "Travelers on this trip",
+                options=list(traveler_options.keys()),
+                default=existing_labels,
+                key=f"modal_travelers_{trip_id_modal}",
+                disabled=is_locked,
+            )
+            selected_traveler_ids = [traveler_options[l] for l in selected_travelers]
+        else:
+            selected_travelers = []
+            selected_traveler_ids = []
+
+        # Summary caption — reads AFTER the picker has run
+        if selected_traveler_ids:
+            preview = ", ".join(selected_travelers[:3])
+            suffix = " ..." if len(selected_travelers) > 3 else ""
+            st.caption(f"{len(selected_traveler_ids)} traveler(s): {preview}{suffix}")
+        else:
+            st.caption("No travelers selected yet.")
 
         if not is_locked:
             submitted = st.form_submit_button("💾 Save Changes")
@@ -1538,11 +1965,11 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                 db.update_trip_status(trip_id_modal, new_status)
                 db.update_trip_contacts(trip_id_modal, selected_contact_ids_modal)
                 db.update_trip_receipt_folder(trip_id_modal, new_receipt_folder)
-
+                db.set_trip_delegation(trip_id_modal, selected_traveler_ids)
                 st.success("✅ Trip header updated.")
                 st.rerun()
 
-    # Weather
+    # Weather — one expander per stop, date-aligned to the stop's range
     st.write("**🌦️ Weather**")
     trip_stops_weather = st.session_state.get(f"modal_stops_{trip_id_modal}", [])
     if not trip_stops_weather:
@@ -1550,52 +1977,89 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
     if not trip_stops_weather:
         st.caption("Add at least one stop to see weather.")
     else:
-        weather_city = trip_stops_weather[0]["city"]
-        col_wbtn, col_winfo = st.columns([1, 3])
-        with col_wbtn:
-            if st.button(
-                f"🌤️ Get weather",
-                key=f"get_weather_{trip_id_modal}",
-                help=f"Fetch live weather for {weather_city}",
-            ):
-                with st.spinner(f"Fetching weather for {weather_city}..."):
-                    w = weather.get_weather(weather_city)
-                if w:
-                    st.session_state[f"weather_{trip_id_modal}"] = w
-                    st.rerun()
-                else:
-                    st.warning(f"Could not fetch weather for '{weather_city}'.")
-        with col_winfo:
-            st.caption(f"City: **{weather_city}**")
+        for s_idx, stop in enumerate(trip_stops_weather):
+            stop_city = (stop.get("city") or "").strip()
+            stop_start = stop.get("start_date")
+            stop_end = stop.get("end_date")
+            if not (stop_city and stop_start and stop_end):
+                continue
 
-        cached_weather = st.session_state.get(f"weather_{trip_id_modal}")
-        if cached_weather:
-            st.caption(
-                f"📍 {cached_weather['location']} · "
-                f"fetched {fmt_datetime(cached_weather['fetched_at'])}"
+            header = (
+                f"🌦️ {stop_city} · " f"{fmt_date(stop_start)} → {fmt_date(stop_end)}"
             )
-            cur = cached_weather.get("current")
-            if cur:
-                col_w1, col_w2, col_w3, col_w4 = st.columns(4)
-                with col_w1:
-                    st.metric("Now", f"{cur['temp']}°C", cur["icon"])
-                with col_w2:
-                    st.metric("Humidity", f"{cur['humidity']}%")
-                with col_w3:
-                    st.metric("Wind", f"{cur['wind']} km/h")
-                with col_w4:
-                    st.caption(cur["desc"])
-            with st.expander("📅 Forecast", expanded=False):
-                for d in cached_weather["daily"]:
-                    col_d1, col_d2, col_d3, col_d4 = st.columns([2, 1, 1, 1])
-                    with col_d1:
-                        st.write(f"{d['icon']} {d['date']}")
-                    with col_d2:
-                        st.write(f"**{d['max']}°** / {d['min']}°")
-                    with col_d3:
-                        st.write(f"☔ {d['precip']} mm")
-                    with col_d4:
-                        st.write(f"UV {d['uv']}")
+            cache_key = f"weather_modal_{trip_id_modal}_{s_idx}"
+
+            with st.expander(header, expanded=False):
+                if st.button(
+                    "Fetch weather",
+                    key=f"fetch_weather_modal_{trip_id_modal}_{s_idx}",
+                    help=f"Fetch weather for {stop_city} across the trip dates",
+                ):
+                    with st.spinner(f"Fetching weather for {stop_city}..."):
+                        w = weather.get_weather_for_range(
+                            stop_city, stop_start, stop_end
+                        )
+                    st.session_state[cache_key] = w
+                    st.rerun()
+
+                # Three distinct states: never fetched, fetched-empty,
+                # fetched-with-data. Showing different messages for each
+                # avoids the "did the button do anything?" confusion.
+                if cache_key not in st.session_state:
+                    st.caption(
+                        "Click **Fetch weather** to load the forecast "
+                        "for these dates."
+                    )
+                    continue
+
+                cached = st.session_state.get(cache_key)
+                if not cached:
+                    st.info(
+                        f"No weather data available for {stop_city} on "
+                        f"{fmt_date(stop_start)} → {fmt_date(stop_end)}. "
+                        "Forecasts typically cover up to 16 days ahead."
+                    )
+                    continue
+
+                if cached.get("is_historical_fallback"):
+                    st.warning(
+                        "📅 Forecast not yet available for these dates. "
+                        "Showing typical conditions from the same dates "
+                        f"last year ({fmt_date(cached.get('start_date'))} → "
+                        f"{fmt_date(cached.get('end_date'))})."
+                    )
+                else:
+                    st.caption(
+                        f"📍 {cached['location']} · "
+                        f"fetched {fmt_datetime(cached['fetched_at'])}"
+                    )
+
+                cur = cached.get("current")
+                if cur:
+                    col_w1, col_w2, col_w3, col_w4 = st.columns(4)
+                    with col_w1:
+                        st.metric("Now", f"{cur['temp']}°C", cur["icon"])
+                    with col_w2:
+                        st.metric("Humidity", f"{cur['humidity']}%")
+                    with col_w3:
+                        st.metric("Wind", f"{cur['wind']} km/h")
+                    with col_w4:
+                        st.caption(cur["desc"])
+
+                daily = cached.get("daily") or []
+                if daily:
+                    for d in daily:
+                        col_d1, col_d2, col_d3, col_d4 = st.columns([2, 1, 1, 1])
+                        with col_d1:
+                            st.write(f"{d['icon']} {fmt_date(d['date'])}")
+                        with col_d2:
+                            st.write(f"**{d['max']}°** / {d['min']}°")
+                        with col_d3:
+                            st.write(f"☔ {d['precip']} mm")
+                        with col_d4:
+                            st.write(f"UV {d['uv']}")
+                else:
+                    st.caption("No daily records in this range.")
     # Stops
     st.write("**📍 Stops**")
     stops = st.session_state[f"modal_stops_{trip_id_modal}"]
@@ -1711,25 +2175,104 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                     sub_save, sub_cancel = st.columns(2)
                     with sub_save:
                         if st.form_submit_button("💾 Update Stop"):
-                            if es_city and es_start and es_end:
-                                st.session_state[f"modal_stops_{trip_id_modal}"][
-                                    idx
-                                ] = {
-                                    "city": es_city,
-                                    "country": es_country,
-                                    "region": es_region,
-                                    "start_date": es_start.isoformat(),
-                                    "end_date": es_end.isoformat(),
-                                    "notes": es_notes,
-                                }
-                                st.session_state[
-                                    f"modal_editing_stop_{trip_id_modal}_{idx}"
-                                ] = False
-                                st.rerun()
-                            else:
+                            if not (es_city and es_start and es_end):
                                 st.warning(
                                     "City, Start Date, and End Date are required."
                                 )
+                            else:
+                                es_start_iso = es_start.isoformat()
+                                es_end_iso = es_end.isoformat()
+                                same_city, other_city = _find_stop_conflicts(
+                                    st.session_state[f"modal_stops_{trip_id_modal}"],
+                                    es_city, es_start_iso, es_end_iso,
+                                    exclude_idx=idx,
+                                )
+
+                                proceed = True
+
+                                if other_city:
+                                    st.error(
+                                        "⚠️ These dates overlap with stops "
+                                        "in a **different city** — you "
+                                        "can't be in two places at once:"
+                                    )
+                                    for c in other_city:
+                                        st.write(
+                                            f"- {c['city']} · "
+                                            f"{fmt_date(c['start_date'])} → "
+                                            f"{fmt_date(c['end_date'])}"
+                                        )
+                                    if not st.checkbox(
+                                        "Update anyway? (overlaps across cities)",
+                                        key=(
+                                            f"force_edit_stop_other_city_"
+                                            f"{trip_id_modal}_{idx}"
+                                        ),
+                                    ):
+                                        proceed = False
+                                        st.info(
+                                            "Tick **Update anyway?** above "
+                                            "and click **💾 Update Stop** "
+                                            "again — only do this if the "
+                                            "overlap is intentional."
+                                        )
+
+                                elif same_city:
+                                    st.warning(
+                                        f"⚠️ Another stop on this trip is "
+                                        f"already in **{es_city}** with "
+                                        "overlapping dates:"
+                                    )
+                                    for c in same_city:
+                                        st.write(
+                                            f"- {c['city']} · "
+                                            f"{fmt_date(c['start_date'])} → "
+                                            f"{fmt_date(c['end_date'])}"
+                                        )
+                                    if not st.checkbox(
+                                        "Update anyway?",
+                                        key=(
+                                            f"force_edit_stop_"
+                                            f"{trip_id_modal}_{idx}"
+                                        ),
+                                    ):
+                                        proceed = False
+                                        st.info(
+                                            "Tick **Update anyway?** above "
+                                            "and click **💾 Update Stop** "
+                                            "again to save."
+                                        )
+
+                                if proceed:
+                                    stop_id = stop.get("id")
+                                    if stop_id:
+                                        db.update_trip_stop(
+                                            stop_id,
+                                            es_city,
+                                            es_country,
+                                            es_region,
+                                            es_start_iso,
+                                            es_end_iso,
+                                            es_notes,
+                                        )
+                                    # Refresh session state from the DB so
+                                    # the in-memory list matches reality.
+                                    st.session_state[
+                                        f"modal_stops_{trip_id_modal}"
+                                    ] = db.get_trip_stops(trip_id_modal)
+                                    st.session_state.pop(
+                                        f"force_edit_stop_{trip_id_modal}_{idx}",
+                                        None,
+                                    )
+                                    st.session_state.pop(
+                                        f"force_edit_stop_other_city_"
+                                        f"{trip_id_modal}_{idx}",
+                                        None,
+                                    )
+                                    st.session_state[
+                                        f"modal_editing_stop_{trip_id_modal}_{idx}"
+                                    ] = False
+                                    st.rerun()
                     with sub_cancel:
                         if st.form_submit_button("❌ Cancel"):
                             st.session_state[
@@ -1758,30 +2301,121 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                 key=f"modal_new_stop_end_{trip_id_modal}", disabled=is_locked)
         if not is_locked:
             if st.button("➕ Add Stop", key=f"modal_add_stop_{trip_id_modal}"):
-                if new_stop_city and new_stop_start and new_stop_end:
-                    next_order = len(st.session_state[f"modal_stops_{trip_id_modal}"]) + 1
-                    db.add_trip_stop(
-                        trip_id_modal,
-                        next_order,
-                        new_stop_city,
-                        new_stop_country,
-                        new_stop_region,
-                        new_stop_start.isoformat(),
-                        new_stop_end.isoformat(),
-                        new_stop_notes,
-                    )
-                    st.session_state[f"modal_stops_{trip_id_modal}"] = (
-                        db.get_trip_stops(trip_id_modal)
-                    )
-                    st.success("✅ Stop added.")
-                    st.rerun()
-                else:
+                if not (new_stop_city and new_stop_start and new_stop_end):
                     st.warning("City, Start Date, and End Date are required.")
+                else:
+                    new_start_iso = new_stop_start.isoformat()
+                    new_end_iso = new_stop_end.isoformat()
+                    same_city, other_city = _find_stop_conflicts(
+                        st.session_state[f"modal_stops_{trip_id_modal}"],
+                        new_stop_city, new_start_iso, new_end_iso,
+                    )
 
+                    proceed = True
+
+                    if other_city:
+                        st.error(
+                            "⚠️ These dates overlap with stops in a "
+                            "**different city** — you can't be in two "
+                            "places at once:"
+                        )
+                        for c in other_city:
+                            st.write(
+                                f"- {c['city']} · "
+                                f"{fmt_date(c['start_date'])} → "
+                                f"{fmt_date(c['end_date'])}"
+                            )
+                        if not st.checkbox(
+                            "Add anyway? (dates overlap across cities)",
+                            key=f"force_add_modal_stop_other_city_{trip_id_modal}",
+                        ):
+                            proceed = False
+                            st.info(
+                                "Tick **Add anyway?** above and click "
+                                "**➕ Add Stop** again — only do this if "
+                                "the overlap is intentional."
+                            )
+
+                    elif same_city:
+                        st.warning(
+                            f"⚠️ This trip already has a stop in "
+                            f"**{new_stop_city}** with overlapping dates:"
+                        )
+                        for c in same_city:
+                            st.write(
+                                f"- {c['city']} · "
+                                f"{fmt_date(c['start_date'])} → "
+                                f"{fmt_date(c['end_date'])}"
+                            )
+                        if not st.checkbox(
+                            "Add anyway?",
+                            key=f"force_add_modal_stop_{trip_id_modal}",
+                        ):
+                            proceed = False
+                            st.info(
+                                "Tick **Add anyway?** above and click "
+                                "**➕ Add Stop** again — this is normal "
+                                "for a city you revisit on a separate "
+                                "leg of the trip."
+                            )
+
+                    if proceed:
+                        next_order = (
+                            len(st.session_state[f"modal_stops_{trip_id_modal}"]) + 1
+                        )
+                        db.add_trip_stop(
+                            trip_id_modal,
+                            next_order,
+                            new_stop_city,
+                            new_stop_country,
+                            new_stop_region,
+                            new_start_iso,
+                            new_end_iso,
+                            new_stop_notes,
+                        )
+                        st.session_state[f"modal_stops_{trip_id_modal}"] = (
+                            db.get_trip_stops(trip_id_modal)
+                        )
+                        st.session_state.pop(
+                            f"force_add_modal_stop_{trip_id_modal}", None
+                        )
+                        st.session_state.pop(
+                            f"force_add_modal_stop_other_city_{trip_id_modal}", None
+                        )
+                        st.success("✅ Stop added.")
+                        st.rerun()
     # Items
     st.write("**📋 Itinerary Items**")
     base_currency_options = currency.CURRENCIES_SUPPORTED
     items = st.session_state[f"modal_items_{trip_id_modal}"]
+
+    # ---- Bulk-assign trip travelers to all items ----
+    if not is_locked and items:
+        trip_travelers = db.get_trip_delegation_members(trip_id_modal)
+        if trip_travelers:
+            if st.button(
+                f"➕ Apply {len(trip_travelers)} traveler(s) to all "
+                f"{len(items)} item(s)",
+                key=f"apply_travelers_all_{trip_id_modal}",
+                help="Assign every traveler on this trip to every item. "
+                "Useful when the whole delegation attends everything.",
+            ):
+                traveler_ids = [m["id"] for m in trip_travelers]
+                for it in items:
+                    if it.get("id"):
+                        db.set_item_delegation_members(it["id"], traveler_ids)
+                st.session_state[f"modal_items_{trip_id_modal}"] = (
+                    db.get_items_for_trip(trip_id_modal)
+                )
+                st.success(
+                    f"Assigned {len(traveler_ids)} traveler(s) to "
+                    f"{len(items)} item(s)."
+                )
+                st.rerun()
+        else:
+            st.caption(
+                "Add travelers in the trip header above to enable " "bulk assignment."
+            )
 
     sel_key = f"selected_item_ids_{trip_id_modal}"
     if sel_key not in st.session_state:
@@ -1802,14 +2436,31 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
             if n_sel:
                 if st.button(f"🗑️ Delete {n_sel} selected", type="primary",
                              key=f"bulk_del_items_{trip_id_modal}"):
-                    for iid in list(st.session_state[sel_key]):
-                        db.delete_itinerary_item(iid)
-                    st.session_state[sel_key] = set()
-                    st.session_state.pop(f"select_all_items_{trip_id_modal}", None)   # ← new
-                    st.session_state[f"modal_items_{trip_id_modal}"] = db.get_items_for_trip(trip_id_modal)
+                    st.session_state[
+                        f"confirm_bulk_del_items_{trip_id_modal}"
+                    ] = True
                     st.rerun()
             else:
                 st.caption("Tick items to enable bulk delete.")
+
+        if st.session_state.get(f"confirm_bulk_del_items_{trip_id_modal}", False):
+            def _bulk_del_items():
+                for iid in list(st.session_state[sel_key]):
+                    db.delete_itinerary_item(iid)
+                st.session_state[sel_key] = set()
+                st.session_state.pop(f"select_all_items_{trip_id_modal}", None)
+                st.session_state[f"modal_items_{trip_id_modal}"] = (
+                    db.get_items_for_trip(trip_id_modal)
+                )
+
+            render_delete_confirmation(
+                flag_key=f"confirm_bulk_del_items_{trip_id_modal}",
+                title=(
+                    f"Permanently delete "
+                    f"{len(st.session_state[sel_key])} selected item(s)?"
+                ),
+                on_confirm=_bulk_del_items,
+            )
 
     exec_tz_modal = (exec_profile_modal.get("timezone", "America/New_York")
                      if exec_profile_modal else "America/New_York")
@@ -1931,11 +2582,31 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
             if not is_locked:
                 if st.button("🗑️", key=f"modal_del_item_{trip_id_modal}_{idx}",
                              help="Delete this item"):
-                    if item.get("id"):
-                        db.delete_itinerary_item(item["id"])
-                        st.session_state[sel_key].discard(item["id"])
-                    st.session_state[f"modal_items_{trip_id_modal}"] = db.get_items_for_trip(trip_id_modal)
+                    st.session_state[
+                        f"confirm_del_item_{trip_id_modal}_{item['id']}"
+                    ] = True
                     st.rerun()
+
+        # --- Delete confirmation (renders below the row) ---
+        if (
+            not is_locked
+            and item.get("id")
+            and st.session_state.get(
+                f"confirm_del_item_{trip_id_modal}_{item['id']}", False
+            )
+        ):
+            def _del_item(iid=item["id"]):
+                db.delete_itinerary_item(iid)
+                st.session_state[sel_key].discard(iid)
+                st.session_state[f"modal_items_{trip_id_modal}"] = (
+                    db.get_items_for_trip(trip_id_modal)
+                )
+
+            render_delete_confirmation(
+                flag_key=f"confirm_del_item_{trip_id_modal}_{item['id']}",
+                title=f"Permanently delete item '{item['description']}'?",
+                on_confirm=_del_item,
+            )
 
         if (
             st.session_state.get(f"modal_editing_item_{trip_id_modal}_{idx}", False)
@@ -2140,10 +2811,12 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                         ]
 
                     # Delegation members
+                    delegation_options_modal = {}
                     if company_id_modal:
                         delegation_options_modal = get_trip_delegation_options(
                             trip_id_modal
                         )
+                    if delegation_options_modal:
                         current_delegation_ids = item.get("delegation_ids", [])
                         current_labels = [
                             label
@@ -2161,6 +2834,11 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                             for l in selected_delegation_modal
                         ]
                     else:
+                        st.info(
+                            "No travelers on this trip yet. Add them in the "
+                            "**Travelers** section of the trip header first, "
+                            "then come back here to assign them to this item."
+                        )
                         selected_delegation_ids_modal = []
 
                     # Local support contacts
@@ -2187,44 +2865,115 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                         selected_contact_ids_modal = []
 
                     # ---- Actions ----
+                    # ---- Actions ----
                     if st.form_submit_button("💾 Update Item"):
                         item_id_to_update = item.get("id")
-                        if item_id_to_update:
-                            db.update_itinerary_item(
-                                item_id_to_update,
-                                e_type,
-                                e_desc,
+                        if not item_id_to_update:
+                            st.warning("Cannot update — item has no DB id.")
+                        else:
+                            proceed = True
+
+                            # --- Time sanity check ---
+                            time_ok, time_msg = _validate_item_times(
                                 e_start.isoformat(),
                                 e_end.isoformat() if e_end else None,
-                                e_loc,
-                                e_cost,
-                                item.get("confirmation_code", ""),
-                                e_notes,
-                                1 if e_confirmed else 0,
-                                e_currency,
-                                timezone=e_timezone_value_modal,
-                                venue_id=e_venue_id_modal,
-                                cost_date=e_cost_date_modal.isoformat(),
                             )
-                            db.set_item_delegation_members(
-                                item_id_to_update,
-                                selected_delegation_ids_modal,
+                            if not time_ok:
+                                st.warning(f"⚠️ {time_msg}")
+                                if not st.checkbox(
+                                    "Save anyway? (end before start)",
+                                    key=(
+                                        f"force_edit_item_time_"
+                                        f"{trip_id_modal}_{idx}"
+                                    ),
+                                ):
+                                    proceed = False
+                                    st.info(
+                                        "Tick **Save anyway?** above and "
+                                        "click **💾 Update Item** again "
+                                        "to save."
+                                    )
+
+                            # --- Duplicate check ---
+                            dupes = _find_duplicate_items(
+                                st.session_state[
+                                    f"modal_items_{trip_id_modal}"
+                                ],
+                                e_desc,
+                                e_start.isoformat(),
+                                exclude_id=item_id_to_update,
                             )
-                            db.set_item_contacts(
-                                item_id_to_update,
-                                selected_contact_ids_modal,
-                            )
-                        # Reload from DB
-                        st.session_state[f"modal_items_{trip_id_modal}"] = (
-                            db.get_items_for_trip(trip_id_modal)
-                        )
-                        st.session_state[
-                            f"modal_editing_item_{trip_id_modal}_{idx}"
-                        ] = False
-                        st.success("✅ Item updated.")
-                        st.rerun()
+                            if dupes:
+                                st.warning(
+                                    "⚠️ Another item on this trip has the "
+                                    "same description and start time:"
+                                )
+                                for d in dupes:
+                                    st.write(
+                                        f"- {d['description']} · "
+                                        f"{d['datetime_start'][:16].replace('T', ' ')}"
+                                    )
+                                if not st.checkbox(
+                                    "Update anyway?",
+                                    key=f"force_edit_item_{trip_id_modal}_{idx}",
+                                ):
+                                    proceed = False
+                                    st.info(
+                                        "Tick **Update anyway?** above and "
+                                        "click **💾 Update Item** again to "
+                                        "save."
+                                    )
+
+                            if proceed:
+                                db.update_itinerary_item(
+                                    item_id_to_update,
+                                    e_type,
+                                    e_desc,
+                                    e_start.isoformat(),
+                                    e_end.isoformat() if e_end else None,
+                                    e_loc,
+                                    e_cost,
+                                    item.get("confirmation_code", ""),
+                                    e_notes,
+                                    1 if e_confirmed else 0,
+                                    e_currency,
+                                    timezone=e_timezone_value_modal,
+                                    venue_id=e_venue_id_modal,
+                                    cost_date=e_cost_date_modal.isoformat(),
+                                )
+                                db.set_item_delegation_members(
+                                    item_id_to_update,
+                                    selected_delegation_ids_modal,
+                                )
+                                db.set_item_contacts(
+                                    item_id_to_update,
+                                    selected_contact_ids_modal,
+                                )
+                                st.session_state.pop(
+                                    f"force_edit_item_{trip_id_modal}_{idx}",
+                                    None,
+                                )
+                                st.session_state.pop(
+                                    f"force_edit_item_time_"
+                                    f"{trip_id_modal}_{idx}",
+                                    None,
+                                )
+                                st.session_state[f"modal_items_{trip_id_modal}"] = (
+                                    db.get_items_for_trip(trip_id_modal)
+                                )
+                                st.session_state[
+                                    f"modal_editing_item_{trip_id_modal}_{idx}"
+                                ] = False
+                                st.success("✅ Item updated.")
+                                st.rerun()
 
                     if st.form_submit_button("❌ Cancel"):
+                        st.session_state.pop(
+                            f"force_edit_item_{trip_id_modal}_{idx}", None
+                        )
+                        st.session_state.pop(
+                            f"force_edit_item_time_{trip_id_modal}_{idx}", None
+                        )
                         st.session_state[
                             f"modal_editing_item_{trip_id_modal}_{idx}"
                         ] = False
@@ -2312,153 +3061,91 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
 
             if not is_locked:
                 if st.form_submit_button("➕ Add Item"):
-                    if n_desc and n_start:
-                        new_item_id = db.add_itinerary_item(
-                            trip_id_modal,
-                            n_type,
-                            n_desc,
+                    if not (n_desc and n_start):
+                        st.warning("Description and Start Time are required.")
+                    else:
+                        proceed = True
+
+                        # --- Time sanity check ---
+                        time_ok, time_msg = _validate_item_times(
                             n_start.isoformat(),
                             n_end.isoformat() if n_end else None,
-                            n_loc,
-                            n_cost,
-                            "",
-                            n_notes,
-                            1 if n_confirmed else 0,
-                            n_currency,
-                            timezone=n_timezone_value_modal,
-                            venue_id=None,
-                            cost_date=n_cost_date.isoformat(),
                         )
-                        if selected_delegation_ids_modal_new:
-                            db.set_item_delegation_members(
-                                new_item_id, selected_delegation_ids_modal_new
-                            )
-                        if selected_contact_ids_modal_new:
-                            db.set_item_contacts(
-                                new_item_id, selected_contact_ids_modal_new
-                            )
-                        # Reload from DB so the list reflects reality
-                        st.session_state[f"modal_items_{trip_id_modal}"] = (
-                            db.get_items_for_trip(trip_id_modal)
-                        )
-                        st.success("✅ Item added.")
-                        st.rerun()
-                    else:
-                        st.warning("Description and Start Time are required.")
-
-    # Delegation
-    st.write("**👥 Delegation**")
-    if company_id_modal:
-
-        # ---- Inline add: new person → roster + assign to this trip ----
-        if not is_locked:
-            with st.expander("➕ Add a new person to this company's roster",
-                             expanded=False):
-                with st.form(
-                    key=f"modal_inline_add_delegation_{trip_id_modal}"
-                ):
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        mdm_name = st.text_input(
-                            "Name*",
-                            key=f"modal_dm_name_{trip_id_modal}",
-                        )
-                        mdm_role = st.text_input(
-                            "Role",
-                            key=f"modal_dm_role_{trip_id_modal}",
-                        )
-                        mdm_phone = st.text_input(
-                            "Phone",
-                            key=f"modal_dm_phone_{trip_id_modal}",
-                        )
-                    with col_b:
-                        mdm_email = st.text_input(
-                            "Email",
-                            key=f"modal_dm_email_{trip_id_modal}",
-                        )
-                        mdm_country = st.selectbox(
-                            "Country (optional)",
-                            options=[""] + country_list,
-                            key=f"modal_dm_country_{trip_id_modal}",
-                        )
-                        mdm_type = st.selectbox(
-                            "Type",
-                            options=["Staff", "Partner", "Local Support",
-                                     "Emergency", "Other"],
-                            index=0,
-                            key=f"modal_dm_type_{trip_id_modal}",
-                        )
-                    if st.form_submit_button("➕ Add & assign to this trip"):
-                        if not mdm_name:
-                            st.warning("Name is required.")
-                        else:
-                            dupes = db.find_duplicate_contacts(
-                                company_id_modal,
-                                name=mdm_name,
-                                email=mdm_email or None,
-                                phone=mdm_phone or None,
-                            )
-                            if dupes:
-                                st.warning(
-                                    "⚠️ A contact with the same name, email, "
-                                    "or phone already exists in this company:"
-                                )
-                                for d in dupes:
-                                    st.write(
-                                        f"- {d['name']} ({d.get('role','')})"
-                                    )
+                        if not time_ok:
+                            st.warning(f"⚠️ {time_msg}")
+                            if not st.checkbox(
+                                "Save anyway? (end before start)",
+                                key=f"force_add_modal_item_time_{trip_id_modal}",
+                            ):
+                                proceed = False
                                 st.info(
-                                    "Add them from the list below instead. "
-                                    "To force-add a duplicate, use the "
-                                    "**👥 Contacts** tab."
+                                    "Tick **Save anyway?** above and click "
+                                    "**➕ Add Item** again to save."
                                 )
-                            else:
-                                new_id = db.add_contact(
-                                    company_id=company_id_modal,
-                                    name=mdm_name,
-                                    role=mdm_role or None,
-                                    phone=mdm_phone or None,
-                                    email=mdm_email or None,
-                                    country=mdm_country or None,
-                                    type=mdm_type,
-                                )
-                                # Assign to this trip immediately
-                                db.add_trip_delegation(trip_id_modal, new_id)
-                                # Force the multiselect to re-read from DB
-                                st.session_state.pop(
-                                    f"modal_trip_delegation_{trip_id_modal}",
-                                    None,
-                                )
-                                st.success(
-                                    f"✅ {mdm_name} added and assigned to this trip."
-                                )
-                                st.rerun()
 
-        all_company_contacts = db.get_contacts_for_delegation(company_id_modal)
+                        # --- Duplicate check ---
+                        dupes = _find_duplicate_items(
+                            st.session_state[f"modal_items_{trip_id_modal}"],
+                            n_desc,
+                            n_start.isoformat(),
+                        )
+                        if dupes:
+                            st.warning(
+                                "⚠️ This trip already has an item with the "
+                                "same description and start time:"
+                            )
+                            for d in dupes:
+                                st.write(
+                                    f"- {d['description']} · "
+                                    f"{d['datetime_start'][:16].replace('T', ' ')}"
+                                )
+                            if not st.checkbox(
+                                "Add anyway?",
+                                key=f"force_add_modal_item_{trip_id_modal}",
+                            ):
+                                proceed = False
+                                st.info(
+                                    "Tick **Add anyway?** above and click "
+                                    "**➕ Add Item** again to save the "
+                                    "duplicate."
+                                )
 
-        contact_options = {}
-        for c in all_company_contacts:
-            role = c.get("role", "") or ""
-            suffix = " · freelance" if not c.get("company_id") else ""
-            label = f"{c['name']} ({role}){suffix}".strip()
-            contact_options[label] = c["id"]
-        existing_trip_delegation = db.get_trip_delegation_members(trip_id_modal)
-        existing_ids = [m["id"] for m in existing_trip_delegation]
-        existing_labels = [label for label, cid in contact_options.items() if cid in existing_ids]
-        selected_labels = st.multiselect("Travelers on this trip",
-            options=list(contact_options.keys()), default=existing_labels,
-            key=f"modal_trip_delegation_{trip_id_modal}", disabled=is_locked)
-        if not is_locked:
-            if st.button("💾 Save Delegation", key=f"save_trip_delegation_{trip_id_modal}"):
-                db.set_trip_delegation(trip_id_modal, [contact_options[l] for l in selected_labels])
-                st.success("Delegation updated.")
-                st.rerun()
-        st.caption(
-            "Need someone not in the list? Use **➕ Add a new person to this "
-            "company's roster** above, or manage everyone in the **👥 Contacts** tab."
-        )
-    else:
-        st.warning("No company associated with this trip.")
+                        if proceed:
+                            new_item_id = db.add_itinerary_item(
+                                trip_id_modal,
+                                n_type,
+                                n_desc,
+                                n_start.isoformat(),
+                                n_end.isoformat() if n_end else None,
+                                n_loc,
+                                n_cost,
+                                "",
+                                n_notes,
+                                1 if n_confirmed else 0,
+                                n_currency,
+                                timezone=n_timezone_value_modal,
+                                venue_id=None,
+                                cost_date=n_cost_date.isoformat(),
+                            )
+                            if selected_delegation_ids_modal_new:
+                                db.set_item_delegation_members(
+                                    new_item_id, selected_delegation_ids_modal_new
+                                )
+                            if selected_contact_ids_modal_new:
+                                db.set_item_contacts(
+                                    new_item_id, selected_contact_ids_modal_new
+                                )
+                            st.session_state.pop(
+                                f"force_add_modal_item_{trip_id_modal}", None
+                            )
+                            st.session_state.pop(
+                                f"force_add_modal_item_time_{trip_id_modal}", None
+                            )
+                            st.session_state[f"modal_items_{trip_id_modal}"] = (
+                                db.get_items_for_trip(trip_id_modal)
+                            )
+                            st.success("✅ Item added.")
+                            st.rerun()
 
     # ---- Emergency Info ----
     st.write("**🚨 Emergency Info**")
@@ -3331,7 +4018,13 @@ with tab1:
         trip_exec_label = st.selectbox("👤 Executive for this Trip",
             options=list(exec_dropdown_options.keys()), key="create_trip_exec")
         trip_exec_id = exec_dropdown_options[trip_exec_label]
-
+        # Resolve company for the chosen trip executive. Used by the
+        # local-support and delegation pickers below (previously this name
+        # leaked in from other scopes — NameError at runtime).
+        _trip_exec_profile = db.get_executive_profile(trip_exec_id)
+        company_id = (
+            _trip_exec_profile.get("company_id") if _trip_exec_profile else None
+        )
         trip_purpose = st.text_input("Trip Name / Purpose (e.g., 'Q3 Sales Tour')",
             key="create_trip_purpose")
 
@@ -3394,7 +4087,7 @@ with tab1:
             "**Home** converts every item to the executive's home timezone. "
             "**Destination** shows each item in its own assigned timezone."
         )
-
+        # -------here------
         if "create_trip_stops" not in st.session_state:
             st.session_state["create_trip_stops"] = []
 
@@ -3489,6 +4182,7 @@ with tab1:
                                     st.session_state[f"create_editing_stop_{idx}"] = False
                                     st.rerun()
 
+        # --- Add Destination Stop expander (always visible) ---
         with st.expander("➕ Add Destination Stop"):
             col_city, col_country = st.columns(2)
             with col_city:
@@ -3506,54 +4200,259 @@ with tab1:
                 new_start = st.date_input("Start Date*", value=datetime.now(), key="create_new_stop_start")
             with col_end:
                 new_end = st.date_input("End Date*", value=datetime.now(), key="create_new_stop_end")
-            if st.button("➕ Add Stop", key="create_add_stop_button"):
-                if new_city and new_start and new_end:
-                    st.session_state["create_trip_stops"].append({
-                        "city": new_city, "country": new_country, "region": new_region,
-                        "start_date": new_start.isoformat(), "end_date": new_end.isoformat(),
-                        "notes": new_stop_notes})
-                    st.success(f"Added: {new_city}" + (f", {new_country}" if new_country else ""))
-                    st.rerun()
-                else:
-                    st.warning("City, Start Date, and End Date are required.")
 
-        company_id = profile.get("company_id")
-        st.subheader("📋 Contacts for This Trip")
+            if st.button("➕ Add Stop", key="create_add_stop_button"):
+                if not (new_city and new_start and new_end):
+                    st.warning("City, Start Date, and End Date are required.")
+                else:
+                    new_start_iso = new_start.isoformat()
+                    new_end_iso = new_end.isoformat()
+                    same_city, other_city = _find_stop_conflicts(
+                        st.session_state["create_trip_stops"],
+                        new_city,
+                        new_start_iso,
+                        new_end_iso,
+                    )
+
+                    proceed = True
+
+                    if other_city:
+                        st.error(
+                            "⚠️ These dates overlap with stops in a "
+                            "**different city** — you can't be in two "
+                            "places at once:"
+                        )
+                        for c in other_city:
+                            st.write(
+                                f"- {c['city']} · "
+                                f"{fmt_date(c['start_date'])} → "
+                                f"{fmt_date(c['end_date'])}"
+                            )
+                        if not st.checkbox(
+                            "Add anyway? (dates overlap across cities)",
+                            key="force_add_create_stop_other_city",
+                        ):
+                            proceed = False
+                            st.info(
+                                "Tick **Add anyway?** above and click "
+                                "**➕ Add Stop** again — only do this if "
+                                "the overlap is intentional."
+                            )
+
+                    elif same_city:
+                        st.warning(
+                            f"⚠️ You already have a stop in **{new_city}** "
+                            "with overlapping dates:"
+                        )
+                        for c in same_city:
+                            st.write(
+                                f"- {c['city']} · "
+                                f"{fmt_date(c['start_date'])} → "
+                                f"{fmt_date(c['end_date'])}"
+                            )
+                        if not st.checkbox("Add anyway?", key="force_add_create_stop"):
+                            proceed = False
+                            st.info(
+                                "Tick **Add anyway?** above and click "
+                                "**➕ Add Stop** again — normal if you "
+                                "revisit this city on a separate leg."
+                            )
+
+                    if proceed:
+                        st.session_state["create_trip_stops"].append(
+                            {
+                                "city": new_city,
+                                "country": new_country,
+                                "region": new_region,
+                                "start_date": new_start_iso,
+                                "end_date": new_end_iso,
+                                "notes": new_stop_notes,
+                            }
+                        )
+                        st.session_state.pop("force_add_create_stop", None)
+                        st.session_state.pop("force_add_create_stop_other_city", None)
+                        st.success(
+                            f"Added: {new_city}"
+                            + (f", {new_country}" if new_country else "")
+                        )
+                        st.rerun()
+
+        # ---- Weather preview for planned stops ----
+        _create_stops_wx = st.session_state.get("create_trip_stops", [])
+        if _create_stops_wx:
+            st.write("**🌦️ Weather Preview**")
+            st.caption(
+                "Weather for the dates you've planned at each stop. "
+                "Forecasts cover up to 16 days ahead; trips further out "
+                "fall back to last year's data for the same dates."
+            )
+            for s_idx, stop in enumerate(_create_stops_wx):
+                stop_city = (stop.get("city") or "").strip()
+                stop_start = stop.get("start_date")
+                stop_end = stop.get("end_date")
+                if not (stop_city and stop_start and stop_end):
+                    continue
+
+                header = (
+                    f"🌦️ {stop_city} · "
+                    f"{fmt_date(stop_start)} → {fmt_date(stop_end)}"
+                )
+                cache_key = f"weather_create_{s_idx}"
+
+                with st.expander(header, expanded=False):
+                    if st.button(
+                        "Fetch weather",
+                        key=f"fetch_weather_create_{s_idx}",
+                        help=f"Fetch weather for {stop_city} across the planned dates",
+                    ):
+                        with st.spinner(f"Fetching weather for {stop_city}..."):
+                            w = weather.get_weather_for_range(
+                                stop_city, stop_start, stop_end
+                            )
+                        st.session_state[cache_key] = w
+                        st.rerun()
+
+                    if cache_key not in st.session_state:
+                        st.caption(
+                            "Click **Fetch weather** to load the forecast "
+                            "for these dates."
+                        )
+                        continue
+
+                    cached = st.session_state.get(cache_key)
+                    if not cached:
+                        st.info(
+                            f"No weather data available for {stop_city} on "
+                            f"{fmt_date(stop_start)} → {fmt_date(stop_end)}."
+                        )
+                        continue
+
+                    if cached.get("is_historical_fallback"):
+                        st.warning(
+                            "📅 Forecast not yet available for these dates. "
+                            "Showing typical conditions from the same dates "
+                            f"last year ({fmt_date(cached.get('start_date'))} → "
+                            f"{fmt_date(cached.get('end_date'))})."
+                        )
+                    else:
+                        st.caption(
+                            f"📍 {cached['location']} · "
+                            f"fetched {fmt_datetime(cached['fetched_at'])}"
+                        )
+
+                    cur = cached.get("current")
+                    if cur:
+                        col_w1, col_w2, col_w3, col_w4 = st.columns(4)
+                        with col_w1:
+                            st.metric("Now", f"{cur['temp']}°C", cur["icon"])
+                        with col_w2:
+                            st.metric("Humidity", f"{cur['humidity']}%")
+                        with col_w3:
+                            st.metric("Wind", f"{cur['wind']} km/h")
+                        with col_w4:
+                            st.caption(cur["desc"])
+
+                    daily = cached.get("daily") or []
+                    if daily:
+                        for d in daily:
+                            col_d1, col_d2, col_d3, col_d4 = st.columns([2, 1, 1, 1])
+                            with col_d1:
+                                st.write(f"{d['icon']} {fmt_date(d['date'])}")
+                            with col_d2:
+                                st.write(f"**{d['max']}°** / {d['min']}°")
+                            with col_d3:
+                                st.write(f"☔ {d['precip']} mm")
+                            with col_d4:
+                                st.write(f"UV {d['uv']}")
+                    else:
+                        st.caption("No daily records in this range.")
+
+        st.subheader("📋 Local Support for This Trip")
+        st.caption(
+            "People who help at each stop — drivers, fixers, local assistants. "
+            "They appear in the travel pack's Local Support section."
+        )
+
+        # Country filter still narrows the list
         conn = sqlite3.connect(db.DB_PATH, timeout=30)
         try:
             c = conn.cursor()
-            c.execute("SELECT DISTINCT country FROM contacts WHERE country IS NOT NULL AND country != '' ORDER BY country")
+            c.execute(
+                "SELECT DISTINCT country FROM contacts "
+                "WHERE country IS NOT NULL AND country != '' "
+                "ORDER BY country"
+            )
             countries = [row[0] for row in c.fetchall()]
         finally:
             conn.close()
         country_options = ["All Countries"] + countries
-        selected_country = st.selectbox("Filter contacts by country", options=country_options,
-            index=0, key="create_contact_country_filter")
-        filter_country = None if selected_country == "All Countries" else selected_country
+        selected_country = st.selectbox(
+            "Filter by country",
+            options=country_options,
+            index=0,
+            key="create_contact_country_filter",
+        )
+        filter_country = (
+            None if selected_country == "All Countries" else selected_country
+        )
 
-        all_contacts = db.get_contacts(active_only=True, country=filter_country)
-        if all_contacts:
-            contact_options = {}
-            for contact in all_contacts:
-                comp = (
-                    db.get_company(contact["company_id"])
-                    if contact.get("company_id")
-                    else None
-                )
-                if comp:
-                    label = (
-                        f"{contact['name']} ({contact.get('role','')}) – {comp['name']}"
-                    )
-                else:
-                    label = f"{contact['name']} ({contact.get('role','')}) · freelance"
-                contact_options[label] = contact["id"]
-            selected_contact_labels = st.multiselect(
-                "Select local support contacts to include in the travel pack",
-                options=list(contact_options.keys()), default=[], key="create_trip_contacts")
-            st.session_state["create_trip_contact_ids"] = [
-                contact_options[label] for label in selected_contact_labels]
+        # Build the options list from the shared function
+        if company_id:
+            contact_options = get_local_support_options(company_id)
+            # If a country filter is active, narrow the list
+            if filter_country:
+                allowed_ids = {
+                    c["id"]
+                    for c in db.get_contacts_for_local_support(company_id)
+                    if c.get("country") == filter_country
+                }
+                contact_options = {
+                    label: cid
+                    for label, cid in contact_options.items()
+                    if cid in allowed_ids
+                }
         else:
-            st.warning("No contacts found for the selected country.")
+            contact_options = {}
+
+        if contact_options:
+            # Pre-select company defaults
+            default_ids = set(db.get_company_default_contacts(company_id))
+            current_ids = st.session_state.get("create_trip_contact_ids", [])
+            if current_ids:
+                pre_selected = [
+                    label
+                    for label, cid in contact_options.items()
+                    if cid in current_ids
+                ]
+            else:
+                pre_selected = [
+                    label
+                    for label, cid in contact_options.items()
+                    if cid in default_ids
+                ]
+
+            selected_contact_labels = st.multiselect(
+                "Local support contacts for this trip",
+                options=list(contact_options.keys()),
+                default=pre_selected,
+                key="create_trip_contacts",
+            )
+            st.session_state["create_trip_contact_ids"] = [
+                contact_options[label] for label in selected_contact_labels
+            ]
+        else:
+            if filter_country:
+                st.warning(
+                    f"No local support contacts match {filter_country}. "
+                    "Try **All Countries**, or add contacts in the "
+                    "**👥 Contacts** tab."
+                )
+            else:
+                st.info(
+                    "No contacts available for this company yet. "
+                    "Add them in the **👥 Contacts** tab, or use the "
+                    "inline add below."
+                )
             st.session_state["create_trip_contact_ids"] = []
 
         st.subheader("👥 Delegation")
@@ -3643,10 +4542,26 @@ with tab1:
                 label = f"{c['name']} ({role}){suffix}".strip()
                 contact_options[label] = c["id"]
             current_ids = st.session_state.get("create_trip_delegation_ids", [])
-            current_labels = [label for label, cid in contact_options.items() if cid in current_ids]
-            selected_labels = st.multiselect("Select delegation members for this trip",
-                options=list(contact_options.keys()), default=current_labels,
-                key="create_trip_delegation_multiselect")
+            if not current_ids:
+                # Nothing picked yet — pre-select company defaults
+                default_ids = set(db.get_company_default_contacts(company_id))
+                current_labels = [
+                    label
+                    for label, cid in contact_options.items()
+                    if cid in default_ids
+                ]
+            else:
+                current_labels = [
+                    label
+                    for label, cid in contact_options.items()
+                    if cid in current_ids
+                ]
+            selected_labels = st.multiselect(
+                "Travelers on this trip",
+                options=list(contact_options.keys()),
+                default=current_labels,
+                key="create_trip_delegation_multiselect",
+            )
             st.session_state["create_trip_delegation_ids"] = [
                 contact_options[label] for label in selected_labels]
             if not contact_options:
@@ -3823,9 +4738,24 @@ with tab1:
                 with col_i5:
                     if st.button("🗑️", key=f"create_del_item_{idx}",
                                  help="Delete this item"):
-                        st.session_state["create_trip_items"].pop(idx)
-                        st.session_state["create_selected_item_indices"] = set()
+                        st.session_state[
+                            f"confirm_del_create_item_{idx}"
+                        ] = True
                         st.rerun()
+
+                # --- Delete confirmation for this row ---
+                if st.session_state.get(
+                    f"confirm_del_create_item_{idx}", False
+                ):
+                    def _del_create_item(i=idx):
+                        st.session_state["create_trip_items"].pop(i)
+                        st.session_state["create_selected_item_indices"] = set()
+
+                    render_delete_confirmation(
+                        flag_key=f"confirm_del_create_item_{idx}",
+                        title=f"Remove item '{item['description']}'?",
+                        on_confirm=_del_create_item,
+                    )
 
                 if st.session_state.get(f"create_editing_item_{idx}", False):
                     with st.expander(f"Edit Item: {item['description']}", expanded=True):
@@ -3974,24 +4904,100 @@ with tab1:
                                 e_contact_ids = []
 
                             if st.form_submit_button("💾 Update Item"):
-                                st.session_state["create_trip_items"][idx] = {
-                                    "item_type": e_type, "description": e_desc,
-                                    "datetime_start": e_start.isoformat(),
-                                    "datetime_end": (e_end.isoformat() if e_end else None),
-                                    "location": e_loc, "cost": e_cost, "cost_currency": e_currency,
-                                    "is_confirmed": 1 if e_confirmed else 0,
-                                    "confirmation_code": item.get("confirmation_code", ""),
-                                    "notes": e_notes,
-                                    "delegation_ids": e_delegation_ids,
-                                    "contact_ids": e_contact_ids,
-                                    "timezone": e_timezone_value,
-                                    "venue_id": e_venue_id,
-                                    "cost_date": e_cost_date.isoformat()}
-                                st.session_state[f"create_editing_item_{idx}"] = False
-                                st.rerun()
+                                proceed = True
+
+                                # --- Time sanity check ---
+                                time_ok, time_msg = _validate_item_times(
+                                    e_start.isoformat(),
+                                    e_end.isoformat() if e_end else None,
+                                )
+                                if not time_ok:
+                                    st.warning(f"⚠️ {time_msg}")
+                                    if not st.checkbox(
+                                        "Save anyway? (end before start)",
+                                        key=f"force_edit_create_item_time_{idx}",
+                                    ):
+                                        proceed = False
+                                        st.info(
+                                            "Tick **Save anyway?** above "
+                                            "and click **💾 Update Item** "
+                                            "again to save."
+                                        )
+
+                                # --- Duplicate check against other rows ---
+                                dupes = _find_duplicate_items(
+                                    [
+                                        it
+                                        for j, it in enumerate(
+                                            st.session_state["create_trip_items"]
+                                        )
+                                        if j != idx
+                                    ],
+                                    e_desc,
+                                    e_start.isoformat(),
+                                )
+                                if dupes:
+                                    st.warning(
+                                        "⚠️ Another item in this trip has "
+                                        "the same description and start "
+                                        "time:"
+                                    )
+                                    for d in dupes:
+                                        st.write(
+                                            f"- {d['description']} · "
+                                            f"{d['datetime_start'][:16].replace('T', ' ')}"
+                                        )
+                                    if not st.checkbox(
+                                        "Update anyway?",
+                                        key=f"force_edit_create_item_{idx}",
+                                    ):
+                                        proceed = False
+                                        st.info(
+                                            "Tick **Update anyway?** above "
+                                            "and click **💾 Update Item** "
+                                            "again to save."
+                                        )
+
+                                if proceed:
+                                    st.session_state["create_trip_items"][idx] = {
+                                        "item_type": e_type,
+                                        "description": e_desc,
+                                        "datetime_start": e_start.isoformat(),
+                                        "datetime_end": (
+                                            e_end.isoformat() if e_end else None
+                                        ),
+                                        "location": e_loc,
+                                        "cost": e_cost,
+                                        "cost_currency": e_currency,
+                                        "is_confirmed": 1 if e_confirmed else 0,
+                                        "confirmation_code": item.get(
+                                            "confirmation_code", ""
+                                        ),
+                                        "notes": e_notes,
+                                        "delegation_ids": e_delegation_ids,
+                                        "contact_ids": e_contact_ids,
+                                        "timezone": e_timezone_value,
+                                        "venue_id": e_venue_id,
+                                        "cost_date": e_cost_date.isoformat(),
+                                    }
+                                    st.session_state.pop(
+                                        f"force_edit_create_item_time_{idx}", None
+                                    )
+                                    st.session_state.pop(
+                                        f"force_edit_create_item_{idx}", None
+                                    )
+                                    st.session_state[
+                                        f"create_editing_item_{idx}"
+                                    ] = False
+                                    st.rerun()
+
+
                             if st.form_submit_button("❌ Cancel"):
                                 st.session_state[f"create_editing_item_{idx}"] = False
                                 st.rerun()
+
+
+
 
         # ---- Inline add: new venue → library ----
         with st.expander("➕ Add a new venue to the library", expanded=False):
@@ -4114,22 +5120,80 @@ with tab1:
                     selected_contact_ids = []
 
                 if st.form_submit_button("➕ Add Item"):
-                    if n_desc and n_start:
-                        st.session_state["create_trip_items"].append({
-                            "item_type": n_type, "description": n_desc,
-                            "datetime_start": n_start.isoformat(),
-                            "datetime_end": (n_end.isoformat() if n_end else None),
-                            "location": n_loc, "cost": n_cost, "cost_currency": n_currency,
-                            "is_confirmed": 1 if n_confirmed else 0,
-                            "confirmation_code": "", "notes": n_notes,
-                            "delegation_ids": selected_delegation_ids,
-                            "contact_ids": selected_contact_ids,
-                            "timezone": n_timezone_value,
-                            "venue_id": n_venue_id,
-                            "cost_date": n_cost_date.isoformat()})
-                        st.rerun()
-                    else:
+                    if not (n_desc and n_start):
                         st.warning("Description and Start Time are required.")
+                    else:
+                        proceed = True
+
+                        # --- Time sanity check ---
+                        time_ok, time_msg = _validate_item_times(
+                            n_start.isoformat(),
+                            n_end.isoformat() if n_end else None,
+                        )
+                        if not time_ok:
+                            st.warning(f"⚠️ {time_msg}")
+                            if not st.checkbox(
+                                "Save anyway? (end before start)",
+                                key="force_add_create_item_time",
+                            ):
+                                proceed = False
+                                st.info(
+                                    "Tick **Save anyway?** above and click "
+                                    "**➕ Add Item** again to save."
+                                )
+
+                        # --- Duplicate check ---
+                        dupes = _find_duplicate_items(
+                            st.session_state["create_trip_items"],
+                            n_desc,
+                            n_start.isoformat(),
+                        )
+                        if dupes:
+                            st.warning(
+                                "⚠️ You already have an item with the same "
+                                "description and start time:"
+                            )
+                            for d in dupes:
+                                st.write(
+                                    f"- {d['description']} · "
+                                    f"{d['datetime_start'][:16].replace('T', ' ')}"
+                                )
+                            if not st.checkbox(
+                                "Add anyway?",
+                                key="force_add_create_item",
+                            ):
+                                proceed = False
+                                st.info(
+                                    "Tick **Add anyway?** above and click "
+                                    "**➕ Add Item** again to save the "
+                                    "duplicate."
+                                )
+
+                        if proceed:
+                            st.session_state["create_trip_items"].append(
+                                {
+                                    "item_type": n_type,
+                                    "description": n_desc,
+                                    "datetime_start": n_start.isoformat(),
+                                    "datetime_end": (
+                                        n_end.isoformat() if n_end else None
+                                    ),
+                                    "location": n_loc,
+                                    "cost": n_cost,
+                                    "cost_currency": n_currency,
+                                    "is_confirmed": 1 if n_confirmed else 0,
+                                    "confirmation_code": "",
+                                    "notes": n_notes,
+                                    "delegation_ids": selected_delegation_ids,
+                                    "contact_ids": selected_contact_ids,
+                                    "timezone": n_timezone_value,
+                                    "venue_id": n_venue_id,
+                                    "cost_date": n_cost_date.isoformat(),
+                                }
+                            )
+                            st.session_state.pop("force_add_create_item", None)
+                            st.session_state.pop("force_add_create_item_time", None)
+                            st.rerun()
 
         col_clear, col_create = st.columns(2)
         with col_clear:
@@ -4691,12 +5755,10 @@ with tab3:
 
                 if st.session_state.get(f"confirm_del_comp_{comp_id}", False):
 
-                    def _del_company(cid=comp_id, cname=full_comp["name"]):
-                        ok, msg = db.delete_company(cid)
-                        if ok:
-                            st.success(msg)
-                        else:
-                            st.error(msg)
+                    def _del_company(cid=comp_id):
+                        # Return (ok, msg) so render_delete_confirmation can
+                        # display a refusal without it being wiped by rerun.
+                        return db.delete_company(cid)
 
                     render_delete_confirmation(
                         flag_key=f"confirm_del_comp_{comp_id}",
@@ -4756,7 +5818,6 @@ with tab3:
                             st.rerun()
 
                 st.divider()
-
 
 # =========================================================
 # TAB: CONTACTS
@@ -5033,14 +6094,21 @@ with tab4:
                                     or "Local Support",
                                 )
                                 added += 1
-                            st.success(
-                                f"✅ Imported {added} contacts. Skipped {skipped} duplicates."
+                            # Stash the result so it survives st.rerun()
+                            st.session_state["_contact_import_result"] = (
+                                f"✅ Imported {added} contact(s). "
+                                f"Skipped {skipped} duplicate(s)."
                             )
                             st.rerun()
                     else:
                         st.warning(f"CSV must have columns: {', '.join(expected)}")
                 except Exception as e:
                     st.error(f"Import failed: {e}")
+
+            # Show the import result from the previous run (survives rerun)
+            _imp_msg = st.session_state.pop("_contact_import_result", None)
+            if _imp_msg:
+                st.success(_imp_msg)
 
         # Precompute default-contact IDs per company (one query per company)
         default_ids_by_company = {}
@@ -5064,219 +6132,245 @@ with tab4:
             t = c.get("type") or "Other"
             grouped.setdefault(t, []).append(c)
 
+        # --- Compact grouped list -------------------------------------
         for grp_type in TYPE_ORDER:
             group = grouped.get(grp_type, [])
             if not group:
                 continue
             icon = TYPE_ICONS.get(grp_type, "📌")
-            # Emergency is expanded by default; other groups stay collapsed
-            with st.expander(
-                f"{icon} {grp_type} ({len(group)})", expanded=(grp_type == "Emergency")
+            st.markdown(f"##### {icon} {grp_type} · {len(group)}")
+
+            # Column header row (once per group)
+            hdr = st.columns([2.2, 1.5, 2.2, 2.2, 0.5, 0.5])
+            for col, label in zip(
+                hdr, ["Name", "Company", "Contact", "Location / Tags", "", ""]
             ):
-                for contact in group:
-                    cid = contact["id"]
-                    comp_name = (
-                        db.get_company(contact["company_id"])["name"]
-                        if contact.get("company_id")
-                        else "—"
-                    )
-                    is_default = contact.get(
-                        "company_id"
-                    ) and cid in default_ids_by_company.get(
-                        contact["company_id"], set()
-                    )
+                with col:
+                    st.caption(label)
 
-                    # Dark saturated hues — AA contrast with white text on any theme
-                    type_color_map = {
-                        "Emergency": "#991b1b",
-                        "Local Support": "#1e40af",
-                        "Staff": "#166534",
-                        "Partner": "#92400e",
-                        "Other": "#475569",
-                    }
-                    contact_type = contact.get("type", "Local Support")
-                    badge_color = type_color_map.get(contact_type, "#94a3b8")
+            for contact in group:
+                cid = contact["id"]
+                comp_name = (
+                    db.get_company(contact["company_id"])["name"]
+                    if contact.get("company_id")
+                    else "—"
+                )
+                is_default = contact.get(
+                    "company_id"
+                ) and cid in default_ids_by_company.get(contact["company_id"], set())
 
-                    col1, col2, col3, col4, col5, col6 = st.columns(
-                        [1.5, 1.5, 1.5, 1.5, 0.8, 0.8]
-                    )
+                cols = st.columns([2.2, 1.5, 2.2, 2.2, 0.5, 0.5])
 
-                    with col1:
-                        star = " ⭐" if is_default else ""
-                        st.write(f"**{contact['name']}**{star}")
-                        if is_default:
-                            st.caption("Default for this company")
-                        if not contact.get("is_active", 1):
-                            st.caption("⚠️ Inactive")
-                        if contact.get("role"):
-                            st.caption(f"👤 {contact['role']}")
-                        st.markdown(
-                            f"<span style='background:{badge_color};color:white;"
-                            f"padding:3px 10px;border-radius:12px;font-size:12px;"
-                            f"font-weight:500;display:inline-block;'>"
-                            f"{contact_type}</span>",
-                            unsafe_allow_html=True,
+                # ---- Name (+ markers, + role inline) ----
+                with cols[0]:
+                    line = f"**{contact['name']}**"
+                    if is_default:
+                        line += " ⭐"
+                    if not contact.get("is_active", 1):
+                        line += " ⚠️"
+                    if contact.get("role"):
+                        line += (
+                            f" <span style='color:#8a8a8a;font-size:0.85em;'>"
+                            f"· {contact['role']}</span>"
                         )
-                    with col2:
-                        st.write(f"🏢 {comp_name}")
-                    with col3:
-                        if contact.get("phone"):
-                            st.write(f"📞 {contact['phone']}")
-                        if contact.get("email"):
-                            st.write(f"✉️ {contact['email']}")
-                    with col4:
-                        if contact.get("country") or contact.get("city"):
-                            location = (
-                                f"{contact.get('city', '')}"
-                                f"{', ' if contact.get('city') and contact.get('country') else ''}"
-                                f"{contact.get('country', '')}"
+                    st.markdown(line, unsafe_allow_html=True)
+
+                # ---- Company ----
+                with cols[1]:
+                    st.markdown(comp_name)
+
+                # ---- Phone / email (stacked) ----
+                with cols[2]:
+                    bits = []
+                    if contact.get("phone"):
+                        bits.append(f"📞 {contact['phone']}")
+                    if contact.get("email"):
+                        bits.append(f"✉️ {contact['email']}")
+                    st.markdown(
+                        "  \n".join(bits) if bits else "—",
+                        unsafe_allow_html=True,
+                    )
+
+                # ---- Location + tags ----
+                with cols[3]:
+                    bits = []
+                    if contact.get("country") or contact.get("city"):
+                        loc = (
+                            f"{contact.get('city', '')}"
+                            f"{', ' if contact.get('city') and contact.get('country') else ''}"
+                            f"{contact.get('country', '')}"
+                        )
+                        bits.append(f"🌍 {loc}")
+                    if contact.get("tags"):
+                        tags_list = [
+                            t.strip() for t in contact["tags"].split(",") if t.strip()
+                        ]
+                        if tags_list:
+                            bits.append(
+                                " ".join(_render_tag_pill(t) for t in tags_list)
                             )
-                            st.write(f"🌍 {location}")
-                        if contact.get("tags"):
-                            tags_list = [
-                                t.strip() for t in contact["tags"].split(",") if t.strip()
-                            ]
-                            if tags_list:
-                                badge_html = " ".join(_render_tag_pill(t) for t in tags_list)
-                                st.markdown(
-                                    f"<div style='margin-top:4px;line-height:1.9;'>"
-                                    f"{badge_html}</div>",
-                                    unsafe_allow_html=True,
-                                )
-                    with col5:
-                        if st.button("✏️", key=f"edit_contact_{cid}"):
-                            st.session_state[f"editing_contact_{cid}"] = True
-                    with col6:
-                        if st.button("🗑️", key=f"del_contact_{cid}"):
-                            st.session_state[f"delete_contact_{cid}"] = True
+                    st.markdown(
+                        "  \n".join(bits) if bits else "—",
+                        unsafe_allow_html=True,
+                    )
 
-                    if st.session_state.get(f"editing_contact_{cid}", False):
-                        with st.expander(f"Edit {contact['name']}", expanded=True):
-                            with st.form(key=f"edit_contact_form_{cid}"):
-                                edit_company_options_with_none = [
-                                    "(No Company)"
-                                ] + company_names
-                                current_company = (
-                                    comp_name if comp_name in company_names else None
-                                )
-                                edit_company_label = st.selectbox(
-                                    "Company (optional)",
-                                    options=edit_company_options_with_none,
-                                    index=(
-                                        edit_company_options_with_none.index(current_company)
-                                        if current_company in edit_company_options_with_none
-                                        else 0
-                                    ),
-                                    key=f"edit_contact_company_{cid}",
-                                )
-                                edit_company_id = (
-                                    None
-                                    if edit_company_label == "(No Company)"
-                                    else company_options[edit_company_label]
-                                )
-                                edit_name = st.text_input(
-                                    "Name*", value=contact["name"], key=f"edit_name_{cid}"
-                                )
-                                edit_role = st.text_input(
-                                    "Role",
-                                    value=contact.get("role", ""),
-                                    key=f"edit_role_{cid}",
-                                )
-                                edit_phone = st.text_input(
-                                    "Phone",
-                                    value=contact.get("phone", ""),
-                                    key=f"edit_phone_{cid}",
-                                )
-                                edit_email = st.text_input(
-                                    "Email",
-                                    value=contact.get("email", ""),
-                                    key=f"edit_email_{cid}",
-                                )
-                                country_list = sorted([c.name for c in pycountry.countries])
-                                edit_country = st.selectbox(
-                                    "Country",
-                                    options=[""] + country_list,
-                                    index=(
-                                        ([""] + country_list).index(contact.get("country", ""))
-                                        if contact.get("country", "") in country_list
-                                        else 0
-                                    ),
-                                    key=f"edit_country_{cid}",
-                                )
-                                edit_city = st.text_input(
-                                    "City",
-                                    value=contact.get("city", ""),
-                                    key=f"edit_city_{cid}",
-                                )
-                                edit_type = st.selectbox(
-                                    "Type",
-                                    options=["Emergency", "Local Support", "Staff", "Partner", "Other"],
-                                    index=["Emergency", "Local Support", "Staff", "Partner", "Other"].index(
-                                        contact.get("type", "Local Support")
-                                    ),
-                                    key=f"edit_contact_type_{cid}",
-                                )
-                                edit_notes = st.text_area(
-                                    "Notes",
-                                    value=contact.get("notes", ""),
-                                    key=f"edit_notes_{cid}",
-                                )
-                                edit_tags = st.text_input(
-                                    "Tags",
-                                    value=contact.get("tags", ""),
-                                    key=f"edit_tags_{cid}",
-                                )
-                                edit_active = st.checkbox(
-                                    "Active",
-                                    value=bool(contact.get("is_active", 1)),
-                                    key=f"edit_active_{cid}",
-                                )
+                # ---- Edit / Delete ----
+                with cols[4]:
+                    if st.button("✏️", key=f"edit_contact_{cid}"):
+                        st.session_state[f"editing_contact_{cid}"] = True
+                with cols[5]:
+                    if st.button("🗑️", key=f"del_contact_{cid}"):
+                        st.session_state[f"delete_contact_{cid}"] = True
 
-                                col_save, col_cancel = st.columns(2)
-                                with col_save:
-                                    if st.form_submit_button("💾 Save"):
-                                        if edit_name:
-                                            db.update_contact(
-                                                cid,
-                                                name=edit_name,
-                                                role=edit_role,
-                                                phone=edit_phone,
-                                                email=edit_email,
-                                                country=edit_country,
-                                                city=edit_city,
-                                                notes=edit_notes,
-                                                tags=edit_tags,
-                                                is_active=1 if edit_active else 0,
-                                                type=edit_type,
+                # ---- Inline edit form (unchanged) ----
+                if st.session_state.get(f"editing_contact_{cid}", False):
+                    with st.expander(f"Edit {contact['name']}", expanded=True):
+                        with st.form(key=f"edit_contact_form_{cid}"):
+                            edit_company_options_with_none = [
+                                "(No Company)"
+                            ] + company_names
+                            current_company = (
+                                comp_name if comp_name in company_names else None
+                            )
+                            edit_company_label = st.selectbox(
+                                "Company (optional)",
+                                options=edit_company_options_with_none,
+                                index=(
+                                    edit_company_options_with_none.index(
+                                        current_company
+                                    )
+                                    if current_company in edit_company_options_with_none
+                                    else 0
+                                ),
+                                key=f"edit_contact_company_{cid}",
+                            )
+                            edit_company_id = (
+                                None
+                                if edit_company_label == "(No Company)"
+                                else company_options[edit_company_label]
+                            )
+                            edit_name = st.text_input(
+                                "Name*",
+                                value=contact["name"],
+                                key=f"edit_name_{cid}",
+                            )
+                            edit_role = st.text_input(
+                                "Role",
+                                value=contact.get("role", ""),
+                                key=f"edit_role_{cid}",
+                            )
+                            edit_phone = st.text_input(
+                                "Phone",
+                                value=contact.get("phone", ""),
+                                key=f"edit_phone_{cid}",
+                            )
+                            edit_email = st.text_input(
+                                "Email",
+                                value=contact.get("email", ""),
+                                key=f"edit_email_{cid}",
+                            )
+                            country_list = sorted([c.name for c in pycountry.countries])
+                            edit_country = st.selectbox(
+                                "Country",
+                                options=[""] + country_list,
+                                index=(
+                                    ([""] + country_list).index(
+                                        contact.get("country", "")
+                                    )
+                                    if contact.get("country", "") in country_list
+                                    else 0
+                                ),
+                                key=f"edit_country_{cid}",
+                            )
+                            edit_city = st.text_input(
+                                "City",
+                                value=contact.get("city", ""),
+                                key=f"edit_city_{cid}",
+                            )
+                            edit_type = st.selectbox(
+                                "Type",
+                                options=[
+                                    "Emergency",
+                                    "Local Support",
+                                    "Staff",
+                                    "Partner",
+                                    "Other",
+                                ],
+                                index=[
+                                    "Emergency",
+                                    "Local Support",
+                                    "Staff",
+                                    "Partner",
+                                    "Other",
+                                ].index(contact.get("type", "Local Support")),
+                                key=f"edit_contact_type_{cid}",
+                            )
+                            edit_notes = st.text_area(
+                                "Notes",
+                                value=contact.get("notes", ""),
+                                key=f"edit_notes_{cid}",
+                            )
+                            edit_tags = st.text_input(
+                                "Tags",
+                                value=contact.get("tags", ""),
+                                key=f"edit_tags_{cid}",
+                            )
+                            edit_active = st.checkbox(
+                                "Active",
+                                value=bool(contact.get("is_active", 1)),
+                                key=f"edit_active_{cid}",
+                            )
+
+                            col_save, col_cancel = st.columns(2)
+                            with col_save:
+                                if st.form_submit_button("💾 Save"):
+                                    if edit_name:
+                                        db.update_contact(
+                                            cid,
+                                            name=edit_name,
+                                            role=edit_role,
+                                            phone=edit_phone,
+                                            email=edit_email,
+                                            country=edit_country,
+                                            city=edit_city,
+                                            notes=edit_notes,
+                                            tags=edit_tags,
+                                            is_active=1 if edit_active else 0,
+                                            type=edit_type,
+                                        )
+                                        if edit_company_id != contact.get("company_id"):
+                                            conn = sqlite3.connect(
+                                                db.DB_PATH, timeout=30
                                             )
-                                            if edit_company_id != contact.get("company_id"):
-                                                conn = sqlite3.connect(db.DB_PATH, timeout=30)
-                                                try:
-                                                    cur = conn.cursor()
-                                                    cur.execute(
-                                                        "UPDATE contacts SET company_id = ? WHERE id = ?",
-                                                        (edit_company_id, cid),
-                                                    )
-                                                    conn.commit()
-                                                finally:
-                                                    conn.close()
-                                            st.session_state.pop(f"editing_contact_{cid}", None)
-                                            st.success("Contact updated!")
-                                            st.rerun()
-                                        else:
-                                            st.warning("Name is required.")
-                                with col_cancel:
-                                    if st.form_submit_button("❌ Cancel"):
-                                        st.session_state.pop(f"editing_contact_{cid}", None)
+                                            try:
+                                                cur = conn.cursor()
+                                                cur.execute(
+                                                    "UPDATE contacts SET company_id = ? WHERE id = ?",
+                                                    (edit_company_id, cid),
+                                                )
+                                                conn.commit()
+                                            finally:
+                                                conn.close()
+                                        st.session_state.pop(
+                                            f"editing_contact_{cid}", None
+                                        )
+                                        st.success("Contact updated!")
                                         st.rerun()
+                                    else:
+                                        st.warning("Name is required.")
+                            with col_cancel:
+                                if st.form_submit_button("❌ Cancel"):
+                                    st.session_state.pop(f"editing_contact_{cid}", None)
+                                    st.rerun()
 
-                    if st.session_state.get(f"delete_contact_{cid}", False):
-                        render_delete_confirmation(
-                            flag_key=f"delete_contact_{cid}",
-                            title=f"Permanently delete contact '{contact['name']}'?",
-                            on_confirm=lambda cid=cid: db.delete_contact(cid),
-                        )
-                    st.divider()
+                if st.session_state.get(f"delete_contact_{cid}", False):
+                    render_delete_confirmation(
+                        flag_key=f"delete_contact_{cid}",
+                        title=f"Permanently delete contact '{contact['name']}'?",
+                        on_confirm=lambda cid=cid: db.delete_contact(cid),
+                    )
+
+            st.divider()
 
     if filter_company_id:
         st.subheader("⭐ Default Contacts")
@@ -5430,7 +6524,9 @@ with tab5:
         st.write(f"**{len(all_venues)} venue(s)**")
         for v in all_venues:
             vid = v["id"]
-            col1, col2, col3, col4 = st.columns([2, 2, 2, 1.2])
+
+            # --- Row: info, contact, edit, delete ---
+            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 0.6, 0.6])
             with col1:
                 st.write(f"**{v['name']}**")
                 if not v.get("is_active", 1):
@@ -5451,7 +6547,11 @@ with tab5:
             with col4:
                 if st.button("✏️", key=f"edit_venue_{vid}"):
                     st.session_state[f"editing_venue_{vid}"] = True
+            with col5:
+                if st.button("🗑️", key=f"del_venue_{vid}"):
+                    st.session_state[f"confirm_del_venue_{vid}"] = True
 
+            # --- Inline edit form (Save / Cancel only) ---
             if st.session_state.get(f"editing_venue_{vid}", False):
                 with st.expander(f"Edit {v['name']}", expanded=True):
                     with st.form(key=f"edit_venue_form_{vid}"):
@@ -5522,7 +6622,7 @@ with tab5:
                             key=f"edit_venue_active_{vid}",
                         )
 
-                        col_save, col_delete, col_cancel = st.columns(3)
+                        col_save, col_cancel = st.columns(2)
                         with col_save:
                             if st.form_submit_button("💾 Save"):
                                 if edit_name:
@@ -5549,14 +6649,12 @@ with tab5:
                                     st.rerun()
                                 else:
                                     st.warning("Venue Name is required.")
-                        with col_delete:
-                            if st.form_submit_button("🗑️ Delete"):
-                                st.session_state[f"confirm_del_venue_{vid}"] = True
                         with col_cancel:
                             if st.form_submit_button("❌ Cancel"):
                                 st.session_state.pop(f"editing_venue_{vid}", None)
                                 st.rerun()
 
+            # --- Delete confirmation ---
             if st.session_state.get(f"confirm_del_venue_{vid}", False):
 
                 def _del_venue(vid=vid):
@@ -5702,7 +6800,6 @@ with tab6:
 
     # ---- Guides ----
     with lib1:
-        # st.subheader("🌍 Destination Guides")
         with st.expander("➕ Add New Destination Guide", expanded=False):
             with st.form("add_destination_guide_form"):
                 country_list = sorted([c.name for c in pycountry.countries])
@@ -5764,7 +6861,9 @@ with tab6:
             st.write(f"**{len(guides)} guide(s)**")
             for g in guides:
                 gid = g["id"]
-                col1, col2, col3 = st.columns([3, 2, 1.5])
+
+                # --- Row: info, emergency/apps, edit, delete ---
+                col1, col2, col3, col4 = st.columns([3, 2, 0.6, 0.6])
                 with col1:
                     st.write(f"**{g['country']}**")
                     if not g.get("is_active", 1):
@@ -5784,7 +6883,11 @@ with tab6:
                 with col3:
                     if st.button("✏️", key=f"edit_dg_{gid}"):
                         st.session_state[f"editing_dg_{gid}"] = True
+                with col4:
+                    if st.button("🗑️", key=f"del_dg_{gid}"):
+                        st.session_state[f"confirm_del_dg_{gid}"] = True
 
+                # --- Inline edit form (Save / Cancel only) ---
                 if st.session_state.get(f"editing_dg_{gid}", False):
                     with st.expander(f"Edit Guide: {g['country']}", expanded=True):
                         with st.form(key=f"edit_dg_form_{gid}"):
@@ -5868,7 +6971,7 @@ with tab6:
                                 value=bool(g.get("is_active", 1)),
                                 key=f"e_dg_act_{gid}",
                             )
-                            c1, c2, c3 = st.columns(3)
+                            c1, c2 = st.columns(2)
                             with c1:
                                 if st.form_submit_button("💾 Save"):
                                     db.update_destination_guide(
@@ -5891,13 +6994,11 @@ with tab6:
                                     st.success("Guide updated!")
                                     st.rerun()
                             with c2:
-                                if st.form_submit_button("🗑️ Delete"):
-                                    st.session_state[f"confirm_del_dg_{gid}"] = True
-                            with c3:
                                 if st.form_submit_button("❌ Cancel"):
                                     st.session_state.pop(f"editing_dg_{gid}", None)
                                     st.rerun()
 
+                # --- Delete confirmation ---
                 if st.session_state.get(f"confirm_del_dg_{gid}", False):
 
                     def _del_dg(gid=gid):
@@ -5912,8 +7013,8 @@ with tab6:
                 st.divider()
 
     # ---- Visa Rules ----
+    # ---- Visa Rules ----
     with lib2:
-        # st.subheader("🛂 Visa Rules")
         with st.expander("➕ Add New Visa Rule", expanded=False):
             with st.form("add_visa_rule_form"):
                 country_list = sorted([c.name for c in pycountry.countries])
@@ -5962,7 +7063,9 @@ with tab6:
             st.write(f"**{len(rules)} rule(s)**")
             for r in rules:
                 rid = r["id"]
-                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+
+                # --- Row: pair, requirement, details, edit, delete ---
+                col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 0.6, 0.6])
                 with col1:
                     st.write(
                         f"**{r['passport_nationality']}** → "
@@ -5988,7 +7091,11 @@ with tab6:
                 with col4:
                     if st.button("✏️", key=f"edit_vr_{rid}"):
                         st.session_state[f"editing_vr_{rid}"] = True
+                with col5:
+                    if st.button("🗑️", key=f"del_vr_{rid}"):
+                        st.session_state[f"confirm_del_vr_{rid}"] = True
 
+                # --- Inline edit form (Save / Cancel only) ---
                 if st.session_state.get(f"editing_vr_{rid}", False):
                     with st.expander("Edit Visa Rule", expanded=True):
                         with st.form(key=f"edit_vr_form_{rid}"):
@@ -6046,7 +7153,7 @@ with tab6:
                                 value=bool(r.get("is_active", 1)),
                                 key=f"e_vr_act_{rid}",
                             )
-                            c1, c2, c3 = st.columns(3)
+                            c1, c2 = st.columns(2)
                             with c1:
                                 if st.form_submit_button("💾 Save"):
                                     db.update_visa_rule(
@@ -6064,13 +7171,11 @@ with tab6:
                                     st.success("Visa rule updated!")
                                     st.rerun()
                             with c2:
-                                if st.form_submit_button("🗑️ Delete"):
-                                    st.session_state[f"confirm_del_vr_{rid}"] = True
-                            with c3:
                                 if st.form_submit_button("❌ Cancel"):
                                     st.session_state.pop(f"editing_vr_{rid}", None)
                                     st.rerun()
 
+                # --- Delete confirmation ---
                 if st.session_state.get(f"confirm_del_vr_{rid}", False):
 
                     def _del_vr(rid=rid):
@@ -6084,9 +7189,11 @@ with tab6:
                     )
                 st.divider()
 
+
+
+    # ---- Checklist Templates ----
     # ---- Checklist Templates ----
     with lib3:
-        # st.subheader("✅ Checklist Templates")
         with st.expander("➕ Add New Checklist Template", expanded=False):
             with st.form("add_checklist_tpl_form"):
                 ct_name = st.text_input("Template Name*", key="ct_name")
@@ -6122,7 +7229,9 @@ with tab6:
                     items_list = json.loads(t.get("items_json") or "[]")
                 except Exception:
                     items_list = []
-                col1, col2, col3 = st.columns([3, 2, 1])
+
+                # --- Row: info, count, edit, delete ---
+                col1, col2, col3, col4 = st.columns([3, 2, 0.6, 0.6])
                 with col1:
                     st.write(f"**{t['name']}**")
                     if not t.get("is_active", 1):
@@ -6134,7 +7243,11 @@ with tab6:
                 with col3:
                     if st.button("✏️", key=f"edit_ct_{tid}"):
                         st.session_state[f"editing_ct_{tid}"] = True
+                with col4:
+                    if st.button("🗑️", key=f"del_ct_{tid}"):
+                        st.session_state[f"confirm_del_ct_{tid}"] = True
 
+                # --- Inline edit form (Save / Cancel only) ---
                 if st.session_state.get(f"editing_ct_{tid}", False):
                     with st.expander(f"Edit Template: {t['name']}", expanded=True):
                         with st.form(key=f"edit_ct_form_{tid}"):
@@ -6157,7 +7270,7 @@ with tab6:
                                 value=bool(t.get("is_active", 1)),
                                 key=f"e_ct_act_{tid}",
                             )
-                            c1, c2, c3 = st.columns(3)
+                            c1, c2 = st.columns(2)
                             with c1:
                                 if st.form_submit_button("💾 Save"):
                                     new_items = [
@@ -6176,13 +7289,11 @@ with tab6:
                                     st.success("Template updated!")
                                     st.rerun()
                             with c2:
-                                if st.form_submit_button("🗑️ Delete"):
-                                    st.session_state[f"confirm_del_ct_{tid}"] = True
-                            with c3:
                                 if st.form_submit_button("❌ Cancel"):
                                     st.session_state.pop(f"editing_ct_{tid}", None)
                                     st.rerun()
 
+                # --- Delete confirmation ---
                 if st.session_state.get(f"confirm_del_ct_{tid}", False):
 
                     def _del_ct(tid=tid):
@@ -6196,9 +7307,12 @@ with tab6:
                     )
                 st.divider()
 
+
+
+
+    # ---- Packing Templates ----
     # ---- Packing Templates ----
     with lib4:
-        # st.subheader("🎒 Packing Templates")
         PACKING_CATEGORIES = [
             "Documents & Badges",
             "Devices & Chargers",
@@ -6246,7 +7360,9 @@ with tab6:
                     items_list = json.loads(t.get("items_json") or "[]")
                 except Exception:
                     items_list = []
-                col1, col2, col3 = st.columns([3, 2, 1])
+
+                # --- Row: info, count, edit, delete ---
+                col1, col2, col3, col4 = st.columns([3, 2, 0.6, 0.6])
                 with col1:
                     st.write(f"**{t['name']}**")
                     if not t.get("is_active", 1):
@@ -6258,7 +7374,11 @@ with tab6:
                 with col3:
                     if st.button("✏️", key=f"edit_pt_{tid}"):
                         st.session_state[f"editing_pt_{tid}"] = True
+                with col4:
+                    if st.button("🗑️", key=f"del_pt_{tid}"):
+                        st.session_state[f"confirm_del_pt_{tid}"] = True
 
+                # --- Inline edit form (Save / Cancel only) ---
                 if st.session_state.get(f"editing_pt_{tid}", False):
                     with st.expander(f"Edit Template: {t['name']}", expanded=True):
                         with st.form(key=f"edit_pt_form_{tid}"):
@@ -6286,7 +7406,7 @@ with tab6:
                                 value=bool(t.get("is_active", 1)),
                                 key=f"e_pt_act_{tid}",
                             )
-                            c1, c2, c3 = st.columns(3)
+                            c1, c2 = st.columns(2)
                             with c1:
                                 if st.form_submit_button("💾 Save"):
                                     new_items = [
@@ -6305,13 +7425,11 @@ with tab6:
                                     st.success("Packing template updated!")
                                     st.rerun()
                             with c2:
-                                if st.form_submit_button("🗑️ Delete"):
-                                    st.session_state[f"confirm_del_pt_{tid}"] = True
-                            with c3:
                                 if st.form_submit_button("❌ Cancel"):
                                     st.session_state.pop(f"editing_pt_{tid}", None)
                                     st.rerun()
 
+                # --- Delete confirmation ---
                 if st.session_state.get(f"confirm_del_pt_{tid}", False):
 
                     def _del_pt(tid=tid):
@@ -6324,6 +7442,7 @@ with tab6:
                         on_confirm=_del_pt,
                     )
                 st.divider()
+
 
     # =========================================================
     # LIBRARY SUB-TAB: Emergency Directory
@@ -6421,7 +7540,9 @@ with tab6:
                 st.write(f"**{len(all_hospitals)} hospital(s)**")
                 for h in all_hospitals:
                     hid = h["id"]
-                    col1, col2, col3 = st.columns([3, 3, 1.2])
+
+                    # --- Row: info, address, edit, delete ---
+                    col1, col2, col3, col4 = st.columns([3, 3, 0.6, 0.6])
                     with col1:
                         st.write(f"**{h['name']}**")
                         if not h.get("is_active", 1):
@@ -6441,7 +7562,11 @@ with tab6:
                     with col3:
                         if st.button("✏️", key=f"edit_hosp_{hid}"):
                             st.session_state[f"editing_hosp_{hid}"] = True
+                    with col4:
+                        if st.button("🗑️", key=f"del_hosp_{hid}"):
+                            st.session_state[f"confirm_del_hosp_{hid}"] = True
 
+                    # --- Inline edit form (Save / Cancel only) ---
                     if st.session_state.get(f"editing_hosp_{hid}", False):
                         with st.expander(f"Edit {h['name']}", expanded=True):
                             with st.form(key=f"edit_hosp_form_{hid}"):
@@ -6497,7 +7622,7 @@ with tab6:
                                     value=bool(h.get("is_active", 1)),
                                     key=f"e_h_act_{hid}",
                                 )
-                                c1, c2, c3 = st.columns(3)
+                                c1, c2 = st.columns(2)
                                 with c1:
                                     if st.form_submit_button("💾 Save"):
                                         db.update_hospital(
@@ -6517,17 +7642,13 @@ with tab6:
                                         st.success("Hospital updated!")
                                         st.rerun()
                                 with c2:
-                                    if st.form_submit_button("🗑️ Delete"):
-                                        st.session_state[f"confirm_del_hosp_{hid}"] = (
-                                            True
-                                        )
-                                with c3:
                                     if st.form_submit_button("❌ Cancel"):
                                         st.session_state.pop(
                                             f"editing_hosp_{hid}", None
                                         )
                                         st.rerun()
 
+                    # --- Delete confirmation ---
                     if st.session_state.get(f"confirm_del_hosp_{hid}", False):
 
                         def _del_hosp(hid=hid):
@@ -6678,7 +7799,9 @@ with tab6:
                 st.write(f"**{len(all_embassies)} embassy / consulate entries**")
                 for emb in all_embassies:
                     eid = emb["id"]
-                    col1, col2, col3 = st.columns([3, 3, 1.2])
+
+                    # --- Row: info, contact, edit, delete ---
+                    col1, col2, col3, col4 = st.columns([3, 3, 0.6, 0.6])
                     with col1:
                         title = emb.get("name") or (
                             f"{emb['representing_country']} Embassy"
@@ -6703,7 +7826,11 @@ with tab6:
                     with col3:
                         if st.button("✏️", key=f"edit_emb_{eid}"):
                             st.session_state[f"editing_emb_{eid}"] = True
+                    with col4:
+                        if st.button("🗑️", key=f"del_emb_{eid}"):
+                            st.session_state[f"confirm_del_emb_{eid}"] = True
 
+                    # --- Inline edit form (Save / Cancel only) ---
                     if st.session_state.get(f"editing_emb_{eid}", False):
                         with st.expander("Edit Embassy", expanded=True):
                             with st.form(key=f"edit_emb_form_{eid}"):
@@ -6787,7 +7914,7 @@ with tab6:
                                     value=bool(emb.get("is_active", 1)),
                                     key=f"ee_act_{eid}",
                                 )
-                                c1, c2, c3 = st.columns(3)
+                                c1, c2 = st.columns(2)
                                 with c1:
                                     if st.form_submit_button("💾 Save"):
                                         db.update_embassy(
@@ -6809,15 +7936,11 @@ with tab6:
                                         st.success("Embassy updated!")
                                         st.rerun()
                                 with c2:
-                                    if st.form_submit_button("🗑️ Delete"):
-                                        st.session_state[f"confirm_del_emb_{eid}"] = (
-                                            True
-                                        )
-                                with c3:
                                     if st.form_submit_button("❌ Cancel"):
                                         st.session_state.pop(f"editing_emb_{eid}", None)
                                         st.rerun()
 
+                    # --- Delete confirmation ---
                     if st.session_state.get(f"confirm_del_emb_{eid}", False):
 
                         def _del_emb(eid=eid):

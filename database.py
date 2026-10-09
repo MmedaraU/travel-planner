@@ -5,6 +5,13 @@ from datetime import date, datetime, timedelta
 
 DB_PATH = "travel_planner.db"
 
+def _table_exists(cur, table_name):
+    """True if `table_name` exists in the current SQLite database."""
+    cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    )
+    return cur.fetchone() is not None
 
 # =========================================================
 # MIGRATION
@@ -12,91 +19,112 @@ DB_PATH = "travel_planner.db"
 
 
 def migrate_db():
-    """Add new columns/tables if they don't exist. Handles schema upgrades."""
+    """Add new columns/tables if they don't exist. Handles schema upgrades.
+
+    Every ALTER TABLE block is gated on the target table actually existing,
+    so this function is safe to run against a fresh/empty database, a
+    partially-populated one, or a fully-migrated one. The CREATE TABLE IF
+    NOT EXISTS statements below then ensure every table exists for the
+    next run.
+    """
     conn = sqlite3.connect(DB_PATH, timeout=30)
     try:
         c = conn.cursor()
 
         # --- trips table ---
-        c.execute("PRAGMA table_info(trips)")
-        existing_trips = [row[1] for row in c.fetchall()]
-        for col, ddl in [
-            ("budget", "REAL DEFAULT 0"),
-            ("departure_city", "TEXT"),
-            ("departure_region", "TEXT"),
-            ("departure_country", "TEXT"),
-            ("base_currency", "TEXT DEFAULT 'USD'"),
-            ("display_currency", "TEXT DEFAULT 'USD'"),
-            ("trip_contacts", "TEXT"),
-            ("receipt_upload_folder_url", "TEXT"),
-        ]:
-            if col not in existing_trips:
-                c.execute(f"ALTER TABLE trips ADD COLUMN {col} {ddl}")
+        if _table_exists(c, "trips"):
+            c.execute("PRAGMA table_info(trips)")
+            existing_trips = [row[1] for row in c.fetchall()]
+            for col, ddl in [
+                ("budget", "REAL DEFAULT 0"),
+                ("departure_city", "TEXT"),
+                ("departure_region", "TEXT"),
+                ("departure_country", "TEXT"),
+                ("base_currency", "TEXT DEFAULT 'USD'"),
+                ("display_currency", "TEXT DEFAULT 'USD'"),
+                ("trip_contacts", "TEXT"),
+                ("receipt_upload_folder_url", "TEXT"),
+            ]:
+                if col not in existing_trips:
+                    c.execute(f"ALTER TABLE trips ADD COLUMN {col} {ddl}")
 
         # --- itinerary_items table ---
-        c.execute("PRAGMA table_info(itinerary_items)")
-        existing_items = [row[1] for row in c.fetchall()]
-        for col, ddl in [
-            ("is_confirmed", "INTEGER DEFAULT 0"),
-            ("receipt_path", "TEXT"),
-            ("cost_currency", "TEXT DEFAULT 'USD'"),
-            ("timezone", "TEXT"),
-            ("venue_id", "INTEGER"),
-            ("cost_date", "TEXT"),
-        ]:
-            if col not in existing_items:
-                c.execute(f"ALTER TABLE itinerary_items ADD COLUMN {col} {ddl}")
-        # Backfill cost_date
-        c.execute(
-            """UPDATE itinerary_items
-               SET cost_date = SUBSTR(datetime_start, 1, 10)
-               WHERE cost_date IS NULL AND datetime_start IS NOT NULL"""
-        )
+        if _table_exists(c, "itinerary_items"):
+            c.execute("PRAGMA table_info(itinerary_items)")
+            existing_items = [row[1] for row in c.fetchall()]
+            for col, ddl in [
+                ("is_confirmed", "INTEGER DEFAULT 0"),
+                ("receipt_path", "TEXT"),
+                ("cost_currency", "TEXT DEFAULT 'USD'"),
+                ("timezone", "TEXT"),
+                ("venue_id", "INTEGER"),
+                ("cost_date", "TEXT"),
+            ]:
+                if col not in existing_items:
+                    c.execute(
+                        f"ALTER TABLE itinerary_items ADD COLUMN {col} {ddl}"
+                    )
+            # Backfill cost_date
+            c.execute(
+                """UPDATE itinerary_items
+                   SET cost_date = SUBSTR(datetime_start, 1, 10)
+                   WHERE cost_date IS NULL AND datetime_start IS NOT NULL"""
+            )
 
         # --- executives table ---
-        c.execute("PRAGMA table_info(executives)")
-        existing_execs = [row[1] for row in c.fetchall()]
-        for col, ddl in [
-            ("passport_number", "TEXT"),
-            ("preferred_airline", "TEXT"),
-            ("tsa_precheck", "TEXT"),
-            ("meal_preference", "TEXT"),
-            ("is_active", "INTEGER DEFAULT 1"),
-        ]:
-            if col not in existing_execs:
-                c.execute(f"ALTER TABLE executives ADD COLUMN {col} {ddl}")
+        if _table_exists(c, "executives"):
+            c.execute("PRAGMA table_info(executives)")
+            existing_execs = [row[1] for row in c.fetchall()]
+            for col, ddl in [
+                ("passport_number", "TEXT"),
+                ("preferred_airline", "TEXT"),
+                ("tsa_precheck", "TEXT"),
+                ("meal_preference", "TEXT"),
+                ("is_active", "INTEGER DEFAULT 1"),
+            ]:
+                if col not in existing_execs:
+                    c.execute(
+                        f"ALTER TABLE executives ADD COLUMN {col} {ddl}"
+                    )
 
         # --- companies table ---
-        c.execute("PRAGMA table_info(companies)")
-        existing_company_cols = [row[1] for row in c.fetchall()]
-        if "default_contact_ids" not in existing_company_cols:
-            c.execute("ALTER TABLE companies ADD COLUMN default_contact_ids TEXT")
-        if "is_active" not in existing_company_cols:
-            c.execute("ALTER TABLE companies ADD COLUMN is_active INTEGER DEFAULT 1")
-
-        # --- executive_memberships ---
-        c.execute("PRAGMA table_info(executive_memberships)")
-        existing_membership_cols = [row[1] for row in c.fetchall()]
-        for col, ddl in [
-            ("tier", "TEXT"),
-            ("alliance", "TEXT"),
-            ("airport_code", "TEXT"),
-            ("notes", "TEXT"),
-        ]:
-            if col not in existing_membership_cols:
+        if _table_exists(c, "companies"):
+            c.execute("PRAGMA table_info(companies)")
+            existing_company_cols = [row[1] for row in c.fetchall()]
+            if "default_contact_ids" not in existing_company_cols:
                 c.execute(
-                    f"ALTER TABLE executive_memberships ADD COLUMN {col} {ddl}"
+                    "ALTER TABLE companies ADD COLUMN default_contact_ids TEXT"
+                )
+            if "is_active" not in existing_company_cols:
+                c.execute(
+                    "ALTER TABLE companies ADD COLUMN is_active INTEGER DEFAULT 1"
                 )
 
+        # --- executive_memberships ---
+        if _table_exists(c, "executive_memberships"):
+            c.execute("PRAGMA table_info(executive_memberships)")
+            existing_membership_cols = [row[1] for row in c.fetchall()]
+            for col, ddl in [
+                ("tier", "TEXT"),
+                ("alliance", "TEXT"),
+                ("airport_code", "TEXT"),
+                ("notes", "TEXT"),
+            ]:
+                if col not in existing_membership_cols:
+                    c.execute(
+                        f"ALTER TABLE executive_memberships ADD COLUMN {col} {ddl}"
+                    )
+
         # --- contacts table ---
-        c.execute("PRAGMA table_info(contacts)")
-        existing_contact_cols = [row[1] for row in c.fetchall()]
-        if "type" not in existing_contact_cols:
-            c.execute(
-                "ALTER TABLE contacts ADD COLUMN type TEXT DEFAULT 'Local Support'"
-            )
-        if "city" not in existing_contact_cols:
-            c.execute("ALTER TABLE contacts ADD COLUMN city TEXT")
+        if _table_exists(c, "contacts"):
+            c.execute("PRAGMA table_info(contacts)")
+            existing_contact_cols = [row[1] for row in c.fetchall()]
+            if "type" not in existing_contact_cols:
+                c.execute(
+                    "ALTER TABLE contacts ADD COLUMN type TEXT DEFAULT 'Local Support'"
+                )
+            if "city" not in existing_contact_cols:
+                c.execute("ALTER TABLE contacts ADD COLUMN city TEXT")
 
         # --- Support tables that may or may not exist yet ---
         c.execute("""CREATE TABLE IF NOT EXISTS executive_passports (
@@ -304,37 +332,38 @@ def migrate_db():
                 pass
 
         # --- Contacts: allow NULL company_id ---
-        c.execute("PRAGMA table_info(contacts)")
-        columns = c.fetchall()
-        for col in columns:
-            if col[1] == "company_id" and col[3] == 1:
-                conn.commit()
-                c.execute("PRAGMA foreign_keys=OFF")
-                c.execute("CREATE TABLE contacts_new AS SELECT * FROM contacts")
-                c.execute("DROP TABLE contacts")
-                c.execute("""
-                    CREATE TABLE contacts (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        company_id INTEGER,
-                        name TEXT NOT NULL,
-                        role TEXT,
-                        phone TEXT,
-                        email TEXT,
-                        country TEXT,
-                        city TEXT,
-                        notes TEXT,
-                        is_active INTEGER DEFAULT 1,
-                        tags TEXT,
-                        type TEXT DEFAULT 'Local Support',
-                        FOREIGN KEY (company_id) REFERENCES companies(id)
-                            ON DELETE SET NULL
-                    )
-                """)
-                c.execute("INSERT INTO contacts SELECT * FROM contacts_new")
-                c.execute("DROP TABLE contacts_new")
-                c.execute("PRAGMA foreign_keys=ON")
-                conn.commit()
-                break
+        if _table_exists(c, "contacts"):
+            c.execute("PRAGMA table_info(contacts)")
+            columns = c.fetchall()
+            for col in columns:
+                if col[1] == "company_id" and col[3] == 1:
+                    conn.commit()
+                    c.execute("PRAGMA foreign_keys=OFF")
+                    c.execute("CREATE TABLE contacts_new AS SELECT * FROM contacts")
+                    c.execute("DROP TABLE contacts")
+                    c.execute("""
+                        CREATE TABLE contacts (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            company_id INTEGER,
+                            name TEXT NOT NULL,
+                            role TEXT,
+                            phone TEXT,
+                            email TEXT,
+                            country TEXT,
+                            city TEXT,
+                            notes TEXT,
+                            is_active INTEGER DEFAULT 1,
+                            tags TEXT,
+                            type TEXT DEFAULT 'Local Support',
+                            FOREIGN KEY (company_id) REFERENCES companies(id)
+                                ON DELETE SET NULL
+                        )
+                    """)
+                    c.execute("INSERT INTO contacts SELECT * FROM contacts_new")
+                    c.execute("DROP TABLE contacts_new")
+                    c.execute("PRAGMA foreign_keys=ON")
+                    conn.commit()
+                    break
 
         conn.commit()
     finally:
@@ -934,7 +963,7 @@ def get_delegation_members(company_id, active_only=True):
     """
     return get_contacts_for_delegation(company_id, active_only=active_only)
 
-    
+
 def get_contacts_for_local_support(company_id, active_only=True):
     """
     Contacts available as local support for a trip:
@@ -1489,7 +1518,57 @@ def get_passports(exec_id):
         return [dict(r) for r in c.fetchall()]
     finally:
         conn.close()
+def find_duplicate_passports(exec_id, country, passport_number=None):
+    """
+    Return existing passports for this exec in this country. If
+    `passport_number` is given, matches are narrowed further (a row with
+    the same number is a stronger signal than a same-country row).
 
+    A person can legitimately have two passports for the same country
+    (diplomatic + regular, or an expired + new one during renewal), so
+    this is a warning, not a hard refusal.
+    """
+    if not exec_id or not country:
+        return []
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT * FROM executive_passports "
+            "WHERE exec_id = ? AND country = ? "
+            "ORDER BY id",
+            (exec_id, country),
+        )
+        return [dict(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def find_duplicate_memberships(exec_id, program_name):
+    """
+    Return existing memberships for this exec with the same program name.
+    Program-name matching is case-insensitive so 'British Airways' and
+    'british airways' collapse.
+
+    A person can legitimately have two accounts for the same program
+    (personal + corporate), so this is a warning, not a hard refusal.
+    """
+    if not exec_id or not program_name:
+        return []
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT * FROM executive_memberships "
+            "WHERE exec_id = ? AND LOWER(program_name) = LOWER(?) "
+            "ORDER BY id",
+            (exec_id, program_name.strip()),
+        )
+        return [dict(r) for r in c.fetchall()]
+    finally:
+        conn.close()
 
 def delete_passport(passport_id):
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1981,6 +2060,35 @@ def get_trip_stops(trip_id):
         c.execute(
             "SELECT * FROM trip_stops WHERE trip_id = ? ORDER BY stop_order",
             (trip_id,),
+        )
+        return [dict(r) for r in c.fetchall()]
+    finally:
+        conn.close()
+
+
+def find_duplicate_trip_stops(trip_id, city, start_date, end_date):
+    """
+    Return trip stops on this trip with the same city (case-insensitive)
+    whose date range overlaps [start_date, end_date].
+
+    A legitimate itinerary can revisit a city on separate legs (London
+    → Paris → London), so the date-range overlap is what distinguishes
+    a genuine duplicate from an intentional revisit.
+    """
+    if not trip_id or not city or not start_date or not end_date:
+        return []
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        c = conn.cursor()
+        c.execute(
+            """SELECT * FROM trip_stops
+               WHERE trip_id = ?
+                 AND LOWER(city) = LOWER(?)
+                 AND start_date <= ?
+                 AND end_date >= ?
+               ORDER BY stop_order""",
+            (trip_id, city.strip(), end_date, start_date),
         )
         return [dict(r) for r in c.fetchall()]
     finally:
