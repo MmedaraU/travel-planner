@@ -2,7 +2,7 @@
 
 ### *The Complete Travel Management System for Executive Assistants & Personal Assistants*
 
-**Version 4.0** – *Per-Stop Weather, Bulk Import, Templates, Reorderable Stops & Items, Inline Add, and Mobile-Ready Travel Packs*
+**Version 4.1** – *Responsive Travel Pack with Light/Dark Theme, Date-Aligned Per-Stop Weather, USD-Normalized Dashboard, Duplicate Detection, and Safety Confirmations Across Every Destructive Action*
 
 <img src="docs/screenshots/img-1.png" alt="Executive Travel Planner — app header" width="100%">
 
@@ -12,7 +12,7 @@
 
 - [Overview](#overview)
 - [Screenshots](#-screenshots)
-- [What's New](#-whats-new-v40)
+- [What's New](#-whats-new-v41)
 - [Full Feature Breakdown](#-full-feature-breakdown)
 - [Tech Stack](#️-tech-stack)
 - [Installation & Setup](#-installation--setup)
@@ -22,6 +22,7 @@
 - [What Each Export Looks Like](#-what-each-export-looks-like)
 - [File Structure](#-file-structure)
 - [Currency & Date Management](#-currency--date-management)
+- [Duplicate Detection](#-duplicate-detection)
 - [Extending the Tool](#-extending-the-tool)
 - [Data Backup](#-data-backup)
 - [Troubleshooting](#-troubleshooting)
@@ -74,44 +75,61 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 
 ---
 
-## 🚀 What's New (v4.0)
+## 🚀 What's New (v4.1)
 
+### Highlights
+
+| Feature                               | Description                                                                                                                                                                                                                                                                                                                        |
+| :------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **📱 Responsive Travel Pack**          | The HTML travel pack now adapts to phones with breakpoints at 900 / 640 / 400 px. Tables scroll horizontally within their card instead of squashing; flex grids restack cleanly; typography and padding scale down.                                                                                                                |
+| **🌗 Light / Dark Theme**              | The travel pack honours `prefers-color-scheme`. Light mode uses the original off-white palette; dark mode uses a deep forest-green scheme. The PDF always renders in light for clean printing.                                                                                                                                     |
+| **🌦️ Date-Aligned Weather**            | Weather is fetched for **each stop's own date window**, not just the first city. Trips beyond the 16-day forecast horizon automatically fall back to last year's same-dates data via Open-Meteo's archive API, labelled clearly as "typical conditions".                                                                           |
+| **💱 USD-Normalized Dashboard**        | The Spending Snapshot, "Spend · Month Year" metric, and Spend-by-Executive breakdown now convert every trip's total from its own base currency to USD using the trip's start-date rate. Mixed-currency portfolios no longer sum NGN and USD as if they were equal.                                                                 |
+| **🚫 Duplicate Detection**             | Trips, executives, contacts, venues, **trip stops** (same city + overlapping dates), **itinerary items** (same description + start, or matching confirmation code), **passports** (same exec + country), and **memberships** (same exec + program name) all warn before saving a likely duplicate, with an "Add anyway?" override. |
+| **⚠️ Delete Confirmations Everywhere** | Every destructive action — trips, stops, items, contacts, venues, guides, visa rules, templates, hospitals, embassies, passports, memberships, expenses, packing lists, checklists — now renders a confirmation panel with **✅ Yes, Delete** / **❌ Cancel**. Bulk deletes are confirmed as well.                                   |
+| **🗑️ Row-Level Delete Buttons**        | Every list view now shows **✏️ Edit** and **🗑️ Delete** side-by-side on each row. Previously, deleting a venue, guide, hospital, or embassy required opening the edit form first.                                                                                                                                                    |
+| **⏱️ End-Before-Start Warnings**       | Itinerary items whose End time is earlier than Start now raise a warning on save, with a "Save anyway?" checkbox. Applies to per-item add, per-item edit, the create form, and the bulk-paste importer.                                                                                                                            |
+| **🔍 Trip Name Search**                | Trips in the All Trips list now display their **Trip Name / Purpose** as the primary heading, and the search filter matches against it. Previously the purpose field was never returned by the summary query, so searching by trip name returned nothing.                                                                          |
+
+### Earlier (v4.0)
 
 | Feature                             | Description                                                                                                                                                                                          |
 | :---------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **🏠 Dashboard Tab**                 | New home tab with at-a-glance metrics: active executives, companies, upcoming trips (30 days), spending snapshot (month / quarter / YTD), per-executive spend breakdown, and library content counts. |
-| **📦 Mobile-Ready Travel Pack**      | Self-contained HTML pack with a responsive layout the executive can read on a phone. Inline preview in the app — no need to download and open. Also exports to PDF and Word.                         |
-| **🌦️ Per-Stop Weather**              | Weather is now shown **for each stop, in its own date window** — not just the first city. The "Now" line appears only for the stop currently in progress.                                            |
-| **📋 Bulk Paste Itinerary**          | Paste rows straight from Excel, Google Sheets, or a CSV. Auto-detects headers, previews, and imports. Available in both the trip create form and the trip edit modal.                                |
+| **📦 Mobile-Ready Travel Pack**      | Self-contained HTML pack with a responsive layout. Inline preview in the app — no need to download and open. Also exports to PDF and Word.                                                           |
+| **🌦️ Per-Stop Weather**              | Weather is now shown **for each stop, in its own date window** — not just the first city.                                                                                                            |
+| **📋 Bulk Paste Itinerary**          | Paste rows straight from Excel, Google Sheets, or a CSV. Auto-detects headers, previews, and imports.                                                                                                |
 | **💰 Bulk Import Expenses**          | Paste a spreadsheet of expenses for an entire delegation in one go. Validates traveler names against the trip roster.                                                                                |
-| **📄 Duplicate Trip / Item**         | One-click copy of a trip (with stops, items, delegation, checklists) or an individual item (+1 day shift, carries delegation and contacts).                                                          |
-| **↑ ↓ Reorder**                     | Reorder stops and items with up/down buttons. No more delete-and-re-add.                                                                                                                             |
+| **📄 Duplicate Trip / Item**         | One-click copy of a trip (with stops, items, delegation, checklists) or an individual item (+1 day shift).                                                                                           |
+| **↑ ↓ Reorder**                     | Reorder stops and items with up/down buttons.                                                                                                                                                        |
 | **☑ Bulk Item Delete**              | Tick items and delete them in one action, in both the trip modal and the create form.                                                                                                                |
-| **➕ Inline Add**                    | Add a new venue or delegation member directly from the form that needs them — no tab switching.                                                                                                      |
-| **📅 Curated Timezone Shortlist**    | Common business-travel timezones (New York, London, Tokyo, Dubai, Lagos, …) at the top of every timezone dropdown.                                                                                   |
-| **🛂 Dismissible Passport Warnings** | Acknowledge a passport expiry warning for 90 days so it stops nagging after you've seen it.                                                                                                          |
+| **➕ Inline Add**                    | Add a new venue or delegation member directly from the form that needs them.                                                                                                                         |
+| **📅 Curated Timezone Shortlist**    | Common business-travel timezones surfaced at the top of every timezone dropdown.                                                                                                                     |
+| **🛂 Dismissible Passport Warnings** | Acknowledge a passport expiry warning for 90 days.                                                                                                                                                   |
 | **📅 Monthly Backup Reminder**       | Banner in the last 5 days of each month if the last backup was >25 days ago.                                                                                                                         |
-| **🧩 Library Tab**                   | Destination Guides, Visa Rules, Checklist Templates, Packing Templates, Trip Templates, and an Emergency Directory (hospitals, embassy / consulate records, per-country emergency numbers).          |
+| **🧩 Library Tab**                   | Destination Guides, Visa Rules, Checklist Templates, Packing Templates, Trip Templates, and an Emergency Directory.                                                                                  |
 
 ---
+
 > **⚠️ Note:** All names, email addresses, phone numbers, passport details, hotel
 > confirmations, flight numbers, and any other information shown in these
 > screenshots are **fictional** and were generated for demonstration purposes
 > only. They do not correspond to any real person, company, or booking.
 
-
 ## ✨ Full Feature Breakdown
 
 ### 🏠 1. Dashboard
 
-<img src="docs/screenshots/01-dashboard.png" alt="Dashboard" width="100%">
+<img src="docs/screenshots/img-2.png" alt="Dashboard" width="100%">
 
 - **Top metrics**: active executives, companies, contacts, total trips.
 - **Trip status split**: upcoming (next 30 days), in progress, past.
-- **Spending snapshot**: this month, this quarter, this year-to-date.
-- **Per-executive spend breakdown**, sorted descending.
+- **Spending snapshot**: this month, this quarter, this year-to-date — **each converted to USD** using the corresponding trip's start-date exchange rate.
+- **Per-executive spend breakdown**, sorted descending, converted to USD.
 - **Library content counts** — guides, visa rules, templates, hospitals, embassies, venues.
 - **Recently created trips** — five most recent.
+
+> **A note on multi-currency:** every aggregate on the dashboard is normalised to USD. Trip cards in the All Trips list still show figures in each trip's own base currency. If a rate is unavailable for a trip's start date, that trip contributes at face value and a warning caption appears under the snapshot.
 
 ### 👤 2. Executive & Company Management
 
@@ -129,32 +147,33 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 </table>
 
 - **Executives**: rich profiles with timezone, seat preference, dietary, meal preference, preferred airline, TSA PreCheck, passport(s), and unlimited memberships.
-- **Passports**: multiple per executive, with expiry warnings that escalate at 90 / 180 days and can be dismissed for 90 days.
-- **Memberships**: airline, hotel, car rental, lounge, rail, ferry, ride-share, credit card.
+- **Passports**: multiple per executive, with expiry warnings that escalate at 90 / 180 days and can be dismissed for 90 days. Duplicate detection warns on same-exec + same-country adds.
+- **Memberships**: airline, hotel, car rental, lounge, rail, ferry, ride-share, credit card. Duplicate detection warns on same-exec + same-program adds (case-insensitive).
 - **Companies**: cost centers, policy notes, default contacts, active/inactive state.
 - **Export Profiles**: Word, CSV, Excel.
 
 ### 🗺️ 3. Trip Planning (Multi-City)
 
-<img src="docs/screenshots/02-trip-planner.png" alt="Trip Planner" width="100%">
+<img src="docs/screenshots/img-3.png" alt="Trip Planner" width="100%">
 
 - **Departure location**: Home Base with City, Region, Country.
-- **Stops**: unlimited, with **↑ ↓ reorder**, edit, and delete.
+- **Stops**: unlimited, with **↑ ↓ reorder**, edit, and delete. Duplicate detection warns on same-city + overlapping-date stops, with a separate warning when dates overlap a stop in a **different** city (physically impossible).
 - **Inline venue add**: create a new venue without leaving the stop or item form.
 - **Trip status workflow**: Draft → Approved → Final (locks the trip from edits).
-- **Timezone display mode**: Home (executive's timezone) or Destination (each item's own timezone).
+- **Timezone display mode**: Home (executive's timezone) or Destination (each item's own timezone). The toggle takes effect immediately in both the create form and the edit modal.
 
 ### 📋 4. Itinerary Builder
 
-<img src="docs/screenshots/03-trip-edit-modal.png" alt="Trip edit modal" width="100%">
+<img src="docs/screenshots/img-12.png" alt="Trip edit modal" width="100%">
 
 - **Add items individually** or **bulk paste from a spreadsheet** (auto-detects headers, previews before import).
 - **Per-item fields**: type, description, start / end, location, cost, currency, cost date, timezone, venue, confirmation code, notes, delegation members, local support contacts.
 - **↑ ↓ reorder** items by swapping times with the item above or below.
-- **📄 Duplicate item** — copies every field and shifts start / end / cost date forward one day. Ideal for return flights and next-night hotels.
-- **☑ Batch select and delete** items with a Select-All toggle.
+- **📄 Duplicate item** — copies every field and shifts start / end / cost date forward one day.
+- **☑ Batch select and delete** items with a Select-All toggle, guarded by a confirmation panel.
 - **Inline venue add** inside every item edit form.
 - **Receipt attachments**: upload PNG, JPG, or PDF.
+- **Validation on save**: end-before-start time warning (with "Save anyway?"), duplicate-item warning (same description + start, or matching confirmation code), both overridable.
 
 ### 💰 5. Budgeting & Expenses
 
@@ -167,32 +186,33 @@ Stop juggling between spreadsheets, Word docs, and calendar invites. This single
 
 ### 📊 6. All Trips (Spending Dashboard)
 
-<img src="docs/screenshots/04-all-trips.png" alt="All Trips dashboard" width="100%">
+<img src="docs/screenshots/img-13.png" alt="All Trips dashboard" width="100%">
 
-- **Filters**: executive, date range, free-text search, "include past trips" toggle.
-- **Trip-level breakdown**: budget, total spent, confirmed, estimated, status.
-- **Mass select and delete** trips in one action.
+- **Filters**: executive, date range, free-text search (**matches Trip Name, destination, and executive**), "include past trips" toggle.
+- **Trip-level breakdown**: each trip card leads with its **Trip Name** as the heading, followed by executive, destination, status, and financials.
+- **Mass select and delete** trips in one action, with a confirmation panel.
 - **Open any trip** with **📂 Edit** — the full trip edit modal.
 - **Export**: CSV, Word, Excel, and `.ics` calendar (all trips in the current filter).
 
 ### 👥 7. Contacts
 
 - Contacts filtered by company, type, tag, and free text.
-- Contact types: Emergency, Local Support, Staff, Partner, Other — each with its own collapsible group.
+- Contact types: Emergency, Local Support, Staff, Partner, Other — each rendered as its own compact section with column headers.
 - **Default contacts per company** auto-populate on new trips.
-- **CSV import / export** with duplicate detection.
+- **CSV import / export** with duplicate detection. Import result (imported / skipped counts) persists across the rerun so you can see what happened.
 
 ### 🏢 8. Venues
 
-<img src="docs/screenshots/07-venues.png" alt="Venues tab" width="100%">
+<img src="docs/screenshots/img-14.png" alt="Venues tab" width="100%">
 
 - Reusable venue library with address, city, country, WiFi credentials, badge info, dress code, and notes.
 - Attach any venue to a session-type itinerary item (Meeting, Conference, Dinner, Site Visit, Tour, Activity).
 - Filter by country, search by name / address / city.
+- Row-level **✏️ Edit** and **🗑️ Delete**; deletion nulls the FK on any referencing items.
 
 ### 📚 9. Library
 
-<img src="docs/screenshots/08-library.png" alt="Library tab" width="100%">
+<img src="docs/screenshots/img-7.png" alt="Library tab" width="100%">
 
 Six sub-tabs of reusable content:
 
@@ -203,38 +223,39 @@ Six sub-tabs of reusable content:
 - **🎒 Packing Templates** — reusable packing lists, applied per traveler.
 - **🚨 Emergency Directory** — hospitals (by city / country), emergency numbers per country (sourced from Destination Guides), embassies and consulates (by host and representing country).
 
+Every list in the Library has row-level **✏️ Edit** / **🗑️ Delete** buttons and a confirmation panel for deletes.
+
 ### 📄 10. Exports & Reporting
 
-
-| Export                | Formats                | Description                                                                                                                                                                             |
-| :-------------------- | :--------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Travel Pack**       | HTML + PDF + Word      | Self-contained itinerary: route, per-stop weather, delegation, hotels, agenda, venues, local support, expenses, packing lists, checklists, emergency info, and embedded receipt images. |
-| **Itinerary**         | Word + Excel           | Daily agenda with costs, confirmation codes, and timezone-aware times.                                                                                                                  |
-| **Expense Report**    | Word + Excel           | Items grouped by day with **embedded receipt thumbnails** (Word) or structured spreadsheet (Excel).                                                                                     |
-| **Executive Profile** | Word + Excel + CSV     | Complete profile with preferences, memberships, and passport details.                                                                                                                   |
-| **Company Profile**   | HTML + Word + Excel    | Company overview with executives, contacts, and policy notes.                                                                                                                           |
-| **Calendar**          | .ics                   | Multi-trip calendar export — one event per itinerary item, prefixed with the trip name.                                                                                                 |
-| **Spending Report**   | Word + Excel + CSV     | Aggregate reports with totals and trip-level breakdowns.                                                                                                                                |
-| **Database**          | JSON + CSV (ZIP) + .db | Full snapshot for backup or migration.                                                                                                                                                  |
+| Export                | Formats                | Description                                                                                                                                                                                                                                                                       |
+| :-------------------- | :--------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Travel Pack**       | HTML + PDF + Word      | Self-contained itinerary: route, per-stop weather (date-aligned, with historical fallback), delegation, hotels, agenda, venues, local support, expenses, packing lists, checklists, emergency info, and embedded receipt images. HTML is responsive and honours light/dark theme. |
+| **Itinerary**         | Word + Excel           | Daily agenda with costs, confirmation codes, and timezone-aware times.                                                                                                                                                                                                            |
+| **Expense Report**    | Word + Excel           | Items grouped by day with **embedded receipt thumbnails** (Word) or structured spreadsheet (Excel).                                                                                                                                                                               |
+| **Executive Profile** | Word + Excel + CSV     | Complete profile with preferences, memberships, and passport details.                                                                                                                                                                                                             |
+| **Company Profile**   | HTML + Word + Excel    | Company overview with executives, contacts, and policy notes.                                                                                                                                                                                                                     |
+| **Calendar**          | .ics                   | Multi-trip calendar export — one event per itinerary item, prefixed with the trip name.                                                                                                                                                                                           |
+| **Spending Report**   | Word + Excel + CSV     | Aggregate reports with totals and trip-level breakdowns.                                                                                                                                                                                                                          |
+| **Database**          | JSON + CSV (ZIP) + .db | Full snapshot for backup or migration.                                                                                                                                                                                                                                            |
 
 ---
 
 ## 🛠️ Tech Stack
 
-| Layer                 | Technology                          |
-| :-------------------- | :---------------------------------- |
-| **Language**          | Python 3.10+                        |
-| **UI Framework**      | Streamlit                           |
-| **Database**          | SQLite (local `.db` file, WAL mode) |
-| **Word Documents**    | python-docx                         |
-| **PDF Rendering**     | WeasyPrint                          |
-| **HTML Templating**   | Jinja2                              |
-| **Excel Export**      | openpyxl                            |
-| **Calendar Files**    | icalendar                           |
-| **Timezone Handling** | pytz                                |
-| **Country Dropdown**  | pycountry                           |
-| **Weather**           | Open-Meteo (no API key required)    |
-| **Data Export**       | Built-in `csv` module               |
+| Layer                 | Technology                                                            |
+| :-------------------- | :-------------------------------------------------------------------- |
+| **Language**          | Python 3.10+                                                          |
+| **UI Framework**      | Streamlit                                                             |
+| **Database**          | SQLite (local `.db` file, WAL mode)                                   |
+| **Word Documents**    | python-docx                                                           |
+| **PDF Rendering**     | WeasyPrint (requires pydyf — see Troubleshooting for version pairing) |
+| **HTML Templating**   | Jinja2                                                                |
+| **Excel Export**      | openpyxl                                                              |
+| **Calendar Files**    | icalendar                                                             |
+| **Timezone Handling** | pytz                                                                  |
+| **Country Dropdown**  | pycountry                                                             |
+| **Weather**           | Open-Meteo (no API key required)                                      |
+| **Data Export**       | Built-in `csv` module                                                 |
 
 ---
 
@@ -270,6 +291,16 @@ Six sub-tabs of reusable content:
 
     Without this step, PDF exports fail with an error like
     `OSError: cannot load library 'gobject-2.0-0'`.
+
+- **Python package compatibility**: WeasyPrint and pydyf must be a matching
+  pair. If you see `TypeError: PDF.__init__() takes 1 positional argument but 2
+  were given`, upgrade both together:
+
+  ```bash
+  pip install --upgrade --force-reinstall weasyprint pydyf
+  ```
+
+  See Troubleshooting for the version pairing table.
 
 ### 2. Download the Project
 
@@ -384,13 +415,13 @@ installed.
 
 1. **Select Executive** — choose from the sidebar. Their timezone, preferences, and passport warnings load immediately.
 2. **Create Trip** — enter purpose, dates, departure city, budget, and base currency. Status starts as Draft.
-3. **Add Stops** — one at a time, in the order they'll be visited. Use ↑ ↓ to reorder.
+3. **Add Stops** — one at a time, in the order they'll be visited. Use ↑ ↓ to reorder. Duplicate / physically-impossible date overlaps are flagged with an override.
 4. **Add Delegation** — pick travelers from the company roster, or use the **➕ Add a new person** expander inline.
-5. **Plan Itinerary** — add items one at a time, or **📋 Paste from spreadsheet**. Every item carries cost, currency, timezone, venue, and contacts.
+5. **Plan Itinerary** — add items one at a time, or **📋 Paste from spreadsheet**. Every item carries cost, currency, timezone, venue, and contacts. End-before-start and duplicate warnings are overridable.
 6. **Attach Receipts** — upload per item, or drop them in the shared folder URL (shown on the travel pack).
 7. **Set Per Diem & Expenses** — daily rate × days per traveler. Bulk import expenses from a spreadsheet.
-8. **Review** — spending summary, budget usage, conflict warnings, and a live travel pack preview.
-9. **Generate Travel Pack** — one click gives the executive a phone-friendly HTML, a PDF, or a Word document.
+8. **Review** — spending summary (converted to the trip base currency), budget usage, conflict warnings, and a live travel pack preview.
+9. **Generate Travel Pack** — one click gives the executive a phone-friendly HTML, a PDF, or a Word document. The HTML respects the reader's light/dark preference.
 10. **Export** — Word / Excel / CSV / .ics from the All Trips tab, or push the trip through Draft → Approved → Final when ready.
 11. **Reuse** — save recurring trips as templates in the Library, then create new trips from them in one click.
 
@@ -416,8 +447,11 @@ installed.
 ### 📦 Travel Pack
 
 - **HTML** — self-contained, responsive, mobile-friendly. Embeds receipt images inline as base64. Coloured cards for each section: route, weather (per stop), delegation, hotels, agenda, venues, local support, expenses, packing lists, checklists, emergency info.
-- **PDF** — same layout, rendered via WeasyPrint. Page breaks preserve section integrity.
-- **Word** — same content, native Word headings and tables.
+  - **Light / dark theme** — automatically adapts to the reader's OS-level `prefers-color-scheme`. Light mode uses the original off-white palette with a blue accent; dark mode uses a deep forest-green scheme.
+  - **Responsive** — breakpoints at 900 / 640 / 400 px. Tables scroll horizontally within their card on narrow screens; flex grids restack; typography and padding scale down.
+  - **Two-column packing lists and checklists** — category items render side-by-side on wide screens, single-column on phones.
+- **PDF** — same layout, rendered via WeasyPrint. Always renders in **light** theme regardless of the reader's OS preference, so printed copies stay clean. Page breaks preserve section integrity.
+- **Word** — parallel implementation with native Word headings and tables. Simpler than the HTML/PDF — no weather section, no receipts, no CSS styling. Suitable when a `.docx` is specifically required; otherwise prefer HTML or PDF.
 
 ### 📄 Word Documents
 
@@ -474,6 +508,7 @@ travel-planner/
 ├── travel_planner.db               # SQLite database (auto-created)
 ├── app_state.json                  # Backup reminder state (auto-created)
 ├── dismissed_warnings.json         # Acknowledged passport warnings (auto-created)
+├── weather_cache.json              # Cached weather responses (auto-created)
 ├── receipts/
 │   └── trip_<id>/                  # Per-trip receipt uploads (auto-created)
 └── README.md
@@ -491,10 +526,82 @@ travel-planner/
 
 - **Multi-currency**: set a base currency per trip; enter costs in any supported currency.
 - **Historical accuracy**: each item carries a **cost date**; conversion uses the rate on that date, not today's rate. Rates are fetched from a free API and cached in the database.
+- **Dashboard normalisation**: the Dashboard, Spending Snapshot, and Spend-by-Executive views convert **every trip's total to USD** using that trip's start-date rate. Trip cards in the All Trips list continue to show figures in each trip's own base currency.
 - **Date format**: DD-MM-YYYY throughout the UI and every exported document.
 - **Timezone dropdown**: curated shortlist of ~28 business-travel zones at the top, followed by the full list, each showing its current abbreviation (e.g. `America/New_York (EDT)`).
 
 ---
+
+## 🚫 Duplicate Detection
+
+Duplicate checks are deliberately **scoped**: they apply where a duplicate would confuse a picker or leak into a downstream view, and are skipped where a legitimate business case exists for similar records.
+
+| Entity                | What triggers the warning                                                                                                | Overridable?                                       |
+| :-------------------- | :----------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------- |
+| **Executive**         | Same email, or same name + company                                                                                       | ✅                                                  |
+| **Trip**              | Same executive + purpose + overlapping dates                                                                             | ✅                                                  |
+| **Contact**           | Same company + same name / email / phone                                                                                 | ✅                                                  |
+| **Venue**             | Same name                                                                                                                | ✅                                                  |
+| **Trip stop**         | Same city + overlapping dates *(yellow)*, or different city + strictly-overlapping dates *(red — physically impossible)* | ✅                                                  |
+| **Itinerary item**    | Same description + same start time, or matching confirmation code                                                        | ✅                                                  |
+| **Passport**          | Same executive + same country                                                                                            | ✅                                                  |
+| **Membership**        | Same executive + same program name (case-insensitive)                                                                    | ✅                                                  |
+| **Destination guide** | Same country                                                                                                             | ❌ *(hard block — one guide per country by design)* |
+| **Visa rule**         | Same passport nationality → destination pair                                                                             | ❌ *(hard block)*                                   |
+
+**Not checked:** hospitals and embassies. These are pure reference content — they appear in one admin view and one travel pack, are never picked from a dropdown, and don't leak into other screens. Adding a duplicate check would add friction with little benefit. If a duplicate slips in, the row-level 🗑️ button removes it.
+
+---
+
+## ⚠️ Known Issues & Limitations
+
+An honest list of what doesn't work as well as it could, and why. Nothing here is a bug that breaks the app — these are either deliberate design choices, upstream API constraints, Streamlit behaviour quirks, or features not yet built.
+
+### Behaviour worth understanding
+
+| Limitation                                                           | Impact                                                                                                                                                                                                                                                                                                                                                                                                                     | Workaround                                                                                                                                                                                     |
+| :------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Form does not clear after saving**                                 | After clicking **💾 Save**, **➕ Add**, or **🚀 Create Trip**, the record is persisted correctly, but the input fields retain their values. For a single-row form (Venue, Contact, Hospital, Embassy, Guide, Template) that's harmless — you usually navigate away. For the multi-row forms (Trip Planner create form, "+ Add Itinerary Item" expander), you have to manually clear the fields before entering the next item. | Click **🗑️ Clear Form** where it exists. For expander forms without a clear button, either close and reopen the expander or ignore the values and re-enter.                                     |
+| **Dashboard aggregates ignore expenses and per-diem**                | The "Spent" figures everywhere on the Dashboard and in the All Trips list come from **itinerary item costs only**. The `expenses` table (per-traveller meals, taxis, incidentals) and per-diem allowances are tracked separately and never fold into any dashboard figure.                                                                                                                                                 | If your workflow logs actual costs via the expense form, the dashboard is a **planning** view, not a reconciliation view. Use the modal's Per-Traveller Breakdown for actual expense tracking. |
+| **Trips that straddle a month/quarter boundary count fully in both** | A trip Aug 30 – Sep 3 contributes its full `total_spent` to **both** the August and September totals. The sum of 12 monthly figures will exceed YTD.                                                                                                                                                                                                                                                                       | For "spend that occurred in October," you'd need to prorate by item cost_date — not currently computed anywhere.                                                                               |
+| **Multi-currency conversion falls back silently**                    | If no exchange rate is cached for a currency pair on the item's cost_date, the raw amount is used as if it were already in the target currency. A ¥50,000 item with no JPY→USD rate becomes 50,000 "USD" — a 150× inflation. A warning caption appears under the Spending Snapshot but the trip card itself shows no flag.                                                                                                 | Run **💱 Exchange Rates → 🔄 Refresh Rates Now** before entering foreign-currency items. For ongoing correctness, seed rates for the currencies you use most often.                              |
+| **Word travel pack is lower fidelity than HTML/PDF**                 | The Word generator is a separate code path. It has **no weather section, no receipts, no CSS styling**, and splits hotels / agenda into distinct tables instead of the unified card layout.                                                                                                                                                                                                                                | Prefer HTML or PDF unless a `.docx` is specifically required by your org.                                                                                                                      |
+| **Weather beyond 16 days is a proxy, not a forecast**                | Open-Meteo's forecast API covers up to 16 days ahead. For trips further out, the app falls back to last year's same-dates data from the archive API, clearly labelled "typical conditions." This is climate, not a forecast.                                                                                                                                                                                               | Nothing to fix — it's an upstream API limit. The label on the panel makes this explicit.                                                                                                       |
+| **Weather cities may not resolve**                                   | The geocoder (`geocoding-api.open-meteo.com`) matches on city name only. Ambiguous names ("Springfield", "Cambridge") may resolve to the wrong location, and some spelling variants won't resolve at all.                                                                                                                                                                                                                  | Use the well-known form of the city name. If a city fails, the weather section is silently omitted for that stop rather than showing an error.                                                 |
+| **The travel pack's wide tables scroll horizontally on phones**      | On screens under ~640px, tables with 5–6 columns (Agenda, Expense Details) force horizontal scrolling inside their card. This is intentional — the alternative was character-by-character wrapping, which was worse.                                                                                                                                                                                                       | Rotate the phone to landscape, or view the PDF.                                                                                                                                                |
+| **Bulk paste does not duplicate-check or validate times**            | The bulk itinerary importer and bulk expense importer parse rows and insert them. Duplicate detection and end-before-start validation only run on the per-item add / edit forms.                                                                                                                                                                                                                                           | After a bulk import, review the item list. Duplicates and inverted times will appear but won't have been flagged during import.                                                                |
+| **No user authentication**                                           | The app has no login. Anyone who can reach `http://localhost:8501` can use it. It's designed for single-PA use on a local machine.                                                                                                                                                                                                                                                                                         | Do not expose the port to a network. Keep it bound to `localhost` (the default).                                                                                                               |
+| **No undo**                                                          | Delete confirmations prevent accidents, but once you click **✅ Yes, Delete** on a trip or executive, the row and all its related data are gone. No recycle bin, no soft-delete.                                                                                                                                                                                                                                            | The monthly backup reminder exists for exactly this reason. Back up before large cleanups.                                                                                                     |
+| **Receipt uploads are stored as files, not in the database**         | The `.db` backup **does not include** the `receipts/` folder. Restoring a `.db` on a different machine gives you the item rows but not the attached images.                                                                                                                                                                                                                                                                | Back up the `receipts/` folder alongside `travel_planner.db`. Or export the travel pack to HTML — receipts are embedded as base64 in that file.                                                |
+
+### UI quirks (Streamlit rendering behaviour)
+
+| Quirk                                                                    | Symptom                                                                                                                                                                                                                                                                                                                       | Why                                                                                                                                                                                                                                                                                                                                                                         | Workaround                                                                                                                                                                                                                                                                                                                                                                           |
+| :----------------------------------------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Select All does not visually tick the child checkboxes**               | On the **✈️ All Trips** list and inside the trip modal's **Itinerary Items** section, clicking **Select All** updates the underlying selection set, but the individual row checkboxes remain visually unchecked. Actions like **🗑️ Delete N selected** still operate on the correct rows — the state is right, the visuals lag. | Streamlit's checkbox widget, once rendered with a `key=`, ignores the `value=` parameter on subsequent runs and reads its state from `session_state[key]`. The "Select all" handler updates the *aggregate* set (`selected_trip_ids`), not the per-row widget keys (`sel_{trip_id}`). The aggregate drives the actions; the individual keys drive the visuals. They desync. | Click any individual checkbox once — that forces the widget to re-read its state and everything visually snaps into place. To fully fix, the "Select all" handler would also need to write `st.session_state[f"sel_{trip_id}"] = True` for every row (and `False` for a deselect), which is a small but non-trivial change across both the All Trips list and the modal's item list. |
+| **Timezone display toggle appears to do nothing**                        | Switching **Show times in:** between *Home* and *Destination* has no visible effect on the item captions.                                                                                                                                                                                                                     | Only matters when at least one item has a timezone different from the executive's home timezone. If every item uses the exec's tz (the default when you don't explicitly set one per item), both modes render identical text.                                                                                                                                               | Edit one item and set its **Time Zone** to a region different from the exec's. The toggle will then produce visibly different times.                                                                                                                                                                                                                                                 |
+| **Filter dropdowns occasionally retain stale values after data changes** | Changing a filter (e.g., switching Executive) may briefly show the previous selection until you interact with the page again.                                                                                                                                                                                                 | Streamlit re-renders the whole script on any interaction, but widget state keyed by label can lag one cycle behind data-driven changes.                                                                                                                                                                                                                                     | Click anywhere on the page or press **R** to force a full rerun.                                                                                                                                                                                                                                                                                                                     |
+
+### By design (not bugs)
+
+| Behaviour                                               | Why                                                                                                                                                                                |
+| :------------------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Hospitals and embassies have no duplicate detection** | They are pure reference content. They never appear in a picker, and a duplicate doesn't confuse any downstream view. Row-level 🗑️ handles cleanup.                                  |
+| **Deleting a company is refused if it has executives**  | Prevents orphaning an executive from its company. Reassign or delete the executives first.                                                                                         |
+| **Approved / Final trips are read-only**                | Deliberate — the status workflow exists so a finalized trip can't be silently modified. Use **↩️ Revert to Draft** to unlock.                                                       |
+| **Wayback-only historical weather**                     | The archive API is used for deep-past requests. Historical entries cache for 30 days; recent and future entries cache for 1 hour.                                                  |
+| **Delete buttons next to every row**                    | Every list view shows **✏️ Edit** and **🗑️ Delete** side-by-side. This was deliberate — previously, deleting some records required opening the edit form first, which was confusing. |
+
+### Not yet implemented
+
+- **Prorated monthly spend** — attributing item costs to the specific month they occurred in, rather than counting the whole trip.
+- **Auto-clear forms after save** — several multi-field forms leave their values in place after a successful save (see the first row above).
+- **Proper Select-All state sync** — the visual desync described above would need the "Select all" handler to write per-row widget keys.
+- **Recurring expense splitting across travellers** — expenses are attributed to one traveller per row.
+- **Per-item multi-leg flights** — a flight is a single item; you cannot model connections within one entry.
+- **Bulk editing** — batch update selected items (e.g., shift all by one day).
+- **Delegation seat assignment** — seat preferences live on the executive profile, not per-traveller per-trip.
+- **Auto-refresh weather** — the weather panel fetches on demand; the cached result persists for the session and doesn't auto-refresh.
 
 ## 🧩 Extending the Tool
 
@@ -531,6 +638,17 @@ Two parsers already exist in `utils.py`:
 
 Both return `(parsed_rows, errors)`. Follow the same shape for any new bulk-import UI.
 
+### Customising the Travel Pack
+
+The travel pack's appearance is fully editable via `templates/travel_pack.html`:
+
+- **Recolour** — the `<style>` block defines a light palette and a dark-green override inside `@media (prefers-color-scheme: dark)`. Change the CSS variables on `:root` in one place to restyle.
+- **Change fonts** — swap the Google Fonts `<link>` at the top and the two `font-family` declarations.
+- **Reorder / hide sections** — each `<div class="card">` block is one section. Move or delete.
+- **Add new sections** — template changes plus new context keys passed from `generate_travel_pack_html()` in `doc_generator.py`.
+
+Because HTML and PDF share the same template, one edit updates both. The PDF block in the CSS explicitly forces the light palette so printed output stays clean.
+
 ### Updating Screenshots
 
 Screenshots live in `docs/screenshots/`. To refresh one:
@@ -556,23 +674,39 @@ For extra safety, sync `travel_planner.db` to a cloud drive (Dropbox, OneDrive, 
 
 ## 🐞 Troubleshooting
 
-| Issue                                              | Solution                                                                                                                                                                               |
-| :------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`No module named 'streamlit'`**                  | Activate the venv, then `pip install -r requirements.txt`.                                                                                                                             |
-| **Port 8501 is busy**                              | `streamlit run app.py --server.port 8502`.                                                                                                                                             |
-| **`StreamlitDuplicateElementKey`**                 | Fixed in v4.0. If you still see it, run the diagnostic in the "Duplicate key" section below.                                                                                           |
-| **`No module named 'utils'`**                      | Ensure all `.py` files sit in the same folder as `app.py`.                                                                                                                             |
-| **`No module named 'weather'`**                    | Add `weather.py` (used by the trip modal and the travel pack).                                                                                                                         |
-| **Excel export fails**                             | Check `openpyxl` is installed.                                                                                                                                                         |
-| **PDF export fails**                               | Install WeasyPrint system libraries (see Installation). On Windows, confirm `run.bat` points at a valid MSYS2 install and that the Pango package is present.                           |
-| **`OSError: cannot load library 'gobject-2.0-0'`** | MSYS2's UCRT64 `bin` folder isn't on `PATH`. Use `run.bat`, or set `PATH` and `WEASYPRINT_DLL_DIRECTORIES` manually as shown in *Running the App*.                                     |
-| **`bash: streamlit: command not found`**           | Use `python -m streamlit run app.py`, or just run `run.bat`.                                                                                                                           |
-| **`run.bat` opens and immediately closes**         | Something failed before the browser opened. Run `run.bat` from an existing `cmd` window instead of double-clicking it — the window won't close on error, and you'll see the traceback. |
-| **`run.bat` runs the wrong Python**                | Confirm `venv\Scripts\python.exe` exists. If your venv lives elsewhere, edit the last line of `run.bat`.                                                                               |
-| **Travel pack is empty / broken layout**           | Confirm `templates/travel_pack.html` exists and is valid HTML.                                                                                                                         |
-| **Weather section missing in travel pack**         | Check the city names on the trip's stops; some spellings may not resolve. If all cities fail, the section is silently omitted.                                                         |
-| **Database is locked**                             | Only one PA/EA uses it — restart the app. WAL mode reduces this to near-zero.                                                                                                          |
-| **VS Code shows import errors**                    | Select the venv interpreter: `venv\Scripts\python.exe`.                                                                                                                                |
+| Issue                                                                                       | Solution                                                                                                                                                                                                 |
+| :------------------------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`No module named 'streamlit'`**                                                           | Activate the venv, then `pip install -r requirements.txt`.                                                                                                                                               |
+| **Port 8501 is busy**                                                                       | `streamlit run app.py --server.port 8502`.                                                                                                                                                               |
+| **`StreamlitDuplicateElementKey`**                                                          | Two widgets share a `key`. Common causes: a widget block pasted twice, or a form submit button with an identical label rendered twice in the same form. See the diagnostic below.                        |
+| **`No module named 'utils'`**                                                               | Ensure all `.py` files sit in the same folder as `app.py`.                                                                                                                                               |
+| **`No module named 'weather'`**                                                             | Add `weather.py` (used by the trip modal and the travel pack).                                                                                                                                           |
+| **Excel export fails**                                                                      | Check `openpyxl` is installed.                                                                                                                                                                           |
+| **PDF export fails**                                                                        | Install WeasyPrint system libraries (see Installation). On Windows, confirm `run.bat` points at a valid MSYS2 install and that the Pango package is present.                                             |
+| **`OSError: cannot load library 'gobject-2.0-0'`**                                          | MSYS2's UCRT64 `bin` folder isn't on `PATH`. Use `run.bat`, or set `PATH` and `WEASYPRINT_DLL_DIRECTORIES` manually as shown in *Running the App*.                                                       |
+| **`TypeError: PDF.__init__() takes 1 positional argument but 2 were given`**                | WeasyPrint and pydyf are a mismatched pair. Fix: `pip install --upgrade --force-reinstall weasyprint pydyf`. See version pairing table below.                                                            |
+| **`TypeError: 'builtin_function_or_method' object is not iterable`** (from the travel pack) | A Jinja2 template is trying to iterate `pl.items` or `cl.items` — Jinja resolves `.items` to the dict method, not the key. Fix: use `pl['items']` and `cl['items']` in `templates/travel_pack.html`.     |
+| **`bash: streamlit: command not found`**                                                    | Use `python -m streamlit run app.py`, or just run `run.bat`.                                                                                                                                             |
+| **`run.bat` opens and immediately closes**                                                  | Something failed before the browser opened. Run `run.bat` from an existing `cmd` window instead of double-clicking it — the window won't close on error, and you'll see the traceback.                   |
+| **`run.bat` runs the wrong Python**                                                         | Confirm `venv\Scripts\python.exe` exists. If your venv lives elsewhere, edit the last line of `run.bat`.                                                                                                 |
+| **Travel pack is empty / broken layout**                                                    | Confirm `templates/travel_pack.html` exists and is valid HTML.                                                                                                                                           |
+| **Weather section missing in travel pack**                                                  | Check the city names on the trip's stops; some spellings may not resolve. If all cities fail, the section is silently omitted. For trips beyond 16 days out, the archive fallback may not have data yet. |
+| **Timezone toggle doesn't change item times**                                               | Only items with a timezone different from the executive's home timezone show a visible change. If all items share the exec's timezone, both modes render identically — that's expected.                  |
+| **Dashboard totals look inflated**                                                          | A trip's base currency may differ from USD and no rate was available at its start date. Check the warning caption under the Spending Snapshot, then run **💱 Exchange Rates → 🔄 Refresh Rates Now**.      |
+| **Database is locked**                                                                      | Only one PA/EA uses it — restart the app. WAL mode reduces this to near-zero.                                                                                                                            |
+| **VS Code shows import errors**                                                             | Select the venv interpreter: `venv\Scripts\python.exe`.                                                                                                                                                  |
+
+### WeasyPrint / pydyf version pairing
+
+If PDF export fails with a `PDF.__init__()` signature error, the two packages are out of sync. Use one of these pairings:
+
+| WeasyPrint | Compatible pydyf     |
+| :--------- | :------------------- |
+| 60.x       | `pydyf>=0.8.0,<0.10` |
+| 61.x       | `pydyf>=0.10.0`      |
+| 62.x       | `pydyf>=0.10.0`      |
+
+Simplest fix: `pip install --upgrade --force-reinstall weasyprint pydyf`.
 
 ### Duplicate key diagnostic
 
@@ -594,6 +728,8 @@ for k, idxs in seen.items():
 ```
 
 If a `DUPLICATE` line appears, `get_spending_summary()` is returning two rows for the same trip. The All Trips tab already dedupes on display, but the underlying query should be investigated.
+
+If the error names a `FormSubmitter:` key, a form has two submit buttons with the same label. Search `app.py` for the label and confirm exactly one `st.form_submit_button("…")` call per form.
 
 ---
 
