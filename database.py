@@ -2353,21 +2353,24 @@ def get_spending_summary(
                     confirmed += conv
                 else:
                     estimated += conv
-            summary.append({
-                "trip_id": trip["id"],
-                "executive_name": trip["executive_name"],
-                "company_name": trip["company_name"],
-                "destination": trip["destination"],
-                "start_date": trip["start_date"],
-                "end_date": trip["end_date"],
-                "budget": trip["budget"] or 0,
-                "status": trip["status"],
-                "base_currency": base_cur,
-                "display_currency": trip["display_currency"],
-                "total_spent": total,
-                "confirmed_spent": confirmed,
-                "estimated_spent": estimated,
-            })
+            summary.append(
+                {
+                    "trip_id": trip["id"],
+                    "purpose": trip["purpose"],  # ← add this line
+                    "executive_name": trip["executive_name"],
+                    "company_name": trip["company_name"],
+                    "destination": trip["destination"],
+                    "start_date": trip["start_date"],
+                    "end_date": trip["end_date"],
+                    "budget": trip["budget"] or 0,
+                    "status": trip["status"],
+                    "base_currency": base_cur,
+                    "display_currency": trip["display_currency"],
+                    "total_spent": total,
+                    "confirmed_spent": confirmed,
+                    "estimated_spent": estimated,
+                }
+            )
         return summary
     finally:
         conn.close()

@@ -663,7 +663,24 @@ def _trips_in_quarter(trip, year, quarter):
             return True
     return False
 
+def _trip_total_in_usd(trip):
+    """
+    Return (amount_in_usd, conversion_ok).
 
+    Converts a trip's total_spent from its own base_currency to USD using
+    the trip's start date so historical rates are honored. Trips already
+    in USD pass through unchanged. If conversion fails, the raw amount is
+    returned with ok=False so the caller can decide whether to flag it.
+    """
+    amt = float(trip.get("total_spent") or 0)
+    trip_cur = (trip.get("base_currency") or "USD").upper()
+    if trip_cur == "USD":
+        return amt, True
+    on_date = (trip.get("start_date") or "")[:10] or None
+    try:
+        return float(currency.convert_amount(amt, trip_cur, "USD", on_date)), True
+    except Exception:
+        return amt, False
 # =========================================================
 # BACKUP REMINDER (persistent state)
 # =========================================================
@@ -3781,12 +3798,32 @@ def _render_trip_edit_modal(trip_id_modal, country_list):
                         "download the HTML to use them."
                     )
 
-            if st.button(
-                "Close", key=f"close_travel_pack_{trip_id_modal}"
-            ):
-                st.session_state.pop(f"show_travel_pack_modal_{trip_id_modal}", None)
-                st.session_state.pop(preview_key, None)
-                st.rerun()
+            st.divider()
+            col_pack_hide, col_pack_close = st.columns(2)
+            with col_pack_hide:
+                if st.button(
+                    "🙈 Hide Travel Pack",
+                    key=f"hide_travel_pack_{trip_id_modal}",
+                    use_container_width=True,
+                    help="Collapse the travel pack panel but keep the trip modal open.",
+                ):
+                    st.session_state.pop(
+                        f"show_travel_pack_modal_{trip_id_modal}", None
+                    )
+                    st.session_state.pop(preview_key, None)
+                    st.rerun()
+            with col_pack_close:
+                if st.button(
+                    "✅ Done — Close Trip",
+                    key=f"close_modal_from_pack_{trip_id_modal}",
+                    type="primary",
+                    use_container_width=True,
+                    help="Close the trip modal entirely.",
+                ):
+                    st.session_state.pop(f"modal_stops_{trip_id_modal}", None)
+                    st.session_state.pop(f"modal_items_{trip_id_modal}", None)
+                    st.session_state.pop("dialog_trip_id", None)
+                    st.rerun()
         else:
             st.error("Failed to generate travel pack.")
 
@@ -3874,14 +3911,12 @@ with tab_dash:
     with col3:
         st.metric("Past Trips", len(past_trips))
     with col4:
-        # Total spend this calendar month across all trips
+        # Total spend this calendar month, converted to USD
         this_month_spend = 0.0
         for t in summaries:
             if _trips_in_month(t, today.year, today.month):
-                try:
-                    this_month_spend += float(t.get("total_spent") or 0)
-                except Exception:
-                    pass
+                amt_usd, _ok = _trip_total_in_usd(t)
+                this_month_spend += amt_usd
         st.metric(
             f"Spend · {today.strftime('%b %Y')}",
             fmt_money(this_month_spend, "USD"),
@@ -3915,15 +3950,26 @@ with tab_dash:
 
     # ---- Spending snapshot ----
     st.subheader("💰 Spending Snapshot")
+    st.caption(
+        "All figures converted to **USD**. Each trip is converted at its "
+        "own start-date exchange rate, so historical costs stay accurate."
+    )
     col1, col2, col3 = st.columns(3)
 
     def _sum_spend(trips):
+        """Sum total_spent across trips, each converted to USD."""
         total = 0.0
+        failed = 0
         for t in trips:
-            try:
-                total += float(t.get("total_spent") or 0)
-            except Exception:
-                pass
+            amt_usd, ok = _trip_total_in_usd(t)
+            total += amt_usd
+            if not ok:
+                failed += 1
+        if failed:
+            st.caption(
+                f"⚠️ {failed} trip(s) had no exchange rate available and "
+                "were included at face value."
+            )
         return total
 
     month_trips = [t for t in summaries
@@ -3947,13 +3993,12 @@ with tab_dash:
     # ---- Per-executive spend breakdown ----
     if summaries:
         st.subheader("👤 Spend by Executive")
+        st.caption("All figures converted to USD at each trip's start-date rate.")
         by_exec = {}
         for t in summaries:
             name = t.get("executive_name", "—")
-            try:
-                by_exec[name] = by_exec.get(name, 0.0) + float(t.get("total_spent") or 0)
-            except Exception:
-                by_exec.setdefault(name, 0.0)
+            amt_usd, _ok = _trip_total_in_usd(t)
+            by_exec[name] = by_exec.get(name, 0.0) + amt_usd
         rows = sorted(by_exec.items(), key=lambda kv: -kv[1])
         for name, total in rows:
             col_a, col_b = st.columns([3, 2])
@@ -5494,11 +5539,13 @@ with tab2:
                         st.session_state.selected_trip_ids.discard(trip_id)
 
                 with cols[1]:
-                    st.write(f"**{trip['executive_name']}** · {trip['company_name']}")
-                    st.write(
-                        f"📍 {trip['destination']}  ·  "
-                        f"{status_label}"
-                    )
+                    # Trip Name (Purpose) as the primary line
+                    st.markdown(f"### {trip.get('purpose') or 'Untitled Trip'}")
+                    # Executive and Company as secondary caption
+                    st.caption(f"👤 {trip['executive_name']} · {trip['company_name']}")
+                    # Destination and Status
+                    st.write(f"📍 {trip['destination']}  ·  {status_label}")
+                    # Financials
                     st.caption(
                         f"Budget: {fmt_money(trip['budget'], trip_base_currency)}  ·  "
                         f"Spent: {fmt_money(trip['total_spent'], trip_base_currency)}  ·  "
