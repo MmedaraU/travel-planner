@@ -127,3 +127,5 @@ diagnose_db.py
 repair_migration.py
 travel_planner.db.bak_*
 migrate_is_active.py
+
+*.json
