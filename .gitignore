@@ -8,6 +8,7 @@ __pycache__/
 *.so
 *.dll
 *.egg-info/
+.eggs/
 dist/
 build/
 *.egg
@@ -25,11 +26,35 @@ venv.bak/
 # ==========================
 #  DATABASE (Sensitive Data)
 # ==========================
+# The app creates travel_planner.db on first launch. WAL mode (set in
+# database.py) also produces -wal and -shm sidecars while running.
+# None of these belong in version control — they hold your real data.
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.sqlite
 *.sqlite3
 travel_planner.db
+travel_planner.db-wal
+travel_planner.db-shm
+travel_planner.db-journal
 backup_*.db
+travel_planner_backup_*.db
+database_export_*.json
+database_export_*.zip
+
+# ==========================
+#  RUNTIME STATE FILES
+# ==========================
+# Written by the app on user action:
+#   app_state.json          — last-backup date (monthly reminder)
+#   dismissed_warnings.json — acknowledged passport warnings (90 days)
+#   weather_cache.json      — cached Open-Meteo responses
+
+app_state.json
+dismissed_warnings.json
+weather_cache.json
 
 # ==========================
 #  USER-GENERATED OUTPUTS
@@ -38,7 +63,7 @@ backup_*.db
 generated_itineraries/
 # Expense reports
 generated_expense_reports/
-# Uploaded receipt images (PNG, JPG, PDF)
+# Uploaded receipt images (PNG, JPG, PDF), one folder per trip
 receipts/
 # Calendar files (if temporarily exported locally)
 *.ics
@@ -48,25 +73,35 @@ receipts/
 # ==========================
 .env
 .env.local
+.env.*
+!.env.example
 config.local.py
+
+# ==========================
+#  STREAMLIT CACHE
+# ==========================
+.streamlit/cache/
+
+# ==========================
+#  OS FILES
+# ==========================
+# Windows
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ==========================
+#  EDITORS
+# ==========================
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# ==========================
-#  WINDOWS SYSTEM FILES
-# ==========================
-Thumbs.db
-desktop.ini
-$RECYCLE.BIN/
-
-# ==========================
-#  MACOS SYSTEM FILES
-# ==========================
-.DS_Store
-.AppleDouble
-.LSOverride
+*~
 
 # ==========================
 #  LOGS & TEMP FILES
@@ -74,27 +109,21 @@ $RECYCLE.BIN/
 *.log
 *.tmp
 *.temp
+*.bak
 
 # ==========================
-#  JUPYTER (if used later)
+#  JUPYTER
 # ==========================
 .ipynb_checkpoints/
 *.ipynb
 
 # ==========================
-#  VS CODE (Optional override)
+#  LOCAL DEV / ONE-OFF FILES
 # ==========================
-# If you want to track .vscode/settings.json, remove this line.
-# But for a single-PA tool, I recommend ignoring it to avoid conflicts.
-.vscode/
-
-
-# ==========================
-# TEST FILES
-# ==========================
+# Migration, repair, and diagnostic scripts kept locally.
+# These are not part of the shipped app.
 migrate_delegation.py
-travel_planner.db.bak_20260912_095710
-travel_planner.db-wal
-travel_planner.db-shm
 diagnose_db.py
 repair_migration.py
+travel_planner.db.bak_*
+migrate_is_active.py
